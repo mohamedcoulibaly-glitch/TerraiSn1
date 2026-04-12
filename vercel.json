@@ -4,12 +4,9 @@
   "installCommand": "npm install",
   "framework": "vite",
   "outputDirectory": "dist",
-  "env": {
-    "VITE_API_URL": {
-      "description": "API URL for the backend",
-      "default": "http://localhost:3001/api"
-    }
-  },
+  "env": [
+    "VITE_API_URL"
+  ],
   "git": {
     "deploymentEnabled": {
       "main": true
