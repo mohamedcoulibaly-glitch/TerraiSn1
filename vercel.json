@@ -4,9 +4,9 @@
   "installCommand": "npm install",
   "framework": "vite",
   "outputDirectory": "dist",
-  "env": [
-    "VITE_API_URL"
-  ],
+  "env": {
+    "VITE_API_URL": "@VITE_API_URL"
+  },
   "git": {
     "deploymentEnabled": {
       "main": true
