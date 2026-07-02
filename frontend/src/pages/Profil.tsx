@@ -40,7 +40,10 @@ const Profil = () => {
           <div className="glass-card p-5 flex items-center gap-4">
             <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-primary/10 flex items-center justify-center relative">
               <User className="w-8 h-8 sm:w-10 sm:h-10 text-primary" />
-              <button className="absolute -bottom-1 -right-1 bg-primary text-primary-foreground rounded-full p-1">
+              <button 
+                onClick={() => navigate('/profil/modifier')}
+                className="absolute -bottom-1 -right-1 bg-primary text-primary-foreground rounded-full p-1 hover:bg-primary/80 transition-colors"
+              >
                 <Edit className="w-3 h-3" />
               </button>
             </div>
@@ -80,7 +83,11 @@ const Profil = () => {
           <h3 className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">Paramètres</h3>
           <div className="glass-card divide-y divide-border">
             {menuItems.map((item) => (
-              <button key={item.label} className="flex items-center gap-3 p-4 w-full hover:bg-muted/50 transition-colors">
+              <button 
+                key={item.label} 
+                onClick={() => navigate(`/profil/${item.label.toLowerCase().normalize('NFD').replace(/[\u0300-\u031f]/g, '').replace(/\s+/g, '-')}`)}
+                className="flex items-center gap-3 p-4 w-full hover:bg-muted/50 transition-colors"
+              >
                 <item.icon className="w-4 h-4 text-muted-foreground" />
                 <div className="flex-1 text-left">
                   <span className="text-sm font-medium">{item.label}</span>

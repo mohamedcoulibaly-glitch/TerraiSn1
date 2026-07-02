@@ -9,6 +9,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, PieChart, Pie, Cell } from "recharts";
+import TerrainFormModal from "@/components/TerrainFormModal";
+import EmployeeFormModal from "@/components/EmployeeFormModal";
 
 const COLORS = ["hsl(145,63%,30%)", "hsl(42,80%,55%)", "hsl(210,70%,50%)", "hsl(0,72%,51%)"];
 const tabs = ["Vue d'ensemble", "Terrains", "Employés", "Réservations"];
@@ -22,6 +24,11 @@ const OwnerDashboard = () => {
   const [employes, setEmployes] = useState<any[]>([]);
   const [reservations, setReservations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Modal states
+  const [showTerrainModal, setShowTerrainModal] = useState(false);
+  const [showEmployeeModal, setShowEmployeeModal] = useState(false);
+  const [editingTerrain, setEditingTerrain] = useState<any | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated || (user?.role !== 'proprietaire' && user?.accountType !== 'proprietaire')) {
@@ -94,7 +101,7 @@ const OwnerDashboard = () => {
               <ArrowLeft className="w-5 h-5 text-primary-foreground" />
             </button>
             <span className="font-display font-bold text-primary-foreground text-sm sm:text-base">⚽ TerrainSN</span>
-            <button onClick={() => navigate("/gerant")} className="bg-primary-foreground/20 rounded-full p-2">
+            <button onClick={() => navigate("/profil")} className="bg-primary-foreground/20 rounded-full p-2">
               <Settings className="w-5 h-5 text-primary-foreground" />
             </button>
           </div>
@@ -243,7 +250,15 @@ const OwnerDashboard = () => {
           <section className="responsive-padding mt-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="section-title">Mes terrains</h2>
-              <Button size="sm" variant="hero" className="h-8 gap-1 text-xs sm:text-sm">
+              <Button
+                size="sm"
+                variant="hero"
+                className="h-8 gap-1 text-xs sm:text-sm"
+                onClick={() => {
+                  setEditingTerrain(null);
+                  setShowTerrainModal(true);
+                }}
+              >
                 <Plus className="w-3 h-3" /> Ajouter un terrain
               </Button>
             </div>
@@ -287,7 +302,15 @@ const OwnerDashboard = () => {
                       {t.is_active ? "Disponible" : "Indisponible"}
                     </span>
                   </div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                  <button
+                    onClick={() => {
+                      setEditingTerrain(t);
+                      setShowTerrainModal(true);
+                    }}
+                    className="p-1 hover:bg-muted rounded-full transition-colors"
+                  >
+                    <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                  </button>
                 </div>
               ))}
             </div>
@@ -298,7 +321,12 @@ const OwnerDashboard = () => {
           <section className="responsive-padding mt-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="section-title">Mes employés (gérants)</h2>
-              <Button size="sm" variant="hero" className="h-8 gap-1 text-xs sm:text-sm">
+              <Button
+                size="sm"
+                variant="hero"
+                className="h-8 gap-1 text-xs sm:text-sm"
+                onClick={() => setShowEmployeeModal(true)}
+              >
                 <UserPlus className="w-3 h-3" /> Ajouter
               </Button>
             </div>
@@ -387,6 +415,19 @@ const OwnerDashboard = () => {
           </div>
         </section>
       </div>
+
+      {/* Modals */}
+      <TerrainFormModal
+        open={showTerrainModal}
+        onOpenChange={setShowTerrainModal}
+        terrain={editingTerrain}
+        onSuccess={loadData}
+      />
+      <EmployeeFormModal
+        open={showEmployeeModal}
+        onOpenChange={setShowEmployeeModal}
+        onSuccess={loadData}
+      />
     </div>
   );
 };

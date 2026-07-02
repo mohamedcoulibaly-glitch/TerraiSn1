@@ -1,4 +1,4 @@
-# Project Memory
+ # Project Memory
 
 ## Core
 Teranga Play - Football field booking app for Senegal. Green (#1B7A3D) + Gold (#D4A017) palette. Poppins headings, Inter body. Mobile-first responsive design. French UI only. Football only (no other sports).

@@ -1,10 +1,11 @@
-import { ArrowLeft, Calendar, Clock, CheckCircle2, XCircle, AlertCircle, Save } from "lucide-react";
+import { ArrowLeft, Calendar, Clock, CheckCircle2, XCircle, AlertCircle, Save, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { gerantApi, reservationsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import BlockSlotModal from "@/components/BlockSlotModal";
 
 const ManagerDashboard = () => {
   const navigate = useNavigate();
@@ -13,6 +14,9 @@ const ManagerDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [horaires, setHoraires] = useState<any[]>([]);
   const [savingHoraires, setSavingHoraires] = useState(false);
+  const [dateFilter, setDateFilter] = useState<'today' | 'week' | 'all'>('today');
+  const [isBlockModalOpen, setIsBlockModalOpen] = useState(false);
+  const [blockingSlot, setBlockingSlot] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated || (user?.role !== 'employe' && user?.accountType !== 'employe')) {
@@ -72,6 +76,48 @@ const ManagerDashboard = () => {
     }
   };
 
+  const handleBlockSlot = async (data: { date: string; heure_debut: string; heure_fin: string; motif: string }) => {
+    setBlockingSlot(true);
+    try {
+      const result = await gerantApi.addBlocage(data);
+      setDashboard((prev: any) => ({
+        ...prev,
+        blocages: [...prev.blocages, result],
+      }));
+      toast.success("Créneau bloqué avec succès");
+      setIsBlockModalOpen(false);
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setBlockingSlot(false);
+    }
+  };
+
+  const filterReservations = (reservations: any[]) => {
+    if (dateFilter === 'all') return reservations;
+    
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    
+    if (dateFilter === 'today') {
+      return reservations.filter((r: any) => r.date === todayStr);
+    }
+    
+    if (dateFilter === 'week') {
+      const startOfWeek = new Date(today);
+      startOfWeek.setDate(today.getDate() - today.getDay() + 1); // Monday
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6); // Sunday
+      
+      return reservations.filter((r: any) => {
+        const rDate = new Date(r.date);
+        return rDate >= startOfWeek && rDate <= endOfWeek;
+      });
+    }
+    
+    return reservations;
+  };
+
   const updateHoraire = (index: number, field: string, value: string) => {
     setHoraires(prev => prev.map((h, i) => i === index ? { ...h, [field]: value } : h));
   };
@@ -89,8 +135,9 @@ const ManagerDashboard = () => {
     vendredi: 'Vendredi', samedi: 'Samedi', dimanche: 'Dimanche'
   };
 
-  const todayReservations = dashboard?.reservations || [];
-  const pendingCount = todayReservations.filter((r: any) => r.statut === 'en_attente').length;
+  const allReservations = dashboard?.reservations || [];
+  const filteredReservations = filterReservations(allReservations);
+  const pendingCount = filteredReservations.filter((r: any) => r.statut === 'en_attente').length;
   const blockedSlots = dashboard?.blocages || [];
 
   return (
@@ -121,16 +168,45 @@ const ManagerDashboard = () => {
           )}
         </div>
 
-        {/* Réservations du jour */}
+        {/* Réservations */}
         <section className="responsive-padding mt-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="section-title">📅 Réservations</h2>
             <span className="bg-secondary/20 text-secondary-foreground text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full">
-              {todayReservations.length}
+              {filteredReservations.length}
             </span>
           </div>
+          
+          {/* Date filter */}
+          <div className="flex gap-2 mb-3">
+            <Button
+              size="sm"
+              variant={dateFilter === 'today' ? 'default' : 'outline'}
+              className="h-7 text-[10px] sm:text-xs px-2"
+              onClick={() => setDateFilter('today')}
+            >
+              Aujourd'hui
+            </Button>
+            <Button
+              size="sm"
+              variant={dateFilter === 'week' ? 'default' : 'outline'}
+              className="h-7 text-[10px] sm:text-xs px-2"
+              onClick={() => setDateFilter('week')}
+            >
+              Cette semaine
+            </Button>
+            <Button
+              size="sm"
+              variant={dateFilter === 'all' ? 'default' : 'outline'}
+              className="h-7 text-[10px] sm:text-xs px-2"
+              onClick={() => setDateFilter('all')}
+            >
+              Tout
+            </Button>
+          </div>
+          
           <div className="flex flex-col sm:grid sm:grid-cols-2 gap-2">
-            {todayReservations.map((r: any) => (
+            {filteredReservations.map((r: any) => (
               <div key={r.id} className="stat-card flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
                   r.statut === "acceptee" ? "bg-accent" : r.statut === "en_attente" ? "bg-secondary/20" : "bg-destructive/10"
@@ -154,7 +230,7 @@ const ManagerDashboard = () => {
                 )}
               </div>
             ))}
-            {todayReservations.length === 0 && (
+            {filteredReservations.length === 0 && (
               <p className="text-sm text-muted-foreground col-span-full text-center py-4">Aucune réservation</p>
             )}
           </div>
@@ -164,7 +240,14 @@ const ManagerDashboard = () => {
         <section className="responsive-padding mt-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="section-title">🚫 Créneaux bloqués</h2>
-            <Button size="sm" variant="outline" className="h-7 text-[10px] sm:text-xs">+ Bloquer</Button>
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="h-7 text-[10px] sm:text-xs"
+              onClick={() => setIsBlockModalOpen(true)}
+            >
+              <Plus className="w-3 h-3" /> Bloquer
+            </Button>
           </div>
           <div className="flex flex-col sm:grid sm:grid-cols-2 gap-2">
             {blockedSlots.map((slot: any) => (
@@ -222,7 +305,12 @@ const ManagerDashboard = () => {
           <div className="bg-foreground rounded-2xl p-4">
             <h3 className="font-display font-bold text-sm sm:text-base text-background mb-3">Actions rapides</h3>
             <div className="flex flex-col sm:flex-row gap-2">
-              <Button variant="outline" size="sm" className="bg-background/10 border-background/20 text-background text-xs sm:text-sm justify-start gap-2 flex-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-background/10 border-background/20 text-background text-xs sm:text-sm justify-start gap-2 flex-1"
+                onClick={() => navigate("/gerant/calendrier")}
+              >
                 <Calendar className="w-3 h-3" /> Voir le calendrier complet
               </Button>
               <Button variant="outline" size="sm" className="bg-background/10 border-background/20 text-background text-xs sm:text-sm justify-start gap-2 flex-1" onClick={() => navigate("/proprietaire")}>
@@ -232,6 +320,14 @@ const ManagerDashboard = () => {
           </div>
         </section>
       </div>
+
+      {/* Block Slot Modal */}
+      <BlockSlotModal
+        isOpen={isBlockModalOpen}
+        onClose={() => setIsBlockModalOpen(false)}
+        onSubmit={handleBlockSlot}
+        isLoading={blockingSlot}
+      />
     </div>
   );
 };

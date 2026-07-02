@@ -11,9 +11,17 @@ import FieldDetails from "./pages/FieldDetails.tsx";
 import Payment from "./pages/Payment.tsx";
 import Reservations from "./pages/Reservations.tsx";
 import Profil from "./pages/Profil.tsx";
+import ProfilNotifications from "./pages/ProfilNotifications.tsx";
+import ProfilSecurite from "./pages/ProfilSecurite.tsx";
+import ProfilAide from "./pages/ProfilAide.tsx";
 import OwnerDashboard from "./pages/OwnerDashboard.tsx";
+import OwnerTerrainDetail from "./pages/OwnerTerrainDetail.tsx";
+import OwnerReports from "./pages/OwnerReports.tsx";
 import ManagerDashboard from "./pages/ManagerDashboard.tsx";
+import ManagerCalendar from "./pages/ManagerCalendar.tsx";
 import Connexion from "./pages/Connexion.tsx";
+import ReservationConfirmation from "./pages/ReservationConfirmation.tsx";
+import AdminDashboard from "./pages/AdminDashboard.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
@@ -32,9 +40,18 @@ const App = () => (
             <Route path="/paiement/:id" element={<Payment />} />
             <Route path="/reservations" element={<Reservations />} />
             <Route path="/profil" element={<Profil />} />
+            <Route path="/profil/notifications" element={<ProfilNotifications />} />
+            <Route path="/profil/securite" element={<ProfilSecurite />} />
+            <Route path="/profil/aide" element={<ProfilAide />} />
+            <Route path="/profil/modifier" element={<Profil />} />
             <Route path="/connexion" element={<Connexion />} />
             <Route path="/proprietaire" element={<OwnerDashboard />} />
+            <Route path="/proprietaire/terrain/:id" element={<OwnerTerrainDetail />} />
+            <Route path="/proprietaire/rapports" element={<OwnerReports />} />
             <Route path="/gerant" element={<ManagerDashboard />} />
+            <Route path="/gerant/calendrier" element={<ManagerCalendar />} />
+            <Route path="/reservation/confirmation" element={<ReservationConfirmation />} />
+            <Route path="/admin" element={<AdminDashboard />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
           <BottomNav />

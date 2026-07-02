@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Eye, EyeOff, Mail, Lock, User, Phone } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import ForgotPasswordModal from "@/components/ForgotPasswordModal";
 
 const Connexion = () => {
   const navigate = useNavigate();
@@ -13,6 +14,7 @@ const Connexion = () => {
   const [form, setForm] = useState({ nom: "", email: "", telephone: "", password: "" });
   const [accountType, setAccountType] = useState("proprietaire");
   const [submitting, setSubmitting] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,7 +115,11 @@ const Connexion = () => {
           </div>
 
           {isLogin && (
-            <button type="button" className="text-xs text-primary font-medium text-right">
+            <button
+              type="button"
+              className="text-xs text-primary font-medium text-right"
+              onClick={() => setShowForgotPassword(true)}
+            >
               Mot de passe oublié ?
             </button>
           )}
@@ -135,6 +141,12 @@ const Connexion = () => {
           </div>
         )}
       </div>
+
+      {/* Modal Mot de passe oublié */}
+      <ForgotPasswordModal
+        open={showForgotPassword}
+        onOpenChange={setShowForgotPassword}
+      />
     </div>
   );
 };

@@ -15,7 +15,6 @@ const paymentMethods = [
 
 const Payment = () => {
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const montant = parseInt(searchParams.get("montant") || "0");
@@ -31,7 +30,7 @@ const Payment = () => {
 
   useEffect(() => {
     loadTerrain();
-  }, [id]);
+  }, [id, navigate]);
 
   const loadTerrain = async () => {
     try {
@@ -86,7 +85,21 @@ const Payment = () => {
       toast.success("Réservation confirmée ! 🎉", {
         description: "Vous recevrez une notification WhatsApp sous peu.",
       });
-      setTimeout(() => navigate("/reservations"), 1500);
+      // Navigate to confirmation page with reservation details
+      setTimeout(() => navigate("/reservation/confirmation", {
+        state: {
+          reservationId: reservation.id,
+          terrainNom: terrain.nom,
+          terrainType: terrain.type,
+          terrainVille: terrain.ville,
+          date: date,
+          heureDebut: slot,
+          heureFin: endTime,
+          duree: duree,
+          montant: montant,
+          statut: reservation.statut || "en_attente",
+        }
+      }), 1500);
     } catch (err: any) {
       toast.error(err.message || "Erreur lors du paiement");
     } finally {

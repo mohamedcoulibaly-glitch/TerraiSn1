@@ -37,6 +37,22 @@ function requireRole(...roles) {
   };
 }
 
+// Middleware optionnel : attache l'utilisateur si un token valide est présent,
+// mais laisse passer sans erreur s'il n'y a pas de token (pour les joueurs non connectés)
+function optionalAuth(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    req.user = null;
+    return next();
+  }
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+  } catch {
+    req.user = null;
+  }
+  next();
+}
+
 // ============================================================
 // AUTH ROUTES
 // ============================================================
@@ -103,7 +119,7 @@ app.post('/api/auth/login', async (req, res) => {
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
 
     const { password_hash, ...safeAccount } = account;
-    res.json({ user: { ...safeAccount, role }, token });
+    res.json({ user: { ...safeAccount, role, accountType }, token });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -332,8 +348,42 @@ app.post('/api/reservations', async (req, res) => {
   }
 });
 
-app.get('/api/reservations/mes', authMiddleware, async (req, res) => {
+// Recharger une réservation (utile pour refresh / accès direct)
+app.get('/api/reservations/:id', optionalAuth, async (req, res) => {
   try {
+    const db = await getDb();
+    const reservation = queryOne(db, `
+      SELECT r.*, t.nom as terrain_nom, t.ville as terrain_ville, t.type as terrain_type
+      FROM reservations r
+      JOIN terrains t ON t.id = r.terrain_id
+      WHERE r.id = ?
+    `, [Number(req.params.id)]);
+
+    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
+
+    // Si un user est connecté, on peut restreindre à ses réservations
+    if (req.user && reservation.joueur_id && Number(reservation.joueur_id) !== Number(req.user.id)) {
+      return res.status(403).json({ error: 'Accès interdit' });
+    }
+
+    // Pour compat front: calculer durée si pas fournie
+    if (!reservation.duree && reservation.heure_debut && reservation.heure_fin) {
+      const startH = parseInt(String(reservation.heure_debut).split(':')[0]);
+      const endH = parseInt(String(reservation.heure_fin).split(':')[0]);
+      reservation.duree = endH - startH;
+    }
+
+    res.json(reservation);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.get('/api/reservations/mes', optionalAuth, async (req, res) => {
+  try {
+    // Sans compte connecté, retourner un tableau vide (accès libre pour les joueurs)
+    if (!req.user) return res.json([]);
     const db = await getDb();
     const reservations = queryAll(db, `
       SELECT r.*, t.nom as terrain_nom, t.ville as terrain_ville, t.type as terrain_type, t.prix_heure
@@ -347,10 +397,16 @@ app.get('/api/reservations/mes', authMiddleware, async (req, res) => {
   }
 });
 
-app.put('/api/reservations/:id/annuler', authMiddleware, async (req, res) => {
+app.put('/api/reservations/:id/annuler', optionalAuth, async (req, res) => {
   try {
     const db = await getDb();
-    const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND joueur_id = ?', [Number(req.params.id), req.user.id]);
+    // Si pas connecté, chercher la réservation juste par ID (joueur sans compte)
+    let reservation;
+    if (req.user) {
+      reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND joueur_id = ?', [Number(req.params.id), req.user.id]);
+    } else {
+      reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [Number(req.params.id)]);
+    }
     if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
     if (!['en_attente', 'acceptee'].includes(reservation.statut)) {
       return res.status(400).json({ error: 'Réservation ne peut pas être annulée' });
@@ -621,14 +677,16 @@ app.delete('/api/gerant/blocages/:id', authMiddleware, requireRole('employe'), a
 // ============================================================
 // AVIS
 // ============================================================
-app.post('/api/avis', authMiddleware, async (req, res) => {
+app.post('/api/avis', optionalAuth, async (req, res) => {
   try {
     const db = await getDb();
     const { terrain_id, note, commentaire, reservation_id } = req.body;
     if (!note || note < 1 || note > 5) return res.status(400).json({ error: 'Note entre 1 et 5 requise' });
+    // Permettre l'avis sans compte (joueur_id = null si non connecté)
+    const joueur_id = req.user ? req.user.id : null;
     const result = runSql(db, 'INSERT INTO avis (reservation_id, joueur_id, terrain_id, note, commentaire) VALUES (?, ?, ?, ?, ?)',
-      [reservation_id || null, req.user.id, terrain_id, note, commentaire]);
-    const avis = queryOne(db, 'SELECT a.*, u.nom as joueur_nom FROM avis a JOIN users u ON u.id = a.joueur_id WHERE a.id = ?', [result.lastInsertRowid]);
+      [reservation_id || null, joueur_id, terrain_id, note, commentaire]);
+    const avis = queryOne(db, 'SELECT a.*, COALESCE(u.nom, "Joueur anonyme") as joueur_nom FROM avis a LEFT JOIN users u ON u.id = a.joueur_id WHERE a.id = ?', [result.lastInsertRowid]);
     res.status(201).json(avis);
   } catch (err) {
     console.error(err);
@@ -650,8 +708,9 @@ app.get('/api/avis/terrain/:terrainId', async (req, res) => {
 // ============================================================
 // NOTIFICATIONS
 // ============================================================
-app.get('/api/notifications', authMiddleware, async (req, res) => {
+app.get('/api/notifications', optionalAuth, async (req, res) => {
   try {
+    if (!req.user) return res.json([]);
     const db = await getDb();
     const destType = req.user.accountType === 'user' ? 'user' : req.user.accountType;
     const notifs = queryAll(db, 'SELECT * FROM notifications WHERE destinataire_type = ? AND destinataire_id = ? ORDER BY created_at DESC', [destType, req.user.id]);
