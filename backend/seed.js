@@ -6,7 +6,7 @@ async function seed() {
   const db = await getDb();
 
   // Vider les tables dans l'ordre (FK)
-  const tables = ['audit_logs', 'notifications', 'avis', 'paiements', 'reservations', 'blocages_creneaux', 'horaires', 'employes', 'terrains', 'proprietaires', 'users'];
+  const tables = ['audit_logs', 'notifications', 'avis', 'matchs', 'paiements', 'reservations', 'creneaux', 'blocages_creneaux', 'horaires', 'employes', 'terrains', 'proprietaires', 'users'];
   for (const t of tables) {
     db.run(`DELETE FROM ${t}`);
   }

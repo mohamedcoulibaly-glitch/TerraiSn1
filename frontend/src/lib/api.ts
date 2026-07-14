@@ -26,6 +26,49 @@ function removeUser() {
   localStorage.removeItem('terrainsn_user');
 }
 
+const TECHNICAL_ERROR_RE = /syntaxerror|sql\b|stack|paytech|whatsapp|<html|exception|traceback|econnrefused|errno/i;
+
+function isTechnicalMessage(message: string): boolean {
+  if (!message) return true;
+  if (message.length > 180) return true;
+  return TECHNICAL_ERROR_RE.test(message);
+}
+
+/** Messages client sûrs — jamais de détail technique brut. */
+function normalizeClientError(endpoint: string, status: number, data: unknown): string {
+  const raw = typeof (data as { error?: unknown })?.error === 'string'
+    ? String((data as { error: string }).error).trim()
+    : '';
+
+  if (status === 429 || /trop de tentatives/i.test(raw)) {
+    return 'Trop de tentatives. Réessayez dans quelques minutes.';
+  }
+
+  const path = endpoint.toLowerCase();
+  const isAuth = path.includes('/auth') || path.includes('otp') || path.includes('login') || path.includes('password');
+  const isPayment =
+    path.includes('/paiement') ||
+    path.includes('paytech') ||
+    path.includes('/webhook/paytech') ||
+    path.includes('simulate');
+  const isReservation = path.includes('/reservation');
+
+  if (isPayment) {
+    return "Le paiement n'a pas pu être confirmé. Veuillez réessayer.";
+  }
+  if (isAuth) {
+    return 'Identifiants incorrects ou session expirée.';
+  }
+  if (isReservation) {
+    return 'Impossible de finaliser la réservation. Veuillez réessayer.';
+  }
+
+  if (!raw || isTechnicalMessage(raw)) {
+    return 'Une erreur est survenue. Veuillez réessayer.';
+  }
+  return raw;
+}
+
 // Requête générique
 async function request(endpoint: string, options: RequestInit = {}) {
   const token = getToken();
@@ -37,19 +80,38 @@ async function request(endpoint: string, options: RequestInit = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${endpoint}`, {
+      ...options,
+      headers,
+    });
+  } catch {
+    throw new Error('Connexion au serveur impossible. Vérifiez votre connexion.');
+  }
 
   if (res.status === 401) {
     removeToken();
     removeUser();
   }
 
-  const data = await res.json();
+  let data: Record<string, unknown> = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+
   if (!res.ok) {
-    throw new Error(data.error || 'Erreur serveur');
+    const err = new Error(normalizeClientError(endpoint, res.status, data)) as Error & {
+      code?: string;
+      telephone?: string;
+      status?: number;
+    };
+    if (typeof data.code === 'string') err.code = data.code;
+    if (typeof data.telephone === 'string') err.telephone = data.telephone;
+    err.status = res.status;
+    throw err;
   }
   return data;
 }
@@ -59,26 +121,66 @@ async function request(endpoint: string, options: RequestInit = {}) {
 // ============================================================
 export const authApi = {
   async register(data: { nom: string; email: string; password: string; telephone: string }) {
+    // Legacy — préférer registerJoueur (OTP). Ne stocke un token que s'il est renvoyé.
     const result = await request('/auth/register', { method: 'POST', body: JSON.stringify(data) });
-    setToken(result.token);
-    setUser(result.user);
+    if (result.token) {
+      setToken(result.token);
+      setUser(result.user);
+    }
     return result;
   },
 
-  async login(data: { email: string; password: string; accountType?: string }) {
+  async login(data: { email?: string; telephone?: string; password: string; accountType?: string }) {
     const result = await request('/auth/login', { method: 'POST', body: JSON.stringify(data) });
     setToken(result.token);
     setUser(result.user);
+    localStorage.removeItem('admin_token');
+    localStorage.removeItem('admin_user');
     return result;
+  },
+
+  /** Login unique : téléphone (ou email) + mot de passe, sans accountType. */
+  async smartLogin(identifier: string, password: string) {
+    const trimmed = identifier.trim();
+    const isEmail = trimmed.includes('@');
+    const payload = isEmail
+      ? { email: trimmed, password }
+      : { telephone: trimmed, password };
+    return this.login(payload);
+  },
+
+  async registerJoueur(data: { prenom: string; nom: string; telephone: string; password: string }) {
+    return await request('/auth/register', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async verifyOtp(data: { telephone: string; code: string }) {
+    const result = await request('/auth/verify-otp', { method: 'POST', body: JSON.stringify(data) });
+    if (result.token) {
+      setToken(result.token);
+      setUser(result.user);
+      localStorage.removeItem('admin_token');
+      localStorage.removeItem('admin_user');
+    }
+    return result;
+  },
+
+  async resendOtp(telephone: string) {
+    return await request('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ telephone }) });
   },
 
   async me() {
     return await request('/auth/me');
   },
 
+  async changePassword(password: string) {
+    return await request('/auth/change-password', { method: 'POST', body: JSON.stringify({ password }) });
+  },
+
   logout() {
     removeToken();
     removeUser();
+    localStorage.removeItem('admin_token');
+    localStorage.removeItem('admin_user');
   },
 
   isAuthenticated() {
@@ -129,12 +231,24 @@ export const terrainsApi = {
 // RESERVATIONS
 // ============================================================
 export const reservationsApi = {
-  async create(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string }) {
+  async create(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: 'moitie' | 'entier' }) {
     return await request('/reservations', { method: 'POST', body: JSON.stringify(data) });
   },
 
   async mes() {
     return await request('/reservations/mes');
+  },
+
+  async changePassword(password: string) {
+    return await request('/auth/change-password', { method: 'POST', body: JSON.stringify({ password }) });
+  },
+
+  async get(id: number | string) {
+    return await request(`/reservations/${id}`);
+  },
+
+  async createGerant(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: 'moitie' | 'entier' }) {
+    return await request('/reservations/gerant', { method: 'POST', body: JSON.stringify(data) });
   },
 
   async annuler(id: number | string) {
@@ -156,6 +270,18 @@ export const reservationsApi = {
 export const paiementsApi = {
   async create(data: { reservation_id: number; methode: string; telephone?: string }) {
     return await request('/paiements', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async marquerJoue(id: number | string, methode: 'especes' | 'wave' | 'orange_money' = 'especes') {
+    return await request(`/reservations/${id}/jouer`, { method: 'PUT', body: JSON.stringify({ methode }) });
+  },
+
+  async mockComplete(data: { reservation_id: number; ref_command: string; action: 'success' | 'cancel' }) {
+    return await request('/paytech/mock/complete', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async simulateComplete(data: { reservation_id: number; ref_command: string; action: 'success' | 'cancel' | 'failed' }) {
+    return await request('/webhook/paytech/simulate', { method: 'POST', body: JSON.stringify(data) });
   },
 };
 

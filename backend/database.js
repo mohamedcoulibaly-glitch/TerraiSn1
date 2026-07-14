@@ -2,7 +2,7 @@ const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
 
-const dbPath = path.resolve(__dirname, 'terrainsn.db');
+const dbPath = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.resolve(__dirname, 'terrainsn.db');
 
 let db = null;
 
@@ -32,6 +32,9 @@ function saveDb() {
 }
 
 function initDb(database) {
+  database.run('PRAGMA journal_mode = WAL');
+  database.run('PRAGMA busy_timeout = 5000');
+  database.run('PRAGMA foreign_keys = ON');
   // 1. users (joueurs & superadmin)
   database.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +137,18 @@ function initDb(database) {
     FOREIGN KEY (traite_par) REFERENCES employes(id)
   )`);
 
+  // Créneaux persistants : ils portent le verrou de paiement atomique.
+  database.run(`CREATE TABLE IF NOT EXISTS creneaux (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    date DATE NOT NULL,
+    heure_debut TIME NOT NULL,
+    heure_fin TIME NOT NULL,
+    statut TEXT NOT NULL DEFAULT 'libre',
+    UNIQUE (terrain_id, date, heure_debut, heure_fin),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+
   // 8. paiements
   database.run(`CREATE TABLE IF NOT EXISTS paiements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,6 +160,106 @@ function initDb(database) {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (reservation_id) REFERENCES reservations(id)
   )`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS matchs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id INTEGER NOT NULL UNIQUE,
+    terrain_id INTEGER NOT NULL,
+    gerant_id INTEGER NOT NULL,
+    montant_total DECIMAL(10, 2) NOT NULL,
+    acompte_paye DECIMAL(10, 2) NOT NULL,
+    solde_paye DECIMAL(10, 2) NOT NULL,
+    methode_solde TEXT DEFAULT 'especes',
+    joue_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id),
+    FOREIGN KEY (gerant_id) REFERENCES employes(id)
+  )`);
+
+  // Migrations non destructives pour les bases déjà créées.
+  addColumnIfMissing(database, 'reservations', 'creneau_id', 'INTEGER');
+  addColumnIfMissing(database, 'reservations', 'code_reservation', 'TEXT');
+  addColumnIfMissing(database, 'reservations', 'verrou_expire_at', 'INTEGER');
+  addColumnIfMissing(database, 'reservations', 'cree_par', "TEXT DEFAULT 'joueur'");
+  addColumnIfMissing(database, 'reservations', 'lien_paiement', 'TEXT');
+  addColumnIfMissing(database, 'reservations', 'format_terrain', "TEXT DEFAULT 'entier'");
+  addColumnIfMissing(database, 'reservations', 'prix_total', 'DECIMAL(10, 2)');
+  addColumnIfMissing(database, 'reservations', 'acompte', 'DECIMAL(10, 2) DEFAULT 5000');
+  addColumnIfMissing(database, 'reservations', 'reste_a_payer', 'DECIMAL(10, 2) DEFAULT 0');
+  addColumnIfMissing(database, 'paiements', 'reference_paytech', 'TEXT');
+  addColumnIfMissing(database, 'paiements', 'montant_acompte', 'INTEGER');
+  addColumnIfMissing(database, 'paiements', 'montant_commission', 'INTEGER');
+  addColumnIfMissing(database, 'paiements', 'montant_reverse', 'INTEGER');
+  addColumnIfMissing(database, 'paiements', 'statut_reversement', "TEXT DEFAULT 'en_attente'");
+  addColumnIfMissing(database, 'terrains', 'prix_moitie', 'DECIMAL(10, 2)');
+  addColumnIfMissing(database, 'terrains', 'prix_entier', 'DECIMAL(10, 2)');
+  addColumnIfMissing(database, 'terrains', 'montant_acompte', 'DECIMAL(10, 2) DEFAULT 5000');
+  addColumnIfMissing(database, 'terrains', 'acompte', 'INTEGER DEFAULT 5000');
+  addColumnIfMissing(database, 'terrains', 'commission', 'INTEGER DEFAULT 400');
+  addColumnIfMissing(database, 'users', 'terrain_id', 'INTEGER');
+  addColumnIfMissing(database, 'users', 'must_change_password', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'users', 'prenom', 'VARCHAR(255)');
+  addColumnIfMissing(database, 'users', 'telephone_verified', 'INTEGER DEFAULT 1');
+  addColumnIfMissing(database, 'proprietaires', 'must_change_password', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'employes', 'must_change_password', 'INTEGER DEFAULT 0');
+
+  database.run(`CREATE TABLE IF NOT EXISTS auth_otps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telephone VARCHAR(50) NOT NULL,
+    code VARCHAR(10) NOT NULL,
+    user_id INTEGER,
+    expires_at DATETIME NOT NULL,
+    used INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_auth_otps_telephone ON auth_otps(telephone)');
+  database.run("UPDATE users SET role = 'super_admin' WHERE role = 'superadmin'");
+  database.run('UPDATE terrains SET prix_entier = prix_heure WHERE prix_entier IS NULL');
+  database.run('UPDATE terrains SET prix_moitie = ROUND(prix_heure * 0.6) WHERE prix_moitie IS NULL');
+  database.run('UPDATE terrains SET acompte = montant_acompte WHERE acompte IS NULL AND montant_acompte IS NOT NULL');
+  database.run('UPDATE terrains SET montant_acompte = acompte WHERE montant_acompte IS NULL AND acompte IS NOT NULL');
+  database.run('UPDATE terrains SET commission = 400 WHERE commission IS NULL');
+  database.run('UPDATE reservations SET prix_total = montant WHERE prix_total IS NULL');
+  database.run('UPDATE reservations SET acompte = MIN(5000, montant) WHERE acompte IS NULL');
+  database.run('UPDATE reservations SET reste_a_payer = MAX(0, prix_total - acompte) WHERE reste_a_payer IS NULL');
+  database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_code ON reservations(code_reservation)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_users_telephone ON users(telephone)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_reservations_creneau ON reservations(creneau_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_reservations_statut ON reservations(statut)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_reservations_terrain_date ON reservations(terrain_id, date)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_creneaux_statut ON creneaux(statut)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_paiements_reservation ON paiements(reservation_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_paiements_reference_paytech ON paiements(reference_paytech)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS portefeuille_gerant (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER NOT NULL,
+    terrain_id INTEGER NOT NULL,
+    solde_disponible INTEGER DEFAULT 0,
+    solde_en_attente INTEGER DEFAULT 0,
+    total_encaisse INTEGER DEFAULT 0,
+    total_commission_prelevee INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (gerant_id, terrain_id),
+    FOREIGN KEY (gerant_id) REFERENCES users(id),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS reversements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER NOT NULL,
+    terrain_id INTEGER NOT NULL,
+    reservation_id INTEGER NOT NULL,
+    montant INTEGER NOT NULL,
+    statut TEXT DEFAULT 'effectue',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (gerant_id) REFERENCES users(id),
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id)
+  )`);
+  database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reversements_reservation ON reversements(reservation_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_reversements_gerant ON reversements(gerant_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_reversements_terrain ON reversements(terrain_id)');
 
   // 9. avis
   database.run(`CREATE TABLE IF NOT EXISTS avis (
@@ -188,6 +303,13 @@ function initDb(database) {
   console.log('✅ Tables SQLite initialisées.');
 }
 
+function addColumnIfMissing(database, table, column, definition) {
+  const columns = queryAll(database, `PRAGMA table_info(${table})`);
+  if (!columns.some((item) => item.name === column)) {
+    database.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 // Helper: convertir les résultats sql.js en objets
 function queryAll(database, sql, params = []) {
   try {
@@ -223,4 +345,17 @@ function runSql(database, sql, params = []) {
   }
 }
 
-module.exports = { getDb, saveDb, queryAll, queryOne, runSql };
+function transaction(database, callback) {
+  database.run('BEGIN IMMEDIATE TRANSACTION');
+  try {
+    const result = callback();
+    database.run('COMMIT');
+    saveDb();
+    return result;
+  } catch (error) {
+    database.run('ROLLBACK');
+    throw error;
+  }
+}
+
+module.exports = { getDb, saveDb, queryAll, queryOne, runSql, transaction };

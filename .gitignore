@@ -16,6 +16,10 @@ dist-ssr
 .env.*.local
 server/terrainsn.db
 .vercel
+.wwebjs_auth
+.wwebjs_cache
+backend/.wwebjs_auth
+backend/.wwebjs_cache
 
 # Editor directories and files
 .vscode/*
