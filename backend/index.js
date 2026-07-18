@@ -10,6 +10,25 @@ const notificationService = require('./notificationService');
 const otpService = require('./otpService');
 const adminRoutes = require('./routes/admin');
 const roleRoutes = require('./routes/roles');
+const {
+  ensurePendingAbonnement,
+  appliquerSuspensionsAbonnements: appliquerSuspensionsAbonnementsDb,
+} = require('./revenueModelService');
+const {
+  ownerRevenueRowsSql,
+  playedStatusSql,
+  summarizeOwnerRevenue,
+} = require('./ownerRevenueService');
+const {
+  UPLOAD_ROOT,
+  listTerrainPhotos,
+  createTerrainPhoto,
+  updateTerrainPhoto,
+  deleteTerrainPhoto,
+} = require('./terrainPhotoService');
+const { saveProfilePhoto } = require('./profilePhotoService');
+const { logActivite } = require('./services/auditService');
+const scoreService = require('./services/scoreService');
 const path = require('path');
 const logger = require('./logger');
 let cron = null;
@@ -22,6 +41,124 @@ try {
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'terrainsn_secret_key_2026';
+
+function profileTableFor(accountType) {
+  if (accountType === 'proprietaire') return 'proprietaires';
+  if (accountType === 'employe') return 'employes';
+  return 'users';
+}
+
+function selectProfileAccount(db, reqUser) {
+  const table = profileTableFor(reqUser.accountType);
+  if (table === 'proprietaires') {
+    return queryOne(db, `SELECT id, nom, prenom, email, telephone, plan, statut, quartier,
+      date_naissance, bio, photo_url, must_change_password, created_at
+      FROM proprietaires WHERE id = ?`, [reqUser.id]);
+  }
+  if (table === 'employes') {
+    return queryOne(db, `SELECT id, nom, prenom, email, telephone, whatsapp_number, terrain_id,
+      proprietaire_id, is_active, quartier, date_naissance, bio, photo_url,
+      must_change_password, created_at
+      FROM employes WHERE id = ?`, [reqUser.id]);
+  }
+  return queryOne(db, `SELECT id, nom, prenom, email, telephone, role, terrain_id, is_active,
+    quartier, date_naissance, bio, photo_url, must_change_password, created_at
+    FROM users WHERE id = ?`, [reqUser.id]);
+}
+
+function splitDisplayName(account) {
+  const prenom = String(account?.prenom || '').trim();
+  const nom = String(account?.nom || '').trim();
+  if (prenom || !nom.includes(' ')) return { prenom, nom };
+  const parts = nom.split(/\s+/);
+  return { prenom: parts.shift() || '', nom: parts.join(' ') || nom };
+}
+
+function profileRoleLabel(role) {
+  if (role === 'super_admin' || role === 'superadmin') return 'Admin';
+  if (role === 'proprietaire') return 'Propriétaire';
+  if (role === 'gerant' || role === 'employe') return 'Gérant';
+  return 'Joueur';
+}
+
+function buildProfileStats(db, reqUser) {
+  const role = reqUser.role === 'superadmin' ? 'super_admin' : reqUser.role;
+
+  if (role === 'proprietaire') {
+    const terrains = queryOne(db, 'SELECT COUNT(*) AS total FROM terrains WHERE proprietaire_id = ?', [reqUser.id]) || { total: 0 };
+    const rows = queryAll(db, ownerRevenueRowsSql({ ownerWhere: 't.proprietaire_id = ?', dateWhere: '' }), [reqUser.id]);
+    const revenue = summarizeOwnerRevenue(rows);
+    return {
+      terrainAssocie: `${Number(terrains.total || 0)} terrain(s)`,
+      stats: [
+        { label: 'Terrains', value: Number(terrains.total || 0) },
+        { label: 'Revenus du mois', value: Number(revenue.montants_reverses || 0) },
+      ],
+    };
+  }
+
+  if (role === 'gerant' || reqUser.accountType === 'employe') {
+    const terrain = queryOne(db, 'SELECT id, nom FROM terrains WHERE id = ?', [reqUser.terrain_id]) || null;
+    const matches = queryOne(db, 'SELECT COUNT(*) AS total FROM matchs WHERE gerant_id = ?', [reqUser.id]) || { total: 0 };
+    const creneaux = queryOne(db, 'SELECT COUNT(*) AS total FROM creneaux WHERE terrain_id = ?', [reqUser.terrain_id]) || { total: 0 };
+    return {
+      terrainAssocie: terrain?.nom || 'Terrain non associé',
+      stats: [
+        { label: 'Matchs validés', value: Number(matches.total || 0) },
+        { label: 'Créneaux gérés', value: Number(creneaux.total || 0) },
+      ],
+    };
+  }
+
+  if (role === 'super_admin') {
+    const terrains = queryOne(db, 'SELECT COUNT(*) AS total FROM terrains') || { total: 0 };
+    const owners = queryOne(db, 'SELECT COUNT(*) AS total FROM proprietaires') || { total: 0 };
+    return {
+      terrainAssocie: '',
+      stats: [
+        { label: 'Terrains', value: Number(terrains.total || 0) },
+        { label: 'Propriétaires', value: Number(owners.total || 0) },
+      ],
+    };
+  }
+
+  const reservations = queryOne(db, 'SELECT COUNT(*) AS total FROM reservations WHERE joueur_id = ?', [reqUser.id]) || { total: 0 };
+  const terrains = queryOne(db, 'SELECT COUNT(DISTINCT terrain_id) AS total FROM reservations WHERE joueur_id = ?', [reqUser.id]) || { total: 0 };
+  return {
+    terrainAssocie: '',
+    stats: [
+      { label: 'Réservations totales', value: Number(reservations.total || 0) },
+      { label: 'Terrains visités', value: Number(terrains.total || 0) },
+    ],
+  };
+}
+
+function currentMonthStart() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+function assertAccountRole(req, role) {
+  const current = req.user.role === 'superadmin' ? 'super_admin' : req.user.role;
+  if (current !== role) {
+    const error = new Error('Acces interdit');
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function publicProfileAccount(account, reqUser) {
+  const role = reqUser.role === 'superadmin' ? 'super_admin' : reqUser.role;
+  const name = splitDisplayName(account);
+  return {
+    ...account,
+    prenom: account.prenom || name.prenom,
+    nom: name.nom || account.nom,
+    role,
+    role_label: profileRoleLabel(role),
+    accountType: reqUser.accountType,
+  };
+}
 if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   throw new Error('JWT_SECRET est obligatoire en production');
 }
@@ -37,7 +174,8 @@ app.use(cors({
     return callback(null, false);
   },
 }));
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
+app.use('/uploads', express.static(UPLOAD_ROOT));
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
     logger.error('index.js', 'JSON invalide recu', err);
@@ -81,7 +219,12 @@ function authMiddleware(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
-    if (decoded.must_change_password && req.path !== '/api/auth/change-password' && req.path !== '/api/auth/me') {
+    const isPasswordChangeFlow =
+      req.path === '/api/auth/change-password' ||
+      req.path === '/api/auth/me' ||
+      req.path === '/api/profil/password' ||
+      (req.path.startsWith('/api/profil/') && (req.method === 'GET' || req.path === '/api/profil/photo'));
+    if (decoded.must_change_password && !isPasswordChangeFlow) {
       return res.status(403).json({ error: 'Changement de mot de passe requis', code: 'PASSWORD_CHANGE_REQUIRED' });
     }
     next();
@@ -448,14 +591,7 @@ app.post('/api/backoffice/auth/login', authRateLimit, async (req, res) => {
 app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
     const db = await getDb();
-    let account;
-    if (req.user.accountType === 'proprietaire') {
-      account = queryOne(db, 'SELECT id, nom, email, telephone, plan, statut, must_change_password, created_at FROM proprietaires WHERE id = ?', [req.user.id]);
-    } else if (req.user.accountType === 'employe') {
-      account = queryOne(db, 'SELECT id, nom, email, telephone, whatsapp_number, terrain_id, is_active, must_change_password, created_at FROM employes WHERE id = ?', [req.user.id]);
-    } else {
-      account = queryOne(db, 'SELECT id, nom, email, telephone, role, is_active, must_change_password, created_at FROM users WHERE id = ?', [req.user.id]);
-    }
+    const account = selectProfileAccount(db, req.user);
     if (!account) return res.status(404).json({ error: 'Utilisateur non trouvé' });
     res.json({ ...account, role: req.user.role, accountType: req.user.accountType });
   } catch (err) {
@@ -597,18 +733,20 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
 app.post('/api/terrains', authMiddleware, requireRole('proprietaire'), async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, description, telephone } = req.body;
+    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone } = req.body;
     const prixEntier = Number(prix_entier || prix_heure);
     const prixMoitie = Number(prix_moitie || prixEntier * 0.6);
-    const acompteTerrain = Number(acompte || montant_acompte || 5000);
-    const result = runSql(db, 'INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, description, telephone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [req.user.id, nom, adresse, ville, sport || 'foot', type || '11 vs 11', prixEntier, prixMoitie, prixEntier, acompteTerrain, acompteTerrain, description, telephone]);
+    const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : 12.5));
+    const avanceTerrain = Math.round((prixEntier * pourcentageAvance) / 100);
+    const result = runSql(db, `INSERT INTO terrains
+      (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, description, telephone)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.id, nom, adresse, ville, sport || 'foot', type || '11 vs 11', prixEntier, prixMoitie, prixEntier, avanceTerrain, avanceTerrain, pourcentageAvance, 'commission', 0, 0, 0, Number.isFinite(Number(latitude)) ? Number(latitude) : null, Number.isFinite(Number(longitude)) ? Number(longitude) : null, description, telephone]);
     
     const jours = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
     for (const jour of jours) {
       runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [result.lastInsertRowid, jour, '08:00', '22:00']);
     }
-
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [result.lastInsertRowid]);
     res.status(201).json(terrain);
   } catch (err) {
@@ -623,17 +761,74 @@ app.put('/api/terrains/:id', authMiddleware, requireRole('proprietaire'), async 
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ? AND proprietaire_id = ?', [Number(req.params.id), req.user.id]);
     if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
-    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, description, telephone, is_active } = req.body;
+    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone, is_active } = req.body;
     const prixEntier = Number(prix_entier || prix_heure || terrain.prix_entier || terrain.prix_heure);
-    const acompteTerrain = Number(acompte || montant_acompte || terrain.acompte || terrain.montant_acompte || 5000);
-    runSql(db, 'UPDATE terrains SET nom=?, adresse=?, ville=?, sport=?, type=?, prix_heure=?, prix_moitie=?, prix_entier=?, montant_acompte=?, acompte=?, description=?, telephone=?, is_active=? WHERE id=?',
-      [nom || terrain.nom, adresse || terrain.adresse, ville || terrain.ville, sport || terrain.sport, type || terrain.type, prixEntier, Number(prix_moitie || terrain.prix_moitie || prixEntier * 0.6), prixEntier, acompteTerrain, acompteTerrain, description || terrain.description, telephone || terrain.telephone, is_active !== undefined ? is_active : terrain.is_active, terrain.id]);
+    const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : terrain.pourcentage_avance || 12.5));
+    const avanceTerrain = Math.round((prixEntier * pourcentageAvance) / 100);
+    runSql(db, `UPDATE terrains SET nom=?, adresse=?, ville=?, sport=?, type=?, prix_heure=?, prix_moitie=?, prix_entier=?,
+      montant_acompte=?, acompte=?, pourcentage_avance=?, latitude=?, longitude=?, description=?, telephone=?, is_active=? WHERE id=?`,
+      [nom || terrain.nom, adresse || terrain.adresse, ville || terrain.ville, sport || terrain.sport, type || terrain.type, prixEntier, Number(prix_moitie || terrain.prix_moitie || prixEntier * 0.6), prixEntier, avanceTerrain, avanceTerrain, pourcentageAvance, latitude === '' || latitude == null ? terrain.latitude : (Number.isFinite(Number(latitude)) ? Number(latitude) : null), longitude === '' || longitude == null ? terrain.longitude : (Number.isFinite(Number(longitude)) ? Number(longitude) : null), description || terrain.description, telephone || terrain.telephone, is_active !== undefined ? is_active : terrain.is_active, terrain.id]);
     
     const updated = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrain.id]);
     res.json(updated);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.get('/api/terrains/:id/photos', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ? AND proprietaire_id = ?', [terrainId, req.user.id]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain non trouve' });
+    res.json(listTerrainPhotos(db, terrainId));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.post('/api/terrains/:id/photos', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ? AND proprietaire_id = ?', [terrainId, req.user.id]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain non trouve' });
+    const photo = transaction(db, () => createTerrainPhoto(db, terrainId, req.body || {}));
+    res.status(201).json(photo);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.patch('/api/terrains/:id/photos/:photoId', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ? AND proprietaire_id = ?', [terrainId, req.user.id]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain non trouve' });
+    const photo = transaction(db, () => updateTerrainPhoto(db, terrainId, Number(req.params.photoId), req.body || {}));
+    res.json(photo);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.delete('/api/terrains/:id/photos/:photoId', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ? AND proprietaire_id = ?', [terrainId, req.user.id]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain non trouve' });
+    const result = transaction(db, () => deleteTerrainPhoto(db, terrainId, Number(req.params.photoId)));
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -674,9 +869,8 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
     if (!['moitie', 'entier'].includes(format_terrain)) return res.status(400).json({ error: 'Format de terrain invalide' });
     const prixHoraire = Number(format_terrain === 'moitie' ? terrain.prix_moitie : terrain.prix_entier);
     const montant = prixHoraire * duree;
-    const acompteTerrain = Number(terrain.acompte || terrain.montant_acompte || 5000);
-    const acompte = Math.min(acompteTerrain, montant);
-    const resteAPayer = Math.max(0, montant - acompte);
+    const montantAvance = calculerMontantAvance(terrain, montant);
+    const montantRestant = Math.max(0, montant - montantAvance);
     const verrouExpireAt = Date.now() + lockDurationMs;
 
     const reservationId = transaction(db, () => {
@@ -692,9 +886,9 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
       }
       db.run("UPDATE creneaux SET statut = 'en_attente_paiement' WHERE id = ? AND statut = 'libre'", [creneau.id]);
       db.run(`INSERT INTO reservations
-        (terrain_id, creneau_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, format_terrain, statut, expire_at, verrou_expire_at, cree_par)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)`,
-        [terrainId, creneau.id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, montant, acompte, resteAPayer, format_terrain, new Date(verrouExpireAt).toISOString(), verrouExpireAt, creePar]);
+        (terrain_id, creneau_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain, statut, expire_at, verrou_expire_at, cree_par)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)`,
+        [terrainId, creneau.id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, montant, montantAvance, montantRestant, montantAvance, montantRestant, format_terrain, new Date(verrouExpireAt).toISOString(), verrouExpireAt, creePar]);
       return queryOne(db, 'SELECT last_insert_rowid() AS id').id;
     });
 
@@ -716,6 +910,19 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
     }
 
     if (creePar === 'gerant') {
+      await logActivite({
+        gerant_id: req.user.id,
+        terrain_id: terrainId,
+        action: 'reservation_creee',
+        reservation_id: reservation.id,
+        details: {
+          date,
+          heure_debut,
+          heure_fin,
+          format_terrain,
+          montant,
+        },
+      }).catch((error) => logger.error('index.js', 'Log activite reservation_creee', error));
       await notificationService.envoyerLienPaiement(reservation.id).catch((error) => logger.error('index.js', 'Envoi lien paiement WhatsApp impossible', error));
       return res.status(201).json({ success: true, reservation_id: reservation.id });
     }
@@ -835,6 +1042,35 @@ app.put('/api/reservations/:id/annuler', optionalAuth, async (req, res) => {
   }
 });
 
+app.patch('/api/gerant/reservations/:id/annuler', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?', [Number(req.params.id), req.user.terrain_id]);
+    if (!reservation) return res.status(404).json({ error: 'Reservation non trouvee pour ce terrain' });
+    if (!['en_attente', 'confirme', 'acceptee'].includes(reservation.statut)) {
+      return res.status(400).json({ error: 'Reservation ne peut pas etre annulee' });
+    }
+    transaction(db, () => {
+      db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ?", [req.user.id, reservation.id]);
+      if (reservation.creneau_id) {
+        db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut IN ('en_attente_paiement', 'reserve')", [reservation.creneau_id]);
+      }
+    });
+    await logActivite({
+      gerant_id: req.user.id,
+      terrain_id: reservation.terrain_id,
+      action: 'reservation_annulee',
+      reservation_id: reservation.id,
+      details: { statut_avant: reservation.statut },
+    }).catch((error) => logger.error('index.js', 'Log activite reservation_annulee', error));
+    await scoreService.recalculerScore(req.user.id, reservation.terrain_id).catch((error) => logger.error('index.js', 'Recalcul score annulation', error));
+    res.json({ message: 'Reservation annulee' });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
 app.put('/api/reservations/:id/traiter', authMiddleware, requireRole('gerant', 'proprietaire'), async (req, res) => {
   try {
     const db = await getDb();
@@ -851,6 +1087,16 @@ app.put('/api/reservations/:id/traiter', authMiddleware, requireRole('gerant', '
       db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ?", [req.user.id, reservation.id]);
       if (reservation.creneau_id) db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'", [reservation.creneau_id]);
     });
+    if (req.user.role === 'gerant') {
+      await logActivite({
+        gerant_id: req.user.id,
+        terrain_id: reservation.terrain_id,
+        action: 'reservation_annulee',
+        reservation_id: reservation.id,
+        details: { statut_avant: reservation.statut, action },
+      }).catch((error) => logger.error('index.js', 'Log activite reservation_annulee', error));
+      await scoreService.recalculerScore(req.user.id, reservation.terrain_id).catch((error) => logger.error('index.js', 'Recalcul score annulation traiter', error));
+    }
     res.json({ message: 'Réservation annulée' });
   } catch (err) {
     console.error(err);
@@ -889,6 +1135,24 @@ function reservationIdDepuisReference(refCommand) {
   return match ? Number(match[1]) : 0;
 }
 
+function calculerMontantAvance(terrain, prixChoisi) {
+  const montant = Number(prixChoisi || 0);
+  const pourcentageAvance = Number(terrain?.pourcentage_avance);
+  if (Number.isFinite(pourcentageAvance) && pourcentageAvance > 0) {
+    return Math.min(montant, Math.round((montant * pourcentageAvance) / 100));
+  }
+  return Math.min(montant, Number(terrain?.acompte || terrain?.montant_acompte || 5000));
+}
+
+function calculerCommissionPrelevee(terrain, montantAvance) {
+  if (terrain?.modele_revenus && terrain.modele_revenus !== 'commission') return 0;
+  const commissionPourcentage = Number(terrain?.commission_pourcentage);
+  if (Number.isFinite(commissionPourcentage) && commissionPourcentage > 0) {
+    return Math.min(montantAvance, Math.round((montantAvance * commissionPourcentage) / 100));
+  }
+  return Math.min(montantAvance, Number(terrain?.commission || 0));
+}
+
 async function traiterConfirmationPaytech(db, reservationId, refCommand) {
   let action = 'ignore';
   let reversementInfo = null;
@@ -906,22 +1170,23 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand) {
 
     if (creneau?.statut === 'en_attente_paiement' && currentReservation.statut === 'en_attente') {
       const terrain = queryOne(db, `SELECT t.id AS terrain_id, t.acompte, t.montant_acompte, t.commission,
+        t.pourcentage_avance, t.modele_revenus, t.commission_pourcentage,
         e.id AS gerant_id, e.telephone AS gerant_tel, e.whatsapp_number AS gerant_whatsapp, e.nom AS gerant_nom
         FROM terrains t
         LEFT JOIN employes e ON e.terrain_id = t.id AND e.is_active = 1
         WHERE t.id = ?
         LIMIT 1`, [currentReservation.terrain_id]);
-      const montantAcompte = Number(terrain?.acompte || terrain?.montant_acompte || currentReservation.acompte || 5000);
-      const montantCommission = Number(terrain?.commission || 400);
-      const montantReverse = Math.max(0, montantAcompte - montantCommission);
+      const montantAvance = Number(currentReservation.montant_avance || currentReservation.acompte || calculerMontantAvance(terrain, currentReservation.prix_total || currentReservation.montant));
+      const montantCommission = calculerCommissionPrelevee(terrain, montantAvance);
+      const montantReverse = Math.max(0, montantAvance - montantCommission);
       const code = genererCodeReservation(db);
 
       db.run("UPDATE creneaux SET statut = 'reserve' WHERE id = ?", [creneau.id]);
-      db.run("UPDATE reservations SET statut = 'confirme', code_reservation = ?, acompte = ? WHERE id = ?", [code, montantAcompte, reservationId]);
+      db.run("UPDATE reservations SET statut = 'confirme', code_reservation = ?, acompte = ?, montant_avance = ?, reste_a_payer = MAX(0, COALESCE(prix_total, montant, 0) - ?), montant_restant = MAX(0, COALESCE(prix_total, montant, 0) - ?) WHERE id = ?", [code, montantAvance, montantAvance, montantAvance, montantAvance, reservationId]);
       db.run(`INSERT INTO paiements
         (reservation_id, montant, methode, statut, reference_externe, reference_paytech, montant_acompte, montant_commission, montant_reverse, statut_reversement)
         VALUES (?, ?, 'paytech', 'paye', ?, ?, ?, ?, ?, ?)`,
-        [reservationId, montantAcompte, refCommand, refCommand, montantAcompte, montantCommission, montantReverse, terrain?.gerant_id ? 'effectue' : 'en_attente']);
+        [reservationId, montantAvance, refCommand, refCommand, montantAvance, montantCommission, montantReverse, terrain?.gerant_id ? 'effectue' : 'en_attente']);
 
       if (terrain?.gerant_id) {
         db.run(`INSERT INTO portefeuille_gerant
@@ -932,13 +1197,13 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand) {
             total_encaisse = total_encaisse + excluded.total_encaisse,
             total_commission_prelevee = total_commission_prelevee + excluded.total_commission_prelevee,
             updated_at = CURRENT_TIMESTAMP`,
-          [terrain.gerant_id, terrain.terrain_id, montantReverse, montantAcompte, montantCommission]);
-        db.run(`INSERT OR IGNORE INTO reversements (gerant_id, terrain_id, reservation_id, montant, statut)
-          VALUES (?, ?, ?, ?, 'effectue')`, [terrain.gerant_id, terrain.terrain_id, reservationId, montantReverse]);
+          [terrain.gerant_id, terrain.terrain_id, montantReverse, montantAvance, montantCommission]);
+        db.run(`INSERT OR IGNORE INTO reversements (gerant_id, terrain_id, reservation_id, montant, commission_prelevee, statut)
+          VALUES (?, ?, ?, ?, ?, 'effectue')`, [terrain.gerant_id, terrain.terrain_id, reservationId, montantReverse, montantCommission]);
         reversementInfo = {
           telephone: terrain.gerant_whatsapp || terrain.gerant_tel,
           nom: terrain.gerant_nom,
-          montant_acompte: montantAcompte,
+          montant_avance: montantAvance,
           montant_commission: montantCommission,
           montant_reverse: montantReverse,
           reservationId,
@@ -1037,29 +1302,119 @@ async function simulerPaytech(req, res) {
 app.post('/webhook/paytech/simulate', simulerPaytech);
 app.post('/api/webhook/paytech/simulate', simulerPaytech);
 
+async function marquerReservationJouee({ db, reservation, gerantId, methode }) {
+  const solde = Number(reservation.reste_a_payer || 0);
+  transaction(db, () => {
+    db.run("UPDATE reservations SET statut = 'joue', reste_a_payer = 0, qr_code_scanne_at = COALESCE(qr_code_scanne_at, CURRENT_TIMESTAMP) WHERE id = ? AND statut = 'confirme'", [reservation.id]);
+    db.run(`INSERT INTO matchs (reservation_id, terrain_id, gerant_id, montant_total, acompte_paye, solde_paye, methode_solde)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`, [reservation.id, reservation.terrain_id, gerantId, reservation.prix_total || reservation.montant, reservation.acompte || 0, solde, methode]);
+    if (solde > 0) {
+      db.run(`INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe)
+        VALUES (?, ?, ?, 'paye', ?)`, [reservation.id, solde, methode, `SOLDE-${reservation.id}-${Date.now()}`]);
+    }
+  });
+}
+
+function assertFenetreScanQr(creneau) {
+  const maintenant = Date.now();
+  const heureMatch = new Date(`${creneau.date}T${creneau.heure_debut}`).getTime();
+  const heureFinMatch = new Date(`${creneau.date}T${creneau.heure_fin}`).getTime();
+  const debutFenetre = heureMatch - 60 * 60 * 1000;
+  const finFenetre = heureFinMatch + 2 * 60 * 60 * 1000;
+
+  if (maintenant < debutFenetre) {
+    const error = new Error("Ce QR code n'est scannable qu'à partir d'1h avant le match et jusqu'à 2h après sa fin.");
+    error.statusCode = 400;
+    error.code = 'QR_SCAN_TOO_EARLY';
+    error.scannable_at = new Date(debutFenetre).toISOString();
+    error.minutes_remaining = Math.ceil((debutFenetre - maintenant) / (60 * 1000));
+    error.match_date = creneau.date;
+    error.match_time = creneau.heure_debut;
+    throw error;
+  }
+  if (maintenant > finFenetre) {
+    const error = new Error("Ce QR code n'est scannable qu'à partir d'1h avant le match et jusqu'à 2h après sa fin.");
+    error.statusCode = 400;
+    error.code = 'QR_SCAN_EXPIRED';
+    error.match_date = creneau.date;
+    error.match_time = creneau.heure_debut;
+    throw error;
+  }
+}
+
 app.put('/api/reservations/:id/jouer', authMiddleware, requireRole('gerant'), async (req, res) => {
   try {
     const db = await getDb();
     const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?', [Number(req.params.id), req.user.terrain_id]);
     if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée pour ce terrain' });
     if (reservation.statut !== 'confirme') return res.status(400).json({ error: 'Seule une réservation confirmée peut passer à jouée' });
-    const solde = Number(reservation.reste_a_payer || 0);
     const methode = ['especes', 'wave', 'orange_money'].includes(req.body.methode) ? req.body.methode : 'especes';
 
-    transaction(db, () => {
-      db.run("UPDATE reservations SET statut = 'joue', reste_a_payer = 0 WHERE id = ? AND statut = 'confirme'", [reservation.id]);
-      db.run(`INSERT INTO matchs (reservation_id, terrain_id, gerant_id, montant_total, acompte_paye, solde_paye, methode_solde)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`, [reservation.id, reservation.terrain_id, req.user.id, reservation.prix_total || reservation.montant, reservation.acompte || 0, solde, methode]);
-      if (solde > 0) {
-        db.run(`INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe)
-          VALUES (?, ?, ?, 'paye', ?)`, [reservation.id, solde, methode, `SOLDE-${reservation.id}-${Date.now()}`]);
-      }
-    });
+    await marquerReservationJouee({ db, reservation, gerantId: req.user.id, methode });
     const match = queryOne(db, 'SELECT * FROM matchs WHERE reservation_id = ?', [reservation.id]);
     res.json({ message: 'Match marqué comme joué et revenu comptabilisé', match });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.patch('/api/gerant/reservations/:id/scanner', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const reservation = queryOne(db, `
+      SELECT r.*, t.nom AS terrain_nom, c.date AS creneau_date, c.heure_debut AS creneau_heure_debut, c.heure_fin AS creneau_heure_fin
+      FROM reservations r
+      JOIN terrains t ON t.id = r.terrain_id
+      LEFT JOIN creneaux c ON c.id = r.creneau_id
+      WHERE r.id = ? AND r.terrain_id = ?
+    `, [Number(req.params.id), req.user.terrain_id]);
+    if (!reservation) return res.status(404).json({ error: 'Reservation non trouvee pour ce terrain' });
+    if (reservation.qr_code_scanne_at) {
+      return res.status(403).json({ error: `Ce code QR a deja ete scanne le ${reservation.qr_code_scanne_at}` });
+    }
+    if (reservation.statut !== 'confirme') return res.status(400).json({ error: 'Seule une reservation confirmee peut etre scannee' });
+
+    assertFenetreScanQr({
+      date: reservation.creneau_date || reservation.date,
+      heure_debut: reservation.creneau_heure_debut || reservation.heure_debut,
+      heure_fin: reservation.creneau_heure_fin || reservation.heure_fin,
+    });
+
+    const methode = ['especes', 'wave', 'orange_money'].includes(req.body.methode) ? req.body.methode : 'especes';
+    await marquerReservationJouee({ db, reservation, gerantId: req.user.id, methode });
+    await logActivite({
+      gerant_id: req.user.id,
+      terrain_id: reservation.terrain_id,
+      action: 'qr_scanne',
+      reservation_id: reservation.id,
+      details: { methode },
+    }).catch((error) => logger.error('index.js', 'Log activite qr_scanne', error));
+    await scoreService.recalculerScore(req.user.id, reservation.terrain_id).catch((error) => logger.error('index.js', 'Recalcul score scan QR', error));
+    const match = queryOne(db, 'SELECT * FROM matchs WHERE reservation_id = ?', [reservation.id]);
+    res.json({
+      message: 'QR code scanne et match valide',
+      match,
+      reservation: {
+        id: reservation.id,
+        joueur_nom: reservation.joueur_nom,
+        terrain_nom: reservation.terrain_nom,
+        date: reservation.date,
+        heure_debut: reservation.heure_debut,
+        heure_fin: reservation.heure_fin,
+        code_reservation: reservation.code_reservation,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({
+      error: err.message || 'Erreur serveur',
+      code: err.code,
+      scannable_at: err.scannable_at,
+      minutes_remaining: err.minutes_remaining,
+      match_date: err.match_date,
+      match_time: err.match_time,
+    });
   }
 });
 
@@ -1121,15 +1476,16 @@ app.get('/api/proprietaire/stats', authMiddleware, requireRole('proprietaire'), 
 
     const placeholders = terrainIds.map(() => '?').join(',');
 
-    const revenueRow = queryOne(db, `SELECT COALESCE(SUM(prix_total), 0) as total FROM reservations WHERE terrain_id IN (${placeholders}) AND statut = 'joue'`, terrainIds);
+    const revenueRows = queryAll(db, ownerRevenueRowsSql({ ownerWhere: 't.proprietaire_id = ?', dateWhere: '' }), [propId]);
+    const revenueTotals = summarizeOwnerRevenue(revenueRows);
     const totalRes = queryOne(db, `SELECT COUNT(*) as count FROM reservations WHERE terrain_id IN (${placeholders})`, terrainIds);
     const pendingRes = queryOne(db, `SELECT COUNT(*) as count FROM reservations WHERE terrain_id IN (${placeholders}) AND statut = 'en_attente'`, terrainIds);
     const totalEmp = queryOne(db, 'SELECT COUNT(*) as count FROM employes WHERE proprietaire_id = ?', [propId]);
 
     const terrainStats = terrains.map(t => {
-      const rev = queryOne(db, "SELECT COALESCE(SUM(prix_total), 0) as total FROM reservations WHERE terrain_id = ? AND statut = 'joue'", [t.id]);
+      const revenue = revenueRows.find((row) => Number(row.id) === Number(t.id)) || {};
       const resCount = queryOne(db, 'SELECT COUNT(*) as count FROM reservations WHERE terrain_id = ?', [t.id]);
-      return { nom: t.nom, id: t.id, reservations: resCount.count, revenue: rev.total, occupancy: Math.min(Math.round((resCount.count / 50) * 100), 100) };
+      return { nom: t.nom, id: t.id, reservations: resCount.count, revenue: Number(revenue.montants_reverses || 0), occupancy: Math.min(Math.round((resCount.count / 50) * 100), 100) };
     });
 
     const weeklyRevenue = [];
@@ -1137,12 +1493,23 @@ app.get('/api/proprietaire/stats', authMiddleware, requireRole('proprietaire'), 
       const d = new Date();
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().split('T')[0];
-      const rev = queryOne(db, `SELECT COALESCE(SUM(prix_total), 0) as total FROM reservations WHERE terrain_id IN (${placeholders}) AND date = ? AND statut = 'joue'`, [...terrainIds, dateStr]);
+      const rev = queryOne(db, `SELECT
+        COALESCE(SUM(CASE
+          WHEN t.modele_revenus = 'commission'
+          THEN COALESCE(p.montant_acompte, 0) - COALESCE(p.montant_commission, ROUND(COALESCE(p.montant_acompte, 0) * COALESCE(t.commission_pourcentage, 0) / 100.0))
+          ELSE COALESCE(p.montant_acompte, 0)
+        END), 0) as total
+        FROM reservations r
+        JOIN terrains t ON t.id = r.terrain_id
+        LEFT JOIN paiements p ON p.reservation_id = r.id AND p.statut = 'paye'
+        WHERE r.terrain_id IN (${placeholders}) AND r.date = ? AND ${playedStatusSql('r')}`, [...terrainIds, dateStr]);
       weeklyRevenue.push({ day: ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][d.getDay()], revenue: rev.total });
     }
 
     res.json({
-      totalRevenue: revenueRow.total,
+      totalRevenue: revenueTotals.montants_reverses,
+      totalAvances: revenueTotals.avances_encaissees,
+      totalCommission: revenueTotals.commissions_prelevees,
       occupancyRate: terrainStats.length > 0 ? Math.round(terrainStats.reduce((s, t) => s + t.occupancy, 0) / terrainStats.length) : 0,
       totalReservations: totalRes.count,
       pendingReservations: pendingRes.count,
@@ -1150,6 +1517,49 @@ app.get('/api/proprietaire/stats', authMiddleware, requireRole('proprietaire'), 
       totalEmployes: totalEmp.count,
       terrainStats,
       weeklyRevenue,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.get('/api/proprietaire/profile', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const propId = req.user.id;
+    const account = queryOne(db, `SELECT id, nom, email, telephone, plan, statut, created_at
+      FROM proprietaires WHERE id = ?`, [propId]);
+    if (!account) return res.status(404).json({ error: 'Profil proprietaire introuvable' });
+
+    const terrains = queryAll(db, `SELECT id, nom, ville, adresse, type, is_active, modele_revenus,
+      pourcentage_avance, commission_pourcentage, abonnement_montant, achat_definitif_montant, achat_definitif_paye
+      FROM terrains WHERE proprietaire_id = ? ORDER BY created_at DESC`, [propId]);
+    const revenueRows = queryAll(db, ownerRevenueRowsSql({ ownerWhere: 't.proprietaire_id = ?', dateWhere: '' }), [propId]);
+    const revenue = summarizeOwnerRevenue(revenueRows);
+    const pendingReservations = queryOne(db, `SELECT COUNT(*) AS total
+      FROM reservations r
+      JOIN terrains t ON t.id = r.terrain_id
+      WHERE t.proprietaire_id = ? AND r.statut = 'en_attente'`, [propId]).total;
+    const playedMatches = queryAll(db, `SELECT r.id, r.joueur_nom, r.date, r.heure_debut, r.heure_fin,
+        COALESCE(r.montant_avance, r.acompte, 0) AS montant_avance,
+        t.nom AS terrain_nom
+      FROM reservations r
+      JOIN terrains t ON t.id = r.terrain_id
+      WHERE t.proprietaire_id = ? AND ${playedStatusSql('r')}
+      ORDER BY r.date DESC, r.heure_debut DESC
+      LIMIT 8`, [propId]);
+
+    res.json({
+      account,
+      summary: {
+        terrains_total: terrains.length,
+        terrains_actifs: terrains.filter((terrain) => Number(terrain.is_active) === 1).length,
+        reservations_en_attente: Number(pendingReservations || 0),
+        ...revenue,
+      },
+      terrains,
+      playedMatches,
     });
   } catch (err) {
     console.error(err);
@@ -1181,6 +1591,19 @@ app.get('/api/proprietaire/reservations', authMiddleware, requireRole('proprieta
       WHERE t.proprietaire_id = ? ORDER BY r.created_at DESC
     `, [req.user.id]);
     res.json(reservations);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.get('/api/proprietaire/sante/:terrain_id', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.terrain_id);
+    const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ? AND proprietaire_id = ?', [terrainId, req.user.id]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+    res.json(scoreService.getSanteTerrain(db, terrainId));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -1412,19 +1835,258 @@ app.get('/api/admin/audit', authMiddleware, requireRole('super_admin'), async (r
 // ============================================================
 // PROFIL
 // ============================================================
-app.put('/api/profil', authMiddleware, async (req, res) => {
+app.get('/api/profil', authMiddleware, async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, telephone } = req.body;
-    if (req.user.accountType === 'user') {
-      runSql(db, 'UPDATE users SET nom = ?, telephone = ? WHERE id = ?', [nom, telephone, req.user.id]);
-    } else if (req.user.accountType === 'proprietaire') {
-      runSql(db, 'UPDATE proprietaires SET nom = ?, telephone = ? WHERE id = ?', [nom, telephone, req.user.id]);
-    }
-    res.json({ message: 'Profil mis à jour' });
+    const account = selectProfileAccount(db, req.user);
+    if (!account) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+
+    const role = req.user.role === 'superadmin' ? 'super_admin' : req.user.role;
+    const name = splitDisplayName(account);
+    const computed = buildProfileStats(db, { ...req.user, role });
+
+    res.json({
+      account: {
+        ...account,
+        prenom: account.prenom || name.prenom,
+        nom: name.nom || account.nom,
+        role,
+        role_label: profileRoleLabel(role),
+        accountType: req.user.accountType,
+      },
+      terrain_associe: computed.terrainAssocie,
+      stats: computed.stats,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.get('/api/profil/joueur', authMiddleware, requireRole('joueur'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const account = selectProfileAccount(db, req.user);
+    if (!account) return res.status(404).json({ error: 'Profil joueur introuvable' });
+
+    const reservationsTotales = queryOne(db, 'SELECT COUNT(*) AS total FROM reservations WHERE joueur_id = ?', [req.user.id]) || { total: 0 };
+    const matchsJoues = queryOne(db, `SELECT COUNT(*) AS total FROM reservations
+      WHERE joueur_id = ? AND ${playedStatusSql('reservations')}`, [req.user.id]) || { total: 0 };
+    const terrainPrefere = queryOne(db, `SELECT t.nom, COUNT(*) AS total
+      FROM reservations r
+      JOIN terrains t ON t.id = r.terrain_id
+      WHERE r.joueur_id = ?
+      GROUP BY t.id
+      ORDER BY total DESC, t.nom ASC
+      LIMIT 1`, [req.user.id]);
+
+    res.json({
+      account: publicProfileAccount(account, req.user),
+      stats: {
+        reservations_totales: Number(reservationsTotales.total || 0),
+        matchs_joues: Number(matchsJoues.total || 0),
+        terrain_prefere: terrainPrefere?.nom || 'Aucun',
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.get('/api/profil/gerant', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const account = selectProfileAccount(db, req.user);
+    if (!account) return res.status(404).json({ error: 'Profil gerant introuvable' });
+
+    const terrain = queryOne(db, 'SELECT id, nom, adresse, ville FROM terrains WHERE id = ?', [req.user.terrain_id]);
+    const from = currentMonthStart();
+    const matchs = queryOne(db, `SELECT COUNT(*) AS total FROM matchs
+      WHERE gerant_id = ? AND date(joue_at) >= date(?)`, [req.user.id, from]) || { total: 0 };
+    const creneaux = queryOne(db, `SELECT COUNT(*) AS total FROM creneaux
+      WHERE terrain_id = ? AND statut IN ('libre', 'reserve', 'en_attente_paiement')`, [req.user.terrain_id]) || { total: 0 };
+
+    res.json({
+      account: publicProfileAccount(account, req.user),
+      terrain,
+      stats: {
+        matchs_valides_mois: Number(matchs.total || 0),
+        creneaux_actifs: Number(creneaux.total || 0),
+        membre_depuis: account.created_at,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.get('/api/profil/proprietaire', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const account = selectProfileAccount(db, req.user);
+    if (!account) return res.status(404).json({ error: 'Profil proprietaire introuvable' });
+
+    const terrains = queryAll(db, `SELECT id, nom, adresse, ville, type, is_active
+      FROM terrains WHERE proprietaire_id = ?
+      ORDER BY nom ASC`, [req.user.id]);
+    const from = currentMonthStart();
+    const terrainIds = terrains.map((terrain) => Number(terrain.id));
+    let matchs = { total: 0 };
+    if (terrainIds.length) {
+      const placeholders = terrainIds.map(() => '?').join(',');
+      matchs = queryOne(db, `SELECT COUNT(*) AS total FROM matchs
+        WHERE terrain_id IN (${placeholders}) AND date(joue_at) >= date(?)`, [...terrainIds, from]) || { total: 0 };
+    }
+
+    res.json({
+      account: publicProfileAccount(account, req.user),
+      terrains,
+      stats: {
+        nombre_terrains: terrains.length,
+        matchs_joues_mois: Number(matchs.total || 0),
+        membre_depuis: account.created_at,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.get('/api/profil/admin', authMiddleware, requireRole('super_admin'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const account = selectProfileAccount(db, req.user);
+    if (!account) return res.status(404).json({ error: 'Profil admin introuvable' });
+
+    res.json({
+      account: publicProfileAccount(account, req.user),
+      stats: {
+        membre_depuis: account.created_at,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.put('/api/profil', authMiddleware, async (req, res) => {
+  try {
+    const db = await getDb();
+    const table = profileTableFor(req.user.accountType);
+    const prenom = String(req.body.prenom || '').trim().slice(0, 120) || null;
+    const nom = String(req.body.nom || '').trim().slice(0, 180);
+    const quartier = String(req.body.quartier || '').trim().slice(0, 180) || null;
+    const dateNaissance = String(req.body.date_naissance || '').trim() || null;
+    const bio = String(req.body.bio || '').trim().slice(0, 150) || null;
+
+    if (!nom) {
+      return res.status(400).json({ error: 'Le nom est obligatoire' });
+    }
+
+    runSql(db, `UPDATE ${table}
+      SET prenom = ?, nom = ?, quartier = ?, date_naissance = ?, bio = ?
+      WHERE id = ?`, [prenom, nom, quartier, dateNaissance, bio, req.user.id]);
+
+    const account = selectProfileAccount(db, req.user);
+    res.json({ message: 'Profil mis à jour', account: { ...account, role: req.user.role, accountType: req.user.accountType } });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.post('/api/profil/photo', authMiddleware, async (req, res) => {
+  try {
+    const db = await getDb();
+    const table = profileTableFor(req.user.accountType);
+    const photoUrl = saveProfilePhoto(req.user.accountType, req.user.id, req.body?.dataUrl);
+    runSql(db, `UPDATE ${table} SET photo_url = ? WHERE id = ?`, [photoUrl, req.user.id]);
+    res.status(201).json({ photo_url: photoUrl });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.patch('/api/profil/photo', authMiddleware, async (req, res) => {
+  try {
+    const db = await getDb();
+    const table = profileTableFor(req.user.accountType);
+    const photoUrl = saveProfilePhoto(req.user.accountType, req.user.id, req.body?.dataUrl);
+    runSql(db, `UPDATE ${table} SET photo_url = ? WHERE id = ?`, [photoUrl, req.user.id]);
+    res.json({ photo_url: photoUrl });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.patch('/api/profil/password', authMiddleware, async (req, res) => {
+  try {
+    const db = await getDb();
+    const { old_password, new_password, confirm_password } = req.body || {};
+    if (!new_password || String(new_password).length < 8) {
+      return res.status(400).json({ error: 'Mot de passe trop court' });
+    }
+    if (new_password !== confirm_password) {
+      return res.status(400).json({ error: 'Confirmation du mot de passe invalide' });
+    }
+
+    const table = profileTableFor(req.user.accountType);
+    const account = queryOne(db, `SELECT password_hash FROM ${table} WHERE id = ?`, [req.user.id]);
+    if (!account) return res.status(404).json({ error: 'Utilisateur introuvable' });
+
+    const role = req.user.role === 'superadmin' ? 'super_admin' : req.user.role;
+    if (role === 'super_admin' && !bcrypt.compareSync(String(old_password || ''), account.password_hash || '')) {
+      return res.status(400).json({ error: 'Ancien mot de passe incorrect' });
+    }
+
+    const hash = bcrypt.hashSync(new_password, 12);
+    runSql(db, `UPDATE ${table} SET password_hash = ?, must_change_password = 0 WHERE id = ?`, [hash, req.user.id]);
+    res.json({ message: 'Mot de passe modifie' });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.patch('/api/profil/joueur', authMiddleware, requireRole('joueur'), async (req, res) => {
+  try {
+    assertAccountRole(req, 'joueur');
+    const db = await getDb();
+    const prenom = String(req.body.prenom || '').trim().slice(0, 120) || null;
+    const nom = String(req.body.nom || '').trim().slice(0, 180);
+    const quartier = String(req.body.quartier || '').trim().slice(0, 180) || null;
+    const dateNaissance = String(req.body.date_naissance || '').trim() || null;
+    if (!nom) return res.status(400).json({ error: 'Le nom est obligatoire' });
+    runSql(db, `UPDATE users SET prenom = ?, nom = ?, quartier = ?, date_naissance = ? WHERE id = ?`,
+      [prenom, nom, quartier, dateNaissance, req.user.id]);
+    res.json({ message: 'Profil joueur mis a jour' });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+app.patch('/api/profil/admin', authMiddleware, requireRole('super_admin'), async (req, res) => {
+  try {
+    assertAccountRole(req, 'super_admin');
+    const db = await getDb();
+    const prenom = String(req.body.prenom || '').trim().slice(0, 120) || null;
+    const nom = String(req.body.nom || '').trim().slice(0, 180);
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (!nom || !email) return res.status(400).json({ error: 'Nom et email obligatoires' });
+    const duplicate = queryOne(db, 'SELECT id FROM users WHERE email = ? AND id != ?', [email, req.user.id]);
+    if (duplicate) return res.status(409).json({ error: 'Email deja utilise' });
+    runSql(db, 'UPDATE users SET prenom = ?, nom = ?, email = ? WHERE id = ?', [prenom, nom, email, req.user.id]);
+    res.json({ message: 'Profil admin mis a jour' });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -1471,7 +2133,7 @@ function programmerResumeHebdomadaire() {
 
       for (const row of rows) {
         await notificationService.envoyerMessage(row.telephone,
-          `Resume semaine ${row.terrain_nom}. Reservations : ${Number(row.reservations || 0)}. Acomptes encaisses : ${Number(row.acomptes || 0).toLocaleString()} FCFA. Commission plateforme : ${Number(row.commissions || 0).toLocaleString()} FCFA. Reverse cette semaine : ${Number(row.reverse_semaine || 0).toLocaleString()} FCFA. Solde total disponible : ${Number(row.solde_disponible || 0).toLocaleString()} FCFA.`);
+          `Resume semaine ${row.terrain_nom}. Reservations : ${Number(row.reservations || 0)}. Avances encaissees : ${Number(row.acomptes || 0).toLocaleString()} FCFA. Commission plateforme : ${Number(row.commissions || 0).toLocaleString()} FCFA. Reverse cette semaine : ${Number(row.reverse_semaine || 0).toLocaleString()} FCFA. Solde total disponible : ${Number(row.solde_disponible || 0).toLocaleString()} FCFA.`);
       }
     } catch (error) {
       logger.error('index.js', 'Resume hebdomadaire WhatsApp', error);
@@ -1479,9 +2141,46 @@ function programmerResumeHebdomadaire() {
   });
 }
 
+function programmerSurveillanceConfiance() {
+  if (!cron) {
+    logger.warn('index.js', 'node-cron non installe: surveillance confiance inactive');
+    return;
+  }
+
+  cron.schedule('0 9 * * 1', async () => {
+    await scoreService.verifierAnnulationsRepetees().catch((error) => {
+      logger.error('index.js', 'Surveillance annulations repetees', error);
+    });
+  });
+
+  cron.schedule('0 10 * * 1', async () => {
+    await scoreService.verifierInactiviteScan().catch((error) => {
+      logger.error('index.js', 'Surveillance inactivite scan', error);
+    });
+  });
+}
+
+async function appliquerSuspensionsAbonnements() {
+  const db = await getDb();
+  transaction(db, () => {
+    appliquerSuspensionsAbonnementsDb(db);
+  });
+}
+
 async function start() {
   await getDb(); // Initialize DB
   programmerResumeHebdomadaire();
+  programmerSurveillanceConfiance();
+  await appliquerSuspensionsAbonnements().catch((error) => {
+    logger.error('index.js', 'Suspension abonnements au demarrage', error);
+  });
+  if (cron) {
+    cron.schedule('15 0 * * *', async () => {
+      await appliquerSuspensionsAbonnements().catch((error) => {
+        logger.error('index.js', 'Suspension abonnements planifiee', error);
+      });
+    });
+  }
   setInterval(async () => {
     try {
       const db = await getDb();

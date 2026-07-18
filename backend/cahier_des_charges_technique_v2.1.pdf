@@ -1,0 +1,291 @@
+CAHIER DES CHARGES TECHNIQUES - SÉNÉGAL
+Plateforme de réservation de terrains de football
+Version 2.1
+Document Spécifique de Référence (Mise à Jour Sécurisée & Expérience Gérant)
+
+Notes de Version 2.1 (Mises à jour majeures demandées):
+• Sémantique globale: Remplacement systématique du terme "acompte" par "avance".
+• Protection Anti-Fraude: Un QR code de réservation scanné passe instantanément au statut match_joue et ne peut plus être scanné pour éviter les fraudes (double passage).
+• Nouveau Flux Scanner: Le gérant doit obligatoirement accéder à la page de détails de la réservation concernée pour afficher et cliquer sur le bouton "Scanner le QR Code".
+• Optimisation Check-in Gérant: Les réservations du jour sont triées de façon chronologique claire (date et heure) pour fluidifier les entrées de joueurs au guichet.
+
+1. Vision Globale
+Plateforme PWA mobile-first de réservation de terrains de football au Sénégal. Trois acteurs principaux: les joueurs qui réservent, les gérants/propriétaires qui gèrent leurs terrains, et le super admin qui pilote la plateforme. Le système doit être fluide, en français familier, accessible depuis un navigateur ou l'écran d'accueil du téléphone sans installation.
+
+2. PWA
+Configuration Technique
+• manifest.json complet: nom, icônes 192x192 et 512x512, theme_color: #0A5C36, background_color: #ffffff, display: standalone, start_url: /
+• Service Worker: Stratégie cache-first pour les assets statiques et network-first pour les appels API.
+• Installabilité: Détectable et installable depuis Chrome Android et Safari iOS via le bandeau "Ajouter à l'écran d'accueil".
+• Mode dégradé: Fonctionne sur les connexions mobiles lentes (3G au Sénégal) grâce à des skeleton loaders systématiques pour éviter les écrans blancs.
+• Push notifications: Web Push API pour les rappels de match, complémentaires aux envois automatisés via l'API WhatsApp.
+• Session persistante joueur: JWT stocké dans localStorage avec une validité de 30 jours. À chaque ouverture, vérification silencieuse du token en tâche de fond. Si expiré, renouvellement automatique via refresh_token stocké en cookie HTTPOnly.
+
+3. Base de Données - Schéma Complet (SQLite)
+
+-- Utilisateurs (tous rôles confondus)
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prenom TEXT NOT NULL,
+    nom TEXT NOT NULL,
+    telephone TEXT UNIQUE,
+    email TEXT UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('super_admin', 'proprietaire', 'gerant', 'joueur')),
+    est_verifie INTEGER DEFAULT 0,
+    refresh_token TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Terrains
+CREATE TABLE terrains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nom TEXT NOT NULL,
+    description TEXT,
+    quartier TEXT NOT NULL,
+    adresse TEXT,
+    latitude REAL,
+    longitude REAL,
+    surface TEXT CHECK(surface IN ('gazon_naturel','gazon_synthetique','beton')),
+    statut TEXT DEFAULT 'actif' CHECK(statut IN ('actif','suspendu','en_attente')),
+    -- Tarifs
+    prix_demi_terrain INTEGER NOT NULL,
+    prix_terrain_entier INTEGER NOT NULL,
+    pourcentage_avance REAL DEFAULT 12.5, -- Remplaçant d'acompte
+    -- Modèle de revenus plateforme (un seul actif à la fois)
+    modele_revenus TEXT CHECK(modele_revenus IN ('commission','abonnement','achat_definitif')),
+    commission_pourcentage REAL DEFAULT 0,
+    abonnement_montant INTEGER DEFAULT 0,
+    abonnement_periodicite TEXT DEFAULT 'mensuel',
+    abonnement_prochain_paiement DATETIME,
+    achat_definitif_montant INTEGER DEFAULT 0,
+    achat_definitif_paye INTEGER DEFAULT 0,
+    proprietaire_id INTEGER REFERENCES users(id),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Photos des terrains
+CREATE TABLE terrain_photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER REFERENCES terrains(id),
+    url TEXT NOT NULL,
+    est_principale INTEGER DEFAULT 0,
+    ordre INTEGER DEFAULT 0
+);
+
+-- Gérants liés aux terrains
+CREATE TABLE gerants_terrains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER REFERENCES users(id),
+    terrain_id INTEGER REFERENCES terrains(id),
+    UNIQUE(gerant_id, terrain_id)
+);
+
+-- Créneaux
+CREATE TABLE creneaux (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER REFERENCES terrains(id),
+    date DATE NOT NULL,
+    heure_debut TIME NOT NULL,
+    heure_fin TIME NOT NULL,
+    type TEXT DEFAULT 'terrain_entier' CHECK(type IN ('demi_terrain','terrain_entier')),
+    statut TEXT DEFAULT 'libre' CHECK(statut IN ('libre','en_attente_paiement','reserve','joue','annule')),
+    verrou_expire_at INTEGER,
+    UNIQUE(terrain_id, date, heure_debut, type)
+);
+
+-- Réservations
+CREATE TABLE reservations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    joueur_id INTEGER REFERENCES users(id),
+    creneau_id INTEGER REFERENCES creneaux(id),
+    type_reservation TEXT CHECK(type_reservation IN ('en_ligne','telephone','sur_place')),
+    statut TEXT DEFAULT 'en_attente' CHECK(statut IN ('en_attente','confirme','match_joue','annule','rembourse')),
+    code_reservation TEXT UNIQUE,
+    qr_code_url TEXT,
+    -- ANTI-FRAUDE: Horodatage du scan unique
+    qr_code_scanne_at DATETIME,
+    montant_total INTEGER NOT NULL,
+    montant_avance INTEGER NOT NULL, -- "avance" remplace "acompte"
+    montant_restant INTEGER NOT NULL,
+    cree_par TEXT CHECK(cree_par IN ('joueur', 'gerant')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Paiements
+CREATE TABLE paiements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id INTEGER REFERENCES reservations(id),
+    montant INTEGER NOT NULL,
+    type TEXT CHECK(type IN ('avance', 'solde', 'remboursement')), -- Type mis à jour
+    methode TEXT CHECK(methode IN ('wave', 'orange_money', 'simulation')),
+    reference_paytech TEXT,
+    statut TEXT CHECK (statut IN ('en_attente', 'paye', 'echoue', 'rembourse')),
+    paid_at DATETIME
+);
+
+-- Portefeuille gérant
+CREATE TABLE portefeuille_gerant (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER REFERENCES users(id),
+    terrain_id INTEGER REFERENCES terrains(id),
+    solde_disponible INTEGER DEFAULT 0,
+    solde_en_attente INTEGER DEFAULT 0,
+    total_encaisse INTEGER DEFAULT 0,
+    total_commission_prelevee INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(gerant_id, terrain_id)
+);
+
+-- Reversements
+CREATE TABLE reversements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER REFERENCES users(id),
+    terrain_id INTEGER REFERENCES terrains (id),
+    reservation_id INTEGER REFERENCES reservations(id),
+    montant INTEGER NOT NULL,
+    commission_prelevee INTEGER NOT NULL,
+    statut TEXT DEFAULT 'effectue',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Abonnements terrains
+CREATE TABLE abonnements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER REFERENCES terrains (id),
+    montant INTEGER NOT NULL,
+    date_echeance DATE NOT NULL,
+    statut TEXT CHECK (statut IN ('paye', 'en_attente', 'en_retard')),
+    paye_le DATETIME
+);
+
+-- OTP
+CREATE TABLE otp_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telephone TEXT NOT NULL,
+    code TEXT NOT NULL,
+    expire_at INTEGER NOT NULL,
+    utilise INTEGER DEFAULT 0
+);
+
+-- Index critiques (optimisés pour le tri par date et heure)
+CREATE INDEX idx_creneaux_terrain_date ON creneaux(terrain_id, date, statut);
+CREATE INDEX idx_reservations_joueur ON reservations(joueur_id, statut);
+CREATE INDEX idx_users_telephone ON users (telephone);
+CREATE INDEX idx_terrains_localisation ON terrains (latitude, longitude);
+CREATE INDEX idx_reservations_date_heure ON reservations (created_at, statut); -- Index pour le tri chronologique
+
+4. Calcul des Prix et Avances
+La logique de calcul respecte la formule financière suivante :
+prix_choisi = prix_demi_terrain ou prix_terrain_entier
+montant_avance = ARRONDI(prix_choisi * pourcentage_avance / 100)
+montant_restant = prix_choisi - montant_avance
+
+Exemple de simulation (pourcentage_avance = 12.5%):
+• Demi-terrain à 40 000 FCFA: Avance = 5 000 FCFA, reste à payer sur place = 35 000 FCFA.
+• Terrain entier à 70 000 FCFA: Avance = 8 750 FCFA, reste à payer sur place = 61 250 FCFA.
+
+Règle passerelle PayTech: Le montant envoyé à l'API de paiement PayTech correspond exactement au montant_avance. Tout paiement inférieur est rejeté par le système. Si un paiement supérieur est détecté, l'excédent est tracé et déduit manuellement de la somme finale à régler le jour du match.
+
+5. Modèles de Revenus Plateforme
+• Modèle 1 Commission par réservation:
+commission_prelevee = ARRONDI(montant_avance * commission_pourcentage / 100)
+montant_reverse_gerant = montant_avance - commission_prelevee
+Les frais transactionnels PayTech (~1.5%) sont entièrement absorbés dans la commission prélevée par la plateforme.
+• Modèle 2- Abonnement mensuel: Tarif fixe prélevé automatiquement chaque mois. Période de grâce de 3 jours après échéance avant suspension automatique.
+• Modèle 3 Achat définitif: Paiement unique. Pas de prélèvement de commission ni d'abonnement.
+
+6. Géolocalisation et Filtres Avancés
+L'espace joueur requiert l'autorisation navigator.geolocation. Si accordée, les terrains sont listés par distance croissante (calcul mathématique selon la formule de Haversine en base de données ou backend). Si refusée, le système utilise un tri par défaut et propose un filtrage par quartier.
+
+7. Flux de Réservation & Lutte Anti-Fraude (QR Code)
+Sécurisation stricte du QR Code (Zéro Fraude):
+Afin de prévenir toute utilisation frauduleuse (duplication ou réutilisation d'un même QR code par un groupe de joueurs), un jeton de sécurité à usage unique est implémenté:
+• Unicité et Éphémérité : Dès qu'un QR code est scanné avec succès, la réservation passe au statut match_joue et la colonne qr_code_scanne_at est horodatée.
+• Rejet Immédiat: Toute tentative de scan ultérieur d'un code déjà validé lève une exception bloquante sur le terminal du gérant: "Erreur: Ce code QR a déjà été scanné le [Date/Heure]".
+
+7.1 Parcours Gérant pour le Scan d'un QR Code
+Le gérant ne peut plus effectuer de scan sauvage depuis un écran générique hors contexte. Le processus de validation physique est sécurisé comme suit:
+1. Le gérant consulte son tableau de bord et clique sur la réservation du jour concernée.
+2. Dans la fiche détaillée de la réservation, le bouton "Scanner le QR Code" apparaît.
+3. Le clic sur ce bouton active le module caméra (html5-qrcode) dans le cadre strict de cette réservation.
+4. Le scan décode le contenu et le compare à l'identifiant unique de la réservation en cours.
+5. Si les données correspondent et que le statut est confirme, le statut est basculé à match_joue. S'il a déjà été traité, un message d'erreur d'interdiction s'affiche.
+
+7.2 Optimisation du Check-in (Réservations du Jour)
+Pour accélérer le traitement à l'entrée des complexes sportifs aux heures de pointe, la vue principale du gérant affiche un onglet "Réservations du Jour" pré-filtré. Les réservations y sont classées par ordre chronologique strict de date et heure de début. Le gérant visualise d'un seul coup d'œil le match en cours, le match suivant et peut cliquer directement sur la fiche correspondante pour valider l'entrée des joueurs.
+
+8. Notifications WhatsApp
+8.1 Inscription - Code OTP
+Salut [Prénom] ! Bienvenue sur [Nom Plateforme].
+Ton code de confirmation: *XXXXXX*
+Il est valable 10 minutes. Ne le partage avec personne
+
+8.2 Réservation en ligne - Confirmation avec Avance
+C'est confirmé [Prénom] !
+Ton terrain t'attend :
+[Nom Terrain] - [Quartier]
+[Jour] [Date] à [Heure]
+Code : *TF-XXXXXX*
+[LIEN GOOGLE MAPS DU TERRAIN]
+Ton QR code de match (garde-le bien !)
+[IMAGE QR CODE]
+Viens *30 minutes avant* avec ce QR code. Le gérant va le scanner depuis ta fiche de réservation pour valider ton entrée. Attention, ce code est à usage unique !
+À tout à l'heure sur le terrain
+
+8.3 Réservation par téléphone - Lien de paiement de l'Avance
+Salut [Prénom] !
+Le gérant de *[Nom Terrain]* a enregistré ta réservation pour le [Date] à [Heure].
+Pour confirmer ta place, paie ton avance de [Montant Avance] FCFA ici:
+[LIEN PAYTECH]
+Le reste (*[Montant Restant] FCFA*) tu l'amènes le jour du match, pas de stress
+Ce lien est valable 2 heures. Après ça, la place repart.
+
+8.4 Créneau déjà pris — Remboursement de l'Avance
+Oups [Prénom]...
+Quelqu'un a validé ce créneau à la dernière seconde. Ton avance te sera remboursée intégralement sous 24h, promis.
+Mais t'inquiète, voilà ce qui est encore disponible :
+[LIEN TERRAINS DISPONIBLES]
+On t'en trouve un autre
+
+8.5 Reversement du Solde au Gérant
+Virement reçu !
+Réservation *TF-XXXXXX* confirmée.
+Avance payée par le joueur : [Avance] FCFA
+Notre commission : [Commission] FCFA
+*Crédité sur ton compte : [Montant Reversé] FCFA*
+Solde disponible : *[Solde Total] FCFA*
+
+9. Architecture Frontend Révisée (React PWA)
+src/
+├── pwa/
+│   ├── manifest.json
+│   └── sw.js (service worker avec gestion offline)
+├── auth/
+│   ├── AuthContext.jsx
+│   ├── LoginJoueur.jsx
+│   └── OtpVerification.jsx
+├── espaces/
+│   ├── joueur/
+│   │   ├── Accueil.jsx
+│   │   ├── RechercheTerrain.jsx
+│   │   └── FicheTerrain.jsx
+│   ├── gerant/
+│   │   ├── Dashboard.jsx (Vue chronologique des réservations du jour)
+│   │   ├── DetailReservation.jsx (Contient le bouton "Scanner le QR Code")
+│   │   ├── Portefeuille.jsx (Suivi des avances et commissions)
+│   │   └── ScannerModal.jsx (Lecteur de QR code intégré)
+│   └── superadmin/
+│       ├── Dashboard.jsx
+│       └── Abonnements.jsx
+
+10. API Endpoints — Mises à Jour Clés
+Méthode | Route | Description / Spécificité V2.1
+GET | /gerant/reservations/today | Retourne les réservations du jour triées par heure_debut ASC .
+GET | /api/reservations/:id | Affiche les détails d'une réservation (gérant ou joueur).
+POST | /api/reservations/:id/scan-qr | Endpoint de validation. Si qr_code_scanne_at est NON NULL, retourne une erreur 403 (Tentative de fraude). Sinon, marque à match_joue .
+
+11. Checklist de Production & Sécurité
+• Anti-Fraude : Blocage strict en base de données de toute transaction au statut déjà validé.
+• Sécurisation des Endpoints : Validation des tokens JWT côté API gérant pour interdire le scan de réservations n'appartenant pas à son terrain attribué.
+• Haute Disponibilité : Mode SQLite WAL activé pour supporter les écritures concurrentes lors des heures d'affluence des matchs de football au Sénégal (fin d'après-midi et soirées).

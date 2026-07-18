@@ -15,6 +15,9 @@ dist-ssr
 .env.local
 .env.*.local
 server/terrainsn.db
+backend/*.db
+backend/*.db-*
+backend/*.bak
 .vercel
 .wwebjs_auth
 .wwebjs_cache

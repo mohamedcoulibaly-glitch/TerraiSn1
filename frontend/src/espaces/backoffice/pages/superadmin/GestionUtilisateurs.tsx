@@ -116,15 +116,16 @@ export default function GestionUtilisateurs() {
           <select
             className={fieldClass}
             value={form.role}
-            onChange={(e) => setForm({ ...form, role: e.target.value })}
+            onChange={(e) => setForm({ ...form, role: e.target.value, terrain_id: "" })}
           >
             <option value="gerant">Gérant</option>
             <option value="proprietaire">Propriétaire</option>
           </select>
           <select
-            className={`${fieldClass} sm:col-span-2`}
+            className={`${fieldClass} sm:col-span-2 ${form.role === "proprietaire" ? "hidden" : ""}`}
             value={form.terrain_id}
             onChange={(e) => setForm({ ...form, terrain_id: e.target.value })}
+            required={form.role === "gerant"}
           >
             <option value="">Terrain associé</option>
             {terrains.map((t) => (
@@ -133,6 +134,11 @@ export default function GestionUtilisateurs() {
               </option>
             ))}
           </select>
+          {form.role === "proprietaire" && (
+            <p className="sm:col-span-2 rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-primary)_8%,white)] px-4 py-3 text-sm text-[var(--color-text-secondary)]">
+              Le proprietaire sera cree sans terrain. Vous pourrez lui associer un terrain ensuite depuis la gestion des terrains.
+            </p>
+          )}
           <button
             type="submit"
             disabled={saving}

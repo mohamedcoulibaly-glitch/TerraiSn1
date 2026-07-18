@@ -6,7 +6,7 @@ function formatNumero(telephone) {
   if (numero.startsWith('00')) numero = numero.slice(2);
   if (numero.length === 9) numero = `221${numero}`;
   if (!numero.startsWith('221') || numero.length !== 12) {
-    throw new Error(`Numéro WhatsApp sénégalais invalide : ${telephone}`);
+    throw new Error(`Numero WhatsApp senegalais invalide : ${telephone}`);
   }
   return `${numero}@c.us`;
 }
@@ -17,7 +17,7 @@ async function envoyerMessage(telephone, message) {
     console.log(`[WHATSAPP MOCK] Message vers ${telephone} : ${message}`);
     return;
   }
-  if (!client.isReady) throw new Error('Le client WhatsApp n\'est pas encore connecté');
+  if (!client.isReady) throw new Error("Le client WhatsApp n'est pas encore connecte");
   await client.sendMessage(formatNumero(telephone), message);
 }
 
@@ -34,7 +34,7 @@ async function envoyerLienPaiement(reservationId) {
   const reservation = await details(reservationId);
   if (!reservation) return;
   await envoyerMessage(reservation.joueur_telephone,
-    `🏟️ Votre réservation sur ${reservation.terrain_nom} a été créée par le gérant. Payez ici pour confirmer votre créneau du ${reservation.date} à ${reservation.heure_debut} : ${reservation.lien_paiement}. Lien valable 2h.`);
+    `Votre reservation sur ${reservation.terrain_nom} a ete creee par le gerant. Payez votre avance de ${Number(reservation.montant_avance || reservation.acompte || 0).toLocaleString()} FCFA ici pour confirmer votre creneau du ${reservation.date} a ${reservation.heure_debut} : ${reservation.lien_paiement}. Lien valable 2h.`);
 }
 
 async function envoyerConfirmation(reservationId) {
@@ -42,9 +42,9 @@ async function envoyerConfirmation(reservationId) {
   if (!reservation) return;
   await Promise.all([
     envoyerMessage(reservation.joueur_telephone,
-      `✅ Réservation confirmée ! ${reservation.terrain_nom} - ${reservation.date} à ${reservation.heure_debut}. Votre code : ${reservation.code_reservation}. Bonne partie ! ⚽`),
+      `Reservation confirmee ! ${reservation.terrain_nom} - ${reservation.date} a ${reservation.heure_debut}. Ton code : ${reservation.code_reservation}. Garde bien ton QR code, il est a usage unique.`),
     envoyerMessage(reservation.gerant_whatsapp || reservation.gerant_telephone,
-      `🔔 Paiement reçu. Joueur : ${reservation.joueur_nom}. ${reservation.date} à ${reservation.heure_debut}. Code : ${reservation.code_reservation}.`),
+      `Paiement recu. Joueur : ${reservation.joueur_nom}. ${reservation.date} a ${reservation.heure_debut}. Code : ${reservation.code_reservation}.`),
   ]);
 }
 
@@ -56,12 +56,31 @@ async function envoyerRemboursement(reservationId) {
   const date = prochains[0]?.date || reservation.date;
   const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
   await envoyerMessage(reservation.joueur_telephone,
-    `⚠️ Désolé, ce créneau vient d'être pris. Remboursement sous 24h. Créneaux disponibles : ${domain}/terrain/${reservation.terrain_id}?date=${date}`);
+    `Desole, ce creneau vient d'etre pris. Ton avance sera remboursee sous 24h. Creneaux disponibles : ${domain}/terrain/${reservation.terrain_id}?date=${date}`);
 }
 
-async function envoyerReversement({ telephone, montant_acompte, montant_commission, montant_reverse, reservationId, solde_disponible }) {
+async function envoyerReversement({ telephone, montant_acompte, montant_avance, montant_commission, montant_reverse, reservationId, solde_disponible }) {
+  const avance = montant_avance ?? montant_acompte;
   await envoyerMessage(telephone,
-    `Reversement recu ! Reservation #TF-${reservationId} confirmee. Acompte joueur : ${Number(montant_acompte || 0).toLocaleString()} FCFA. Commission plateforme : ${Number(montant_commission || 0).toLocaleString()} FCFA. Credite sur votre portefeuille : ${Number(montant_reverse || 0).toLocaleString()} FCFA. Solde disponible : ${Number(solde_disponible || 0).toLocaleString()} FCFA.`);
+    `Reversement recu ! Reservation #TF-${reservationId} confirmee. Avance joueur : ${Number(avance || 0).toLocaleString()} FCFA. Commission plateforme : ${Number(montant_commission || 0).toLocaleString()} FCFA. Credite sur votre portefeuille : ${Number(montant_reverse || 0).toLocaleString()} FCFA. Solde disponible : ${Number(solde_disponible || 0).toLocaleString()} FCFA.`);
 }
 
-module.exports = { formatNumero, envoyerMessage, envoyerLienPaiement, envoyerConfirmation, envoyerRemboursement, envoyerReversement };
+async function envoyerAlerteSilencieuse({ telephone, prenom, gerant_prenom, terrain_nom }) {
+  await envoyerMessage(
+    telephone,
+    `Petit point sur ${terrain_nom} ${prenom || ''}.\n\n` +
+      `Ces deux derniers mois, quelques indicateurs sont un peu bas pour ${gerant_prenom || 'votre gerant'}. ` +
+      `Rien d'alarmant, mais ca vaut peut-etre une petite discussion avec lui.\n\n` +
+      `Tu peux voir le detail dans ton dashboard.`
+  );
+}
+
+module.exports = {
+  formatNumero,
+  envoyerMessage,
+  envoyerLienPaiement,
+  envoyerConfirmation,
+  envoyerRemboursement,
+  envoyerReversement,
+  envoyerAlerteSilencieuse,
+};

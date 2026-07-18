@@ -1,4 +1,4 @@
-import { Home, Search, Calendar, User } from "lucide-react";
+import { Home, Search, Calendar } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 const navItems = [
@@ -10,7 +10,6 @@ const navItems = [
     path: "/reservations",
     match: (p: string) => p === "/reservations" || p.startsWith("/reservation"),
   },
-  { icon: User, label: "Profil", path: "/profil", match: (p: string) => p.startsWith("/profil") },
 ];
 
 const BottomNav = () => {
@@ -19,7 +18,7 @@ const BottomNav = () => {
 
   return (
     <nav className="bottom-nav">
-      <div className="grid grid-cols-4 items-stretch max-w-xl mx-auto">
+      <div className="grid grid-cols-3 items-stretch max-w-xl mx-auto">
         {navItems.map((item) => {
           const isActive = item.match(location.pathname);
           return (

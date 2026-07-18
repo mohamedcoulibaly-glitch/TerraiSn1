@@ -1,15 +1,24 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard, Map, Users, Banknote, Calendar, HandCoins,
-  BarChart3, LogOut, Menu, X, ChevronRight,
+  LayoutDashboard,
+  Map,
+  Users,
+  Banknote,
+  Calendar,
+  HandCoins,
+  BarChart3,
+  Menu,
+  X,
+  ChevronRight,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { normalizeRole, AppRole } from "@/auth/roles";
+import { normalizeRole, profileForUser, AppRole } from "@/auth/roles";
 import GerantChrome from "@/espaces/backoffice/layout/GerantChrome";
 import ProprietaireChrome from "@/espaces/backoffice/layout/ProprietaireChrome";
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean };
+type HeaderUser = { prenom?: string; nom?: string; photo_url?: string } | null;
 
 const NAV_BY_ROLE: Record<Exclude<AppRole, "joueur">, NavItem[]> = {
   super_admin: [
@@ -17,11 +26,12 @@ const NAV_BY_ROLE: Record<Exclude<AppRole, "joueur">, NavItem[]> = {
     { to: "/backoffice/admin/terrains", label: "Terrains", icon: Map },
     { to: "/backoffice/admin/utilisateurs", label: "Utilisateurs", icon: Users },
     { to: "/backoffice/admin/revenus", label: "Revenus", icon: Banknote },
+    { to: "/backoffice/admin/abonnements", label: "Abonnements", icon: Calendar },
   ],
   gerant: [
     { to: "/backoffice/gerant", label: "Dashboard", icon: LayoutDashboard, end: true },
-    { to: "/backoffice/gerant/creneaux", label: "Créneaux", icon: Calendar },
-    { to: "/backoffice/gerant/reservations", label: "Résa manuelle", icon: HandCoins },
+    { to: "/backoffice/gerant/creneaux", label: "Creneaux", icon: Calendar },
+    { to: "/backoffice/gerant/reservations", label: "Resa manuelle", icon: HandCoins },
   ],
   proprietaire: [
     { to: "/backoffice/proprietaire", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -29,41 +39,51 @@ const NAV_BY_ROLE: Record<Exclude<AppRole, "joueur">, NavItem[]> = {
   ],
 };
 
-const ROLE_LABEL: Record<string, string> = {
-  super_admin: "Super Admin",
-  gerant: "Gérant",
-  proprietaire: "Propriétaire",
-};
-
 const CRUMB_LABELS: Record<string, string> = {
   backoffice: "Backoffice",
   admin: "Administration",
-  gerant: "Gérant",
-  proprietaire: "Propriétaire",
+  gerant: "Gerant",
+  proprietaire: "Proprietaire",
   terrains: "Terrains",
   utilisateurs: "Utilisateurs",
   revenus: "Revenus",
-  creneaux: "Créneaux",
-  reservations: "Réservations",
+  abonnements: "Abonnements",
+  profil: "Profil",
+  creneaux: "Creneaux",
+  reservations: "Reservations",
   terrain: "Terrain",
 };
 
-export default function BackofficeLayout() {
-  const { user, logout } = useAuth();
+function accountInitials(user: HeaderUser) {
+  const prenom = (user?.prenom || "").trim();
+  const nom = (user?.nom || "").trim();
+  return `${prenom.charAt(0)}${nom.charAt(0)}`.toUpperCase() || "A";
+}
+
+function HeaderAvatar({ user }: { user: HeaderUser }) {
   const navigate = useNavigate();
+
+  return (
+    <button
+      type="button"
+      onClick={() => navigate(profileForUser(user))}
+      className="inline-flex items-center justify-center w-9 h-9 rounded-full overflow-hidden border-2 border-[var(--color-primary)] bg-[var(--color-primary)] text-white text-xs font-semibold shrink-0"
+      aria-label="Profil"
+    >
+      {user?.photo_url ? (
+        <img src={user.photo_url} alt="" className="w-full h-full object-cover" />
+      ) : (
+        accountInitials(user)
+      )}
+    </button>
+  );
+}
+
+export default function BackofficeLayout() {
+  const { user } = useAuth();
   const location = useLocation();
   const role = normalizeRole(user);
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  if (role === "gerant") {
-    return <GerantChrome />;
-  }
-
-  if (role === "proprietaire") {
-    return <ProprietaireChrome />;
-  }
-
-  const links = role && role !== "joueur" ? NAV_BY_ROLE[role] : [];
 
   const crumbs = useMemo(() => {
     return location.pathname
@@ -76,10 +96,10 @@ export default function BackofficeLayout() {
       }));
   }, [location.pathname]);
 
-  const handleLogout = () => {
-    logout();
-    navigate("/backoffice/login");
-  };
+  if (role === "gerant") return <GerantChrome />;
+  if (role === "proprietaire") return <ProprietaireChrome />;
+
+  const links = role && role !== "joueur" ? NAV_BY_ROLE[role] : [];
 
   const Sidebar = (
     <aside className="flex flex-col w-[240px] min-h-full bg-[var(--color-sidebar)] text-white shrink-0">
@@ -92,10 +112,7 @@ export default function BackofficeLayout() {
             TS
           </span>
           <div>
-            <p
-              className="text-[15px] font-semibold tracking-tight leading-tight text-white"
-              style={{ fontFamily: "var(--font-display)" }}
-            >
+            <p className="text-[15px] font-semibold tracking-tight leading-tight text-white" style={{ fontFamily: "var(--font-display)" }}>
               TerrainSN
             </p>
             <p className="text-[11px] text-white/45 mt-0.5">Super admin</p>
@@ -122,14 +139,6 @@ export default function BackofficeLayout() {
           </NavLink>
         ))}
       </nav>
-      <button
-        type="button"
-        onClick={handleLogout}
-        className="m-3 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/55 hover:bg-[var(--color-sidebar-hover)] hover:text-white transition-[colors] duration-200"
-      >
-        <LogOut size={18} />
-        Déconnexion
-      </button>
     </aside>
   );
 
@@ -156,13 +165,13 @@ export default function BackofficeLayout() {
               {mobileOpen ? <X size={20} /> : <Menu size={20} />}
             </button>
             <nav className="flex items-center gap-1 text-sm text-[var(--color-text-secondary)] overflow-x-auto scrollbar-hide">
-              {crumbs.map((c) => (
-                <span key={c.path} className="flex items-center gap-1 shrink-0">
-                  {c.isLast ? (
-                    <span className="text-[var(--color-text-primary)] font-medium">{c.label}</span>
+              {crumbs.map((crumb) => (
+                <span key={crumb.path} className="flex items-center gap-1 shrink-0">
+                  {crumb.isLast ? (
+                    <span className="text-[var(--color-text-primary)] font-medium">{crumb.label}</span>
                   ) : (
                     <>
-                      <span>{c.label}</span>
+                      <span>{crumb.label}</span>
                       <ChevronRight className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
                     </>
                   )}
@@ -170,23 +179,9 @@ export default function BackofficeLayout() {
               ))}
             </nav>
           </div>
-          <div className="flex items-center gap-2.5 shrink-0">
-            <span className="text-sm font-medium text-[var(--color-text-primary)] truncate max-w-[140px]">
-              {user?.nom || "Utilisateur"}
-            </span>
-            {role === "super_admin" && (
-              <span
-                className="text-[11px] px-2.5 py-0.5 rounded-full font-medium"
-                style={{
-                  background: "color-mix(in srgb, var(--color-accent) 20%, white)",
-                  color: "var(--color-accent)",
-                }}
-              >
-                Super Admin
-              </span>
-            )}
-          </div>
+          <HeaderAvatar user={user} />
         </header>
+
         <main className="flex-1 p-4 md:p-6 overflow-auto">
           <Outlet />
         </main>

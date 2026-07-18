@@ -51,10 +51,14 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
     path.includes('paytech') ||
     path.includes('/webhook/paytech') ||
     path.includes('simulate');
+  const isQrScan = path.includes('/scanner');
   const isReservation = path.includes('/reservation');
 
   if (isPayment) {
     return "Le paiement n'a pas pu être confirmé. Veuillez réessayer.";
+  }
+  if (isQrScan && raw && !isTechnicalMessage(raw)) {
+    return raw;
   }
   if (isAuth) {
     return 'Identifiants incorrects ou session expirée.';
@@ -225,6 +229,22 @@ export const terrainsApi = {
   async remove(id: number | string) {
     return await request(`/terrains/${id}`, { method: 'DELETE' });
   },
+
+  async listPhotos(id: number | string) {
+    return await request(`/terrains/${id}/photos`);
+  },
+
+  async uploadPhoto(id: number | string, data: { dataUrl: string; est_principale?: boolean; ordre?: number }) {
+    return await request(`/terrains/${id}/photos`, { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async updatePhoto(id: number | string, photoId: number | string, data: { est_principale?: boolean; ordre?: number }) {
+    return await request(`/terrains/${id}/photos/${photoId}`, { method: 'PATCH', body: JSON.stringify(data) });
+  },
+
+  async removePhoto(id: number | string, photoId: number | string) {
+    return await request(`/terrains/${id}/photos/${photoId}`, { method: 'DELETE' });
+  },
 };
 
 // ============================================================
@@ -262,6 +282,10 @@ export const reservationsApi = {
   async parTerrain(terrainId: number | string) {
     return await request(`/reservations/terrain/${terrainId}`);
   },
+
+  async marquerJoue(id: number | string, methode: 'especes' | 'wave' | 'orange_money' = 'especes') {
+    return await request(`/gerant/reservations/${id}/scanner`, { method: 'PATCH', body: JSON.stringify({ methode }) });
+  },
 };
 
 // ============================================================
@@ -273,7 +297,7 @@ export const paiementsApi = {
   },
 
   async marquerJoue(id: number | string, methode: 'especes' | 'wave' | 'orange_money' = 'especes') {
-    return await request(`/reservations/${id}/jouer`, { method: 'PUT', body: JSON.stringify({ methode }) });
+    return await request(`/gerant/reservations/${id}/scanner`, { method: 'PATCH', body: JSON.stringify({ methode }) });
   },
 
   async mockComplete(data: { reservation_id: number; ref_command: string; action: 'success' | 'cancel' }) {
@@ -289,6 +313,10 @@ export const paiementsApi = {
 // PROPRIETAIRE
 // ============================================================
 export const proprietaireApi = {
+  async profile() {
+    return await request('/proprietaire/profile');
+  },
+
   async stats() {
     return await request('/proprietaire/stats');
   },
@@ -299,6 +327,14 @@ export const proprietaireApi = {
 
   async reservations() {
     return await request('/proprietaire/reservations');
+  },
+
+  async revenus(periode: 'semaine' | 'mois' | 'annee' = 'mois') {
+    return await request(`/proprietaire/revenus?periode=${periode}`);
+  },
+
+  async santeTerrain(terrainId: number | string) {
+    return await request(`/proprietaire/sante/${terrainId}`);
   },
 };
 
@@ -387,7 +423,49 @@ export const adminApi = {
 // PROFIL
 // ============================================================
 export const profilApi = {
-  async update(data: { nom: string; telephone: string }) {
+  async get() {
+    return await request('/profil');
+  },
+
+  async getJoueur() {
+    return await request('/profil/joueur');
+  },
+
+  async getGerant() {
+    return await request('/profil/gerant');
+  },
+
+  async getProprietaire() {
+    return await request('/profil/proprietaire');
+  },
+
+  async getAdmin() {
+    return await request('/profil/admin');
+  },
+
+  async update(data: {
+    prenom?: string;
+    nom: string;
+    quartier?: string;
+    date_naissance?: string;
+    bio?: string;
+  }) {
     return await request('/profil', { method: 'PUT', body: JSON.stringify(data) });
+  },
+
+  async updateJoueur(data: { prenom?: string; nom: string; quartier?: string; date_naissance?: string }) {
+    return await request('/profil/joueur', { method: 'PATCH', body: JSON.stringify(data) });
+  },
+
+  async updateAdmin(data: { prenom?: string; nom: string; email: string }) {
+    return await request('/profil/admin', { method: 'PATCH', body: JSON.stringify(data) });
+  },
+
+  async uploadPhoto(dataUrl: string) {
+    return await request('/profil/photo', { method: 'PATCH', body: JSON.stringify({ dataUrl }) });
+  },
+
+  async changePassword(data: { old_password?: string; new_password: string; confirm_password: string }) {
+    return await request('/profil/password', { method: 'PATCH', body: JSON.stringify(data) });
   },
 };

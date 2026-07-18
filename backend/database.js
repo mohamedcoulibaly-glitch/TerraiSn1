@@ -186,6 +186,9 @@ function initDb(database) {
   addColumnIfMissing(database, 'reservations', 'prix_total', 'DECIMAL(10, 2)');
   addColumnIfMissing(database, 'reservations', 'acompte', 'DECIMAL(10, 2) DEFAULT 5000');
   addColumnIfMissing(database, 'reservations', 'reste_a_payer', 'DECIMAL(10, 2) DEFAULT 0');
+  addColumnIfMissing(database, 'reservations', 'montant_avance', 'INTEGER');
+  addColumnIfMissing(database, 'reservations', 'montant_restant', 'INTEGER');
+  addColumnIfMissing(database, 'reservations', 'qr_code_scanne_at', 'DATETIME');
   addColumnIfMissing(database, 'paiements', 'reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'paiements', 'montant_acompte', 'INTEGER');
   addColumnIfMissing(database, 'paiements', 'montant_commission', 'INTEGER');
@@ -196,12 +199,36 @@ function initDb(database) {
   addColumnIfMissing(database, 'terrains', 'montant_acompte', 'DECIMAL(10, 2) DEFAULT 5000');
   addColumnIfMissing(database, 'terrains', 'acompte', 'INTEGER DEFAULT 5000');
   addColumnIfMissing(database, 'terrains', 'commission', 'INTEGER DEFAULT 400');
+  addColumnIfMissing(database, 'terrains', 'pourcentage_avance', 'REAL DEFAULT 12.5');
+  addColumnIfMissing(database, 'terrains', 'modele_revenus', "TEXT DEFAULT 'commission'");
+  addColumnIfMissing(database, 'terrains', 'commission_pourcentage', 'REAL DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'abonnement_montant', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'abonnement_periodicite', "TEXT DEFAULT 'mensuel'");
+  addColumnIfMissing(database, 'terrains', 'abonnement_prochain_paiement', 'DATETIME');
+  addColumnIfMissing(database, 'terrains', 'achat_definitif_montant', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'achat_definitif_paye', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'latitude', 'REAL');
+  addColumnIfMissing(database, 'terrains', 'longitude', 'REAL');
   addColumnIfMissing(database, 'users', 'terrain_id', 'INTEGER');
   addColumnIfMissing(database, 'users', 'must_change_password', 'INTEGER DEFAULT 0');
   addColumnIfMissing(database, 'users', 'prenom', 'VARCHAR(255)');
   addColumnIfMissing(database, 'users', 'telephone_verified', 'INTEGER DEFAULT 1');
+  addColumnIfMissing(database, 'users', 'quartier', 'VARCHAR(255)');
+  addColumnIfMissing(database, 'users', 'date_naissance', 'DATE');
+  addColumnIfMissing(database, 'users', 'bio', 'TEXT');
+  addColumnIfMissing(database, 'users', 'photo_url', 'TEXT');
   addColumnIfMissing(database, 'proprietaires', 'must_change_password', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'proprietaires', 'prenom', 'VARCHAR(255)');
+  addColumnIfMissing(database, 'proprietaires', 'quartier', 'VARCHAR(255)');
+  addColumnIfMissing(database, 'proprietaires', 'date_naissance', 'DATE');
+  addColumnIfMissing(database, 'proprietaires', 'bio', 'TEXT');
+  addColumnIfMissing(database, 'proprietaires', 'photo_url', 'TEXT');
   addColumnIfMissing(database, 'employes', 'must_change_password', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'employes', 'prenom', 'VARCHAR(255)');
+  addColumnIfMissing(database, 'employes', 'quartier', 'VARCHAR(255)');
+  addColumnIfMissing(database, 'employes', 'date_naissance', 'DATE');
+  addColumnIfMissing(database, 'employes', 'bio', 'TEXT');
+  addColumnIfMissing(database, 'employes', 'photo_url', 'TEXT');
 
   database.run(`CREATE TABLE IF NOT EXISTS auth_otps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,9 +247,14 @@ function initDb(database) {
   database.run('UPDATE terrains SET acompte = montant_acompte WHERE acompte IS NULL AND montant_acompte IS NOT NULL');
   database.run('UPDATE terrains SET montant_acompte = acompte WHERE montant_acompte IS NULL AND acompte IS NOT NULL');
   database.run('UPDATE terrains SET commission = 400 WHERE commission IS NULL');
+  database.run("UPDATE terrains SET modele_revenus = 'commission' WHERE modele_revenus IS NULL");
+  database.run('UPDATE terrains SET pourcentage_avance = ROUND((COALESCE(montant_acompte, acompte, 5000) * 100.0) / NULLIF(COALESCE(prix_entier, prix_heure), 0), 2) WHERE pourcentage_avance IS NULL');
+  database.run('UPDATE terrains SET commission_pourcentage = ROUND((COALESCE(commission, 0) * 100.0) / NULLIF(COALESCE(montant_acompte, acompte, 5000), 0), 2) WHERE commission_pourcentage IS NULL OR commission_pourcentage = 0');
   database.run('UPDATE reservations SET prix_total = montant WHERE prix_total IS NULL');
   database.run('UPDATE reservations SET acompte = MIN(5000, montant) WHERE acompte IS NULL');
   database.run('UPDATE reservations SET reste_a_payer = MAX(0, prix_total - acompte) WHERE reste_a_payer IS NULL');
+  database.run('UPDATE reservations SET montant_avance = acompte WHERE montant_avance IS NULL AND acompte IS NOT NULL');
+  database.run('UPDATE reservations SET montant_restant = reste_a_payer WHERE montant_restant IS NULL AND reste_a_payer IS NOT NULL');
   database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_code ON reservations(code_reservation)');
   database.run('CREATE INDEX IF NOT EXISTS idx_users_telephone ON users(telephone)');
   database.run('CREATE INDEX IF NOT EXISTS idx_reservations_creneau ON reservations(creneau_id)');
@@ -252,14 +284,74 @@ function initDb(database) {
     terrain_id INTEGER NOT NULL,
     reservation_id INTEGER NOT NULL,
     montant INTEGER NOT NULL,
+    commission_prelevee INTEGER DEFAULT 0,
     statut TEXT DEFAULT 'effectue',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (gerant_id) REFERENCES users(id),
     FOREIGN KEY (reservation_id) REFERENCES reservations(id)
   )`);
+  addColumnIfMissing(database, 'reversements', 'commission_prelevee', 'INTEGER DEFAULT 0');
   database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reversements_reservation ON reversements(reservation_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_reversements_gerant ON reversements(gerant_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_reversements_terrain ON reversements(terrain_id)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS abonnements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    montant INTEGER NOT NULL,
+    date_echeance DATE NOT NULL,
+    statut TEXT CHECK(statut IN ('paye', 'en_attente', 'en_retard')) DEFAULT 'en_attente',
+    paye_le DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_abonnements_terrain ON abonnements(terrain_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_abonnements_echeance ON abonnements(date_echeance, statut)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS terrain_photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    est_principale INTEGER DEFAULT 0,
+    ordre INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_terrain_photos_terrain ON terrain_photos(terrain_id, est_principale, ordre)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS activite_gerant (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER REFERENCES employes(id),
+    terrain_id INTEGER REFERENCES terrains(id),
+    action TEXT NOT NULL CHECK(action IN (
+      'reservation_creee',
+      'reservation_annulee',
+      'qr_scanne',
+      'creneau_cree',
+      'creneau_supprime'
+    )),
+    reservation_id INTEGER REFERENCES reservations(id),
+    details TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS score_confiance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER REFERENCES employes(id),
+    terrain_id INTEGER REFERENCES terrains(id),
+    periode TEXT NOT NULL,
+    reservations_confirmees INTEGER DEFAULT 0,
+    matchs_scannes INTEGER DEFAULT 0,
+    taux_scan REAL DEFAULT 0,
+    annulations_total INTEGER DEFAULT 0,
+    score INTEGER DEFAULT 100,
+    alerte_envoyee INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(gerant_id, terrain_id, periode)
+  )`);
+
+  database.run('CREATE INDEX IF NOT EXISTS idx_activite_gerant ON activite_gerant(gerant_id, terrain_id, created_at)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_score_confiance ON score_confiance(gerant_id, terrain_id, periode)');
 
   // 9. avis
   database.run(`CREATE TABLE IF NOT EXISTS avis (

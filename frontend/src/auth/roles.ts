@@ -26,3 +26,11 @@ export function homeForUser(user: { role?: string; accountType?: string } | null
   const role = normalizeRole(user);
   return role ? ROLE_HOME[role] : "/login";
 }
+
+export function profileForUser(user: { role?: string; accountType?: string } | null | undefined): string {
+  const role = normalizeRole(user);
+  if (role === "gerant") return "/profil/gerant";
+  if (role === "proprietaire") return "/profil/proprietaire";
+  if (role === "super_admin") return "/profil/admin";
+  return "/profil/joueur";
+}

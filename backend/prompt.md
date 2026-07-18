@@ -1,215 +1,202 @@
 ---
 
-> **Rôle**
-> Tu es un ingénieur senior fullstack et auditeur technique avec 15 ans d'expérience en mise en production d'applications web. Tu es rigoureux, méthodique et tu ne corriges rien sans avoir d'abord tout analysé et validé.
+> Dans la page scanner du gérant `/backoffice/gerant/scanner`, après un scan échoué à cause de la fenêtre horaire, afficher un message clair et humain à l'écran. Ne toucher à rien d'autre.
 >
-> ---
->
-> **Règle absolue**
-> Phase 1 et 2 : lecture et audit uniquement, zéro modification. Phase 3 : corrections backend uniquement après ma validation. Phase 4 : tu génères un prompt pour Cursor, tu ne touches pas au frontend toi-même.
->
-> ---
->
-> **PHASE 1 — Audit complet du système**
->
-> Scanne l'intégralité du projet, fichier par fichier. Produis un rapport structuré couvrant ces 8 dimensions :
->
-> **1. Sécurité**
-> - Variables sensibles exposées côté client ou en dur dans le code
-> - Routes sans authentification qui devraient en avoir
-> - Absence de validation des entrées utilisateur (injection SQL, XSS)
-> - Hash SHA256 du webhook PayTech vérifié ou non
-> - Tokens JWT : expiration, stockage, révocation
-> - Mots de passe hashés avec bcrypt ou non
-> - CORS mal configuré
-> - Rate limiting absent sur les routes sensibles (login, OTP)
->
-> **2. Base de données**
-> - Colonnes manquantes par rapport au schéma de référence
-> - Absence d'index sur les colonnes fréquemment requêtées (telephone, creneau_id, statut)
-> - Transactions atomiques manquantes sur les opérations critiques
-> - WAL mode et busy_timeout activés ou non
-> - Contraintes FK manquantes
->
-> **3. Logique métier**
-> - Flow de réservation complet et cohérent
-> - Gestion des conflits de créneaux simultanés
-> - Job de nettoyage des verrous expirés présent et fonctionnel
-> - Calcul et enregistrement de la commission
-> - Reversement immédiat au gérant après confirmation
-> - Remboursement PayTech en cas de conflit
->
-> **4. Intégrations externes**
-> - PayTech : appel correct, hash vérifié, switch simulation/production en place
-> - WhatsApp `whatsapp-web.js` : client initialisé une seule fois, session persistante
-> - Toutes les notifications implémentées : confirmation, remboursement, lien paiement, reversement gérant
->
-> **5. Performance**
-> - Index manquants
-> - Requêtes N+1 détectées
-> - Absence de pagination sur les listes
-> - Pas de gestion du cas où `whatsapp-web.js` n'est pas connecté
->
-> **6. Gestion des erreurs**
-> - Try/catch manquants sur les appels externes (PayTech, WhatsApp)
-> - Erreurs non loguées
-> - Réponses d'erreur inconsistantes (parfois 200 avec erreur dans le body)
-> - Pas de fallback si WhatsApp est déconnecté
->
-> **7. Tests fonctionnels — exécuter chaque scénario et noter le résultat**
->
-> Pour chaque test, noter : ✅ Fonctionne / ❌ Échoue / ⚠️ Partiel
->
+> **Cas 1 — Scan trop tôt (avant 1h avant le match)**
 > ```
-> AUTH
-> [ ] Inscription joueur avec numéro sénégalais valide
-> [ ] Inscription joueur avec numéro invalide → erreur claire
-> [ ] Réception OTP WhatsApp après inscription
-> [ ] Vérification OTP correct → JWT retourné
-> [ ] Vérification OTP expiré → erreur claire
-> [ ] Connexion joueur téléphone + mot de passe
-> [ ] Connexion backoffice téléphone + mot de passe
-> [ ] Connexion backoffice email + mot de passe
-> [ ] Connexion avec mauvais mot de passe → erreur claire
-> [ ] Accès route protégée sans token → 401
-> [ ] Accès route gérant avec token joueur → 403
->
-> RÉSERVATION JOUEUR EN LIGNE
-> [ ] Affichage créneaux libres d'un terrain
-> [ ] Sélection créneau → créneau passe en en_attente_paiement
-> [ ] Redirection vers page paiement (simulation)
-> [ ] Simulation paiement réussi → réservation confirmée
-> [ ] Simulation paiement réussi → créneau passe en reserve
-> [ ] Simulation paiement réussi → code TF-XXXXXX généré
-> [ ] Simulation paiement réussi → WhatsApp joueur reçu
-> [ ] Simulation paiement réussi → WhatsApp gérant reçu
-> [ ] Simulation paiement réussi → reversement gérant crédité
-> [ ] Simulation paiement réussi → WhatsApp reversement gérant reçu
-> [ ] Simulation paiement échoué → créneau reste en_attente puis libéré
-> [ ] Verrou expiré après 10 min → créneau repassé en libre
->
-> CONFLIT DE RÉSERVATION
-> [ ] Deux réservations simultanées même créneau → un seul confirmé
-> [ ] Joueur perdant → remboursement déclenché
-> [ ] Joueur perdant → WhatsApp remboursement reçu avec lien créneaux dispo
->
-> RÉSERVATION MANUELLE GÉRANT
-> [ ] Gérant crée réservation manuelle
-> [ ] Joueur reçoit WhatsApp avec lien paiement
-> [ ] Verrou 2h en place
-> [ ] Paiement joueur → même flow de confirmation
->
-> BACKOFFICE GÉRANT
-> [ ] Dashboard affiche stats du jour
-> [ ] Liste créneaux affichée et modifiable
-> [ ] Portefeuille gérant affiche solde correct
-> [ ] Historique reversements correct
->
-> BACKOFFICE PROPRIÉTAIRE
-> [ ] Dashboard revenus correct
-> [ ] Filtre par période fonctionnel
->
-> BACKOFFICE SUPER ADMIN
-> [ ] Création terrain fonctionnelle
-> [ ] Création compte gérant → WhatsApp accès envoyé
-> [ ] Création compte propriétaire → WhatsApp accès envoyé
-> [ ] Modification acompte et commission d'un terrain
-> [ ] Vue finances globales correcte
-> [ ] Suspension d'un terrain → joueurs ne peuvent plus réserver
+> Icône horloge orange centrée
+> Titre : "C'est un peu tôt 😄"
+> Texte : "Tu pourras scanner ce QR code à partir de [heure_debut - 1h].
+>          Reviens dans [X minutes]."
+> Bouton "OK" qui ferme le message et réactive la caméra
 > ```
 >
-> **8. Prêt pour la production**
-> - Fichier `.env.example` présent
-> - Variables d'environnement documentées
-> - Script de migration DB propre et rejouable
-> - `package.json` avec scripts `start`, `dev`, `migrate`
-> - Pas de `console.log` de debug en production
-> - HTTPS géré ou documenté
-> - Stratégie de backup SQLite documentée
->
-> ---
->
-> **Format du rapport — une entrée par problème :**
->
+> **Cas 2 — Scan trop tard (après 2h après la fin du match)**
 > ```
-> DIMENSION   : Sécurité
-> FICHIER     : routes/auth.js
-> LIGNE       : 34
-> PROBLÈME    : Mot de passe stocké en clair dans la base de données
-> IMPACT      : Critique — blocant pour la production
-> SUGGESTION  : Hasher avec bcrypt avant insertion
-> CRITICITÉ   : 🔴 Bloquant / 🟡 Majeur / 🟢 Mineur
+> Icône alerte rouge centrée
+> Titre : "Ce QR code a expiré"
+> Texte : "Ce match était prévu le [date] à [heure].
+>          Le délai de validation est dépassé.
+>          Si c'est une erreur, contacte l'administration."
+> Bouton "OK" qui ferme le message et réactive la caméra
 > ```
 >
-> À la fin du rapport, produire un **tableau de synthèse** :
->
+> **Cas 3 — Scan réussi (match validé)**
 > ```
-> PRÊT POUR LA PROD ?
-> 🔴 Bloquants   : X problèmes
-> 🟡 Majeurs     : X problèmes
-> 🟢 Mineurs     : X problèmes
->
-> TESTS FONCTIONNELS
-> ✅ Passés      : X / Total
-> ❌ Échoués     : X / Total
-> ⚠️ Partiels    : X / Total
-> ```
->
-> **Attends ma validation avant de passer à la phase suivante.**
->
-> ---
->
-> **PHASE 2 — Plan de correction backend**
->
-> Sur la base du rapport, liste tous les problèmes backend classés par priorité. Pour chaque problème :
-> - Ce qui doit être modifié et pourquoi
-> - Ce qui doit être créé et pourquoi
-> - Estimation de complexité : Simple / Moyen / Complexe
->
-> Ne code rien encore. **Attends ma validation.**
->
-> ---
->
-> **PHASE 3 — Corrections backend**
->
-> Applique toutes les corrections backend validées. Règles :
-> - Fournir le fichier complet pour chaque fichier modifié, pas d'extraits partiels
-> - Après chaque fichier corrigé, relancer le test fonctionnel correspondant et noter le résultat
-> - Ne jamais casser la simulation de paiement existante
-> - Ne jamais modifier la logique WhatsApp `whatsapp-web.js`
-> - Toutes les opérations critiques dans des transactions SQLite atomiques
-> - Try/catch sur tous les appels externes
-> - Logger les erreurs avec le format : `[ERREUR][NomDuFichier] message — ${err.message}`
->
-> Après toutes les corrections, relancer l'intégralité des tests fonctionnels et produire un **rapport de correction** :
->
-> ```
-> FICHIER MODIFIÉ : routes/auth.js
-> PROBLÈMES CORRIGÉS : 3
-> TESTS REPASSÉS : ✅ Connexion joueur / ✅ OTP expiré / ✅ Route protégée
+> Flash vert plein écran pendant 0.5s
+> Icône check vert animée centrée
+> Titre : "Match validé ✅"
+> Card récap :
+>   Nom du joueur
+>   Terrain
+>   Date et heure du match
+>   Code réservation TF-XXXXXX
+> Bouton "Scanner un autre QR" qui réactive la caméra
 > ```
 >
-> **Attends ma validation avant de passer à la phase suivante.**
+> **Cas 4 — QR code invalide ou inconnu**
+> ```
+> Flash rouge plein écran pendant 0.5s
+> Icône croix rouge centrée
+> Titre : "QR code non reconnu"
+> Texte : "Ce code ne correspond à aucune réservation valide."
+> Bouton "Réessayer" qui réactive la caméra
+> ```
 >
-> ---
+> **Interface générale de la page scanner :**
+> ```
+> Plein écran caméra sur mobile
+> Cadre de scan centré avec coins arrondis verts animés
+> Ligne verte qui descend en boucle dans le cadre (animation scan)
+> Texte discret sous le cadre : "Place le QR code dans le cadre"
+> Bouton retour en haut à gauche (flèche blanche sur fond semi-transparent)
+> Aucun autre élément sur l'écran pendant le scan
+> ```
 >
-> **PHASE 4 — Prompt Cursor pour les corrections frontend**
->
-> Ne touche pas au frontend. Génère uniquement un prompt détaillé à donner à Cursor qui couvre :
-> - La liste exacte des problèmes frontend trouvés pendant l'audit avec fichier et ligne
-> - La liste exacte des tests fonctionnels frontend échoués avec le comportement attendu vs observé
-> - Les corrections à apporter fichier par fichier
-> - Les règles à respecter : ne pas toucher à la logique, uniquement corriger ce qui est listé
-> - Le format de validation : après chaque correction, Cursor doit montrer le résultat et attendre la validation
->
-> Le prompt doit être suffisamment précis pour que Cursor ne fasse aucune interprétation — chaque correction est explicitement décrite.
->
-> ---
->
-> **Livrable final attendu :**
-> 1. Rapport d'audit complet avec tests → ma validation
-> 2. Plan de correction backend → ma validation
-> 3. Corrections backend appliquées + rapport de correction → ma validation
-> 4. Prompt Cursor pour le frontend
-
 ---
+
+> Créer la page `/backoffice/proprietaire/sante` et le composant `SanteTerrainCard.jsx`. Appeler la route existante `GET /proprietaire/sante/:terrain_id` pour récupérer les données.
+>
+> ---
+>
+> **Page complète — disposition et contenu**
+>
+> ```
+> HEADER
+>   Titre : "Santé de ton terrain"
+>   Sous-titre gris muted : "Mis à jour automatiquement chaque semaine"
+>   Si le propriétaire a plusieurs terrains :
+>     Select en haut à droite pour choisir le terrain
+>     Les données se rechargent à chaque changement de terrain
+>
+> SECTION 1 — Score global (en haut, bien visible)
+>   Grande card blanche centrée
+>   Score en chiffre très grand --font-display (ex: "88")
+>   Sous le chiffre : "/ 100"
+>   Label : "Score de confiance de ton gérant"
+>   Cercle de progression autour du score (stroke-dasharray animé au chargement)
+>     > 75 → cercle vert
+>     50-75 → cercle orange
+>     < 50 → cercle rouge
+>   Sous le cercle, une phrase selon la couleur :
+>     Vert → "Tout va bien 👍"
+>     Orange → "Pense à en parler avec ton gérant 😊"
+>     Rouge → "On te conseille de contacter ton gérant"
+>   Aucune explication du calcul, juste le score et la phrase
+>
+> SECTION 2 — Trois cards stats en grille
+>   Card 1 : Matchs validés
+>     Chiffre grand : "18 sur 24"
+>     Barre de progression colorée dessous
+>     Label : "Matchs scannés ce mois"
+>     > 75% → vert
+>     50-75% → orange
+>     < 50% → rouge
+>
+>   Card 2 : Matchs non scannés
+>     Chiffre grand en orange si > 0, vert si 0
+>     Label : "En attente de validation"
+>     Sous-label gris : "Matchs confirmés mais pas encore joués"
+>     Bouton "Voir le détail" en outline vert
+>       → ouvre un drawer en bas de l'écran (mobile) ou un modal (desktop)
+>       → liste des réservations non scannées :
+>           Nom joueur | Date | Heure | Code TF-XXXXXX
+>           Chaque ligne en lecture seule, pas d'action possible
+>
+>   Card 3 : Annulations ce mois
+>     Chiffre grand
+>     Label : "Réservations annulées"
+>     Aucune couleur alarmante sur cette card, toujours gris neutre
+>     Sous-label : "Sur les 60 derniers jours"
+>
+> SECTION 3 — Historique des scores (graphique)
+>   Titre : "Évolution du score"
+>   Graphique barres recharts sur les 6 derniers mois
+>   Chaque barre colorée selon le score :
+>     > 75 → verte
+>     50-75 → orange
+>     < 50 → rouge
+>   Axe X : mois (Jan, Fév, Mar...)
+>   Axe Y : 0 à 100
+>   Pas de légende complexe, juste les barres et les valeurs au survol
+>
+> SECTION 4 — Journal d'activité récent
+>   Titre : "Activité récente de ton gérant"
+>   Liste des 10 dernières actions depuis activite_gerant
+>   Chaque ligne :
+>     Icône selon l'action :
+>       reservation_creee → icône calendrier vert
+>       reservation_annulee → icône croix orange
+>       qr_scanne → icône check vert
+>       creneau_cree → icône plus bleu
+>       creneau_supprime → icône corbeille orange
+>     Label humain (pas technique) :
+>       reservation_creee → "Réservation créée"
+>       reservation_annulee → "Réservation annulée"
+>       qr_scanne → "Match validé ✅"
+>       creneau_cree → "Créneau ajouté"
+>       creneau_supprime → "Créneau supprimé"
+>     Date et heure à droite en gris muted
+>   Bouton "Voir tout l'historique" en bas → page dédiée avec pagination
+>
+> SKELETON LOADERS
+>   Pendant le chargement, afficher des skeleton loaders
+>   pour chaque section, jamais d'écran blanc ou de spinner centré
+>
+> ÉTAT VIDE
+>   Si aucune donnée disponible (terrain récent, pas encore de réservations) :
+>   Illustration simple centrée + texte :
+>   "Pas encore assez de données 😊
+>    Le tableau de bord se remplit au fur et à mesure des réservations."
+> ```
+>
+> ---
+>
+> **Règles de design :**
+> - Mobile-first, toutes les sections empilées verticalement sur mobile
+> - Sur desktop : section 2 en grille 3 colonnes, reste en pleine largeur
+> - Aucune mention de fraude, surveillance ou triche dans les labels
+> - Ton bienveillant partout, jamais accusatoire
+> - Utiliser uniquement les variables CSS du système de design existant
+> - Icônes uniquement depuis lucide-react
+>
+> ---
+>
+> **Route backend à vérifier avant le frontend :**
+>
+> `GET /proprietaire/sante/:terrain_id` doit retourner :
+> ```json
+> {
+>   "score_confiance": 88,
+>   "couleur": "vert",
+>   "taux_scan": 80,
+>   "matchs_scannes": 18,
+>   "total_confirmes": 24,
+>   "matchs_non_scannes": 6,
+>   "annulations_total": 3,
+>   "historique_scores": [
+>     { "periode": "2024-01", "score": 90 },
+>     { "periode": "2024-02", "score": 75 },
+>     { "periode": "2024-03", "score": 88 }
+>   ],
+>   "activite_recente": [
+>     {
+>       "action": "qr_scanne",
+>       "reservation_id": 12,
+>       "created_at": "2024-03-15T18:30:00"
+>     }
+>   ],
+>   "reservations_non_scannees": [
+>     {
+>       "joueur_nom": "Moussa Diallo",
+>       "date": "2024-03-14",
+>       "heure": "17:00",
+>       "code": "TF-482910"
+>     }
+>   ]
+> }
+> ```
+>
+> Si cette route ne retourne pas encore tous ces champs, les ajouter avant de faire le frontend.
+>
+> Montre-moi le composant complet et la route backend et attends ma validation.

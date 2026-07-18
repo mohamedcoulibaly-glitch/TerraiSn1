@@ -82,3 +82,16 @@ export function RequireJoueurAuth({ children }: { children: React.ReactNode }) {
 
   return <>{children}</>;
 }
+
+export function RequireAnyAuth({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) return <LoadingScreen />;
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  return <>{children}</>;
+}

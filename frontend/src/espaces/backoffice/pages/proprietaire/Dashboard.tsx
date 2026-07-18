@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import EmployeeFormModal from "@/espaces/backoffice/components/EmployeeFormModal";
 import TerrainFormModal from "@/espaces/backoffice/components/TerrainFormModal";
 import FieldPhoto, { resolveTerrainPhoto } from "@/espaces/joueur/components/FieldPhoto";
+import SanteTerrainCard from "@/espaces/backoffice/components/SanteTerrainCard";
 
 const OwnerDashboard = () => {
   const navigate = useNavigate();
@@ -24,6 +25,7 @@ const OwnerDashboard = () => {
   const { user, isAuthenticated } = useAuth();
   const [stats, setStats] = useState<any>(null);
   const [terrains, setTerrains] = useState<any[]>([]);
+  const [santes, setSantes] = useState<Record<string, any>>({});
   const [employes, setEmployes] = useState<any[]>([]);
   const [reservations, setReservations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,6 +52,17 @@ const OwnerDashboard = () => {
       setTerrains(t);
       setEmployes(e);
       setReservations(r);
+      const healthEntries = await Promise.all(
+        (t || []).map(async (terrain: any) => {
+          try {
+            const health = await proprietaireApi.santeTerrain(terrain.id);
+            return [String(terrain.id), health] as const;
+          } catch {
+            return [String(terrain.id), null] as const;
+          }
+        })
+      );
+      setSantes(Object.fromEntries(healthEntries.filter(([, value]) => value)));
     } catch (err) {
       console.error(err);
     } finally {
@@ -228,6 +241,28 @@ const OwnerDashboard = () => {
         ))}
       </div>
 
+      {terrains.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="section-title">Sante operationnelle</h2>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {terrains.slice(0, 4).map((terrain) => {
+              const health = santes[String(terrain.id)];
+              if (!health) return null;
+              return (
+                <SanteTerrainCard
+                  key={terrain.id}
+                  terrainNom={terrain.nom}
+                  sante={health}
+                  onVoirDetail={() => navigate(`/backoffice/proprietaire/terrain/${terrain.id}`)}
+                />
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       <div className="flex flex-col sm:flex-row gap-3">
         <button
           type="button"
@@ -256,7 +291,7 @@ const OwnerDashboard = () => {
 
       {pending.length > 0 && (
         <section>
-          <h2 className="section-title mb-3">Acomptes en attente</h2>
+          <h2 className="section-title mb-3">Avances en attente</h2>
           <div className="flex flex-col gap-2">
             {pending.slice(0, 5).map((r) => (
               <div

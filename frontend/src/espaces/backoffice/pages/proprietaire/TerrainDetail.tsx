@@ -242,7 +242,7 @@ const OwnerTerrainDetail = () => {
                       <Badge className={`text-[10px] mt-1 ${
                         ['acceptee', 'confirme'].includes(r.statut) ? 'bg-accent' : r.statut === 'joue' ? 'bg-primary text-primary-foreground' : r.statut === 'en_attente' ? 'bg-secondary/20' : 'bg-destructive/10'
                       }`}>
-                        {r.statut === 'joue' ? 'Jouée' : ['acceptee', 'confirme'].includes(r.statut) ? 'Confirmée' : r.statut === 'en_attente' ? 'Acompte en attente' : 'Annulée'}
+                        {r.statut === 'joue' ? 'Jouée' : ['acceptee', 'confirme'].includes(r.statut) ? 'Confirmée' : r.statut === 'en_attente' ? 'Avance en attente' : 'Annulée'}
                       </Badge>
                     </div>
                   </div>

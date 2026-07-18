@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Upload, MapPin, Clock, Info, Phone } from "lucide-react";
+import { X, Upload, MapPin, Clock, Info, Phone, Trash2, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,6 +33,9 @@ interface TerrainFormModalProps {
 const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFormModalProps) => {
   const isEditing = !!terrain;
   const [submitting, setSubmitting] = useState(false);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photos, setPhotos] = useState<any[]>([]);
+  const [photoMeta, setPhotoMeta] = useState({ est_principale: true, ordre: "0" });
   const [form, setForm] = useState({
     nom: "",
     type: "5v5",
@@ -40,8 +43,16 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
     prix_moitie: "",
     prix_entier: "",
     montant_acompte: "5000",
+    pourcentage_avance: "12.5",
+    modele_revenus: "commission",
+    commission_pourcentage: "10",
+    abonnement_montant: "",
+    achat_definitif_montant: "",
+    achat_definitif_paye: false,
     ville: "",
     adresse: "",
+    latitude: "",
+    longitude: "",
     description: "",
     telephone: "",
     is_active: true,
@@ -59,8 +70,16 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         prix_moitie: terrain.prix_moitie?.toString() || "",
         prix_entier: (terrain.prix_entier || terrain.prix_heure)?.toString() || "",
         montant_acompte: terrain.montant_acompte?.toString() || "5000",
+        pourcentage_avance: terrain.pourcentage_avance?.toString() || "12.5",
+        modele_revenus: terrain.modele_revenus || "commission",
+        commission_pourcentage: terrain.commission_pourcentage?.toString() || "10",
+        abonnement_montant: terrain.abonnement_montant?.toString() || "",
+        achat_definitif_montant: terrain.achat_definitif_montant?.toString() || "",
+        achat_definitif_paye: Boolean(terrain.achat_definitif_paye),
         ville: terrain.ville || "",
         adresse: terrain.adresse || "",
+        latitude: terrain.latitude?.toString() || "",
+        longitude: terrain.longitude?.toString() || "",
         description: terrain.description || "",
         telephone: terrain.telephone || "",
         is_active: terrain.is_active ?? true,
@@ -76,8 +95,16 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         prix_moitie: "",
         prix_entier: "",
         montant_acompte: "5000",
+        pourcentage_avance: "12.5",
+        modele_revenus: "commission",
+        commission_pourcentage: "10",
+        abonnement_montant: "",
+        achat_definitif_montant: "",
+        achat_definitif_paye: false,
         ville: "",
         adresse: "",
+        latitude: "",
+        longitude: "",
         description: "",
         telephone: "",
         is_active: true,
@@ -87,6 +114,57 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
       });
     }
   }, [terrain, open]);
+
+  useEffect(() => {
+    if (!open || !terrain?.id) {
+      setPhotos([]);
+      return;
+    }
+    terrainsApi.listPhotos(terrain.id).then((items: any) => {
+      setPhotos(Array.isArray(items) ? items : []);
+    }).catch(() => setPhotos([]));
+  }, [open, terrain?.id]);
+
+  const readFileAsDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+  const uploadPhoto = async (file?: File | null) => {
+    if (!terrain?.id || !file) return;
+    setPhotoUploading(true);
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      await terrainsApi.uploadPhoto(terrain.id, {
+        dataUrl,
+        est_principale: photoMeta.est_principale,
+        ordre: Number(photoMeta.ordre || 0),
+      });
+      const next = await terrainsApi.listPhotos(terrain.id);
+      setPhotos(Array.isArray(next) ? next : []);
+      toast.success("Photo ajoutée");
+    } catch (err: any) {
+      toast.error(err.message || "Upload impossible");
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
+  const markPrincipal = async (photoId: number) => {
+    if (!terrain?.id) return;
+    await terrainsApi.updatePhoto(terrain.id, photoId, { est_principale: true });
+    const next = await terrainsApi.listPhotos(terrain.id);
+    setPhotos(Array.isArray(next) ? next : []);
+  };
+
+  const removePhoto = async (photoId: number) => {
+    if (!terrain?.id) return;
+    await terrainsApi.removePhoto(terrain.id, photoId);
+    setPhotos((prev) => prev.filter((photo) => photo.id !== photoId));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,7 +176,9 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         prix_heure: parseFloat(form.prix_entier || form.prix_heure),
         prix_moitie: parseFloat(form.prix_moitie),
         prix_entier: parseFloat(form.prix_entier || form.prix_heure),
-        montant_acompte: parseFloat(form.montant_acompte),
+        pourcentage_avance: parseFloat(form.pourcentage_avance),
+        latitude: form.latitude ? parseFloat(form.latitude) : null,
+        longitude: form.longitude ? parseFloat(form.longitude) : null,
       };
 
       if (isEditing) {
@@ -182,10 +262,52 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
               <Input id="prix_moitie" type="number" placeholder="Ex: 40000" value={form.prix_moitie} onChange={(e) => setForm({ ...form, prix_moitie: e.target.value })} required />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="montant_acompte">Acompte de réservation (FCFA) *</Label>
-              <Input id="montant_acompte" type="number" placeholder="Ex: 5000" value={form.montant_acompte} onChange={(e) => setForm({ ...form, montant_acompte: e.target.value })} required />
+              <Label htmlFor="pourcentage_avance">Avance de reservation (%) *</Label>
+              <Input id="pourcentage_avance" type="number" min="1" max="100" step="0.1" placeholder="Ex: 12.5" value={form.pourcentage_avance} onChange={(e) => setForm({ ...form, pourcentage_avance: e.target.value })} required />
             </div>
           </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="modele_revenus">Modele de revenus *</Label>
+              <Select
+                value={form.modele_revenus}
+                disabled
+                onValueChange={(value) => setForm({ ...form, modele_revenus: value })}
+              >
+                <SelectTrigger id="modele_revenus">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="commission">Commission</SelectItem>
+                  <SelectItem value="abonnement">Abonnement mensuel</SelectItem>
+                  <SelectItem value="achat_definitif">Achat definitif</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {form.modele_revenus === "commission" && (
+              <div className="space-y-2">
+                <Label htmlFor="commission_pourcentage">Commission plateforme (%)</Label>
+                <Input id="commission_pourcentage" type="number" min="0" max="100" step="0.1" placeholder="Ex: 10" value={form.commission_pourcentage} disabled readOnly onChange={(e) => setForm({ ...form, commission_pourcentage: e.target.value })} />
+              </div>
+            )}
+            {form.modele_revenus === "abonnement" && (
+              <div className="space-y-2">
+                <Label htmlFor="abonnement_montant">Abonnement mensuel (FCFA)</Label>
+                <Input id="abonnement_montant" type="number" min="0" placeholder="Ex: 50000" value={form.abonnement_montant} disabled readOnly onChange={(e) => setForm({ ...form, abonnement_montant: e.target.value })} />
+              </div>
+            )}
+            {form.modele_revenus === "achat_definitif" && (
+              <div className="space-y-2">
+                <Label htmlFor="achat_definitif_montant">Achat definitif (FCFA)</Label>
+                <Input id="achat_definitif_montant" type="number" min="0" placeholder="Ex: 500000" value={form.achat_definitif_montant} disabled readOnly onChange={(e) => setForm({ ...form, achat_definitif_montant: e.target.value })} />
+              </div>
+            )}
+          </div>
+
+          <p className="rounded-xl border border-[color-mix(in_srgb,var(--color-primary)_18%,white)] bg-[color-mix(in_srgb,var(--color-primary)_7%,white)] px-4 py-3 text-xs text-muted-foreground">
+            Le modele de revenus est defini par le Super Admin apres negociation. Vous pouvez modifier les informations du terrain, mais pas le mode commission / abonnement / achat definitif.
+          </p>
 
           {/* Ville et Adresse */}
           <div className="space-y-2">
@@ -210,6 +332,30 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
               placeholder="Ex: Quartier Plateau, Rue 12"
               value={form.adresse}
               onChange={(e) => setForm({ ...form, adresse: e.target.value })}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="latitude">Latitude</Label>
+            <Input
+              id="latitude"
+              type="number"
+              step="any"
+              placeholder="Ex: 14.6928"
+              value={form.latitude}
+              onChange={(e) => setForm({ ...form, latitude: e.target.value })}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="longitude">Longitude</Label>
+            <Input
+              id="longitude"
+              type="number"
+              step="any"
+              placeholder="Ex: -17.4467"
+              value={form.longitude}
+              onChange={(e) => setForm({ ...form, longitude: e.target.value })}
             />
           </div>
 
@@ -288,7 +434,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
           {/* Upload photos (placeholder - would need backend support) */}
           <div className="space-y-2">
             <Label>Photos du terrain</Label>
-            <div className="border-2 border-dashed border-border rounded-xl p-6 text-center">
+            <div className="hidden">
               <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
               <p className="text-xs text-muted-foreground">
                 Glissez-déposez des photos ou cliquez pour parcourir
@@ -297,6 +443,80 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
                 Formats: JPG, PNG (max 5Mo)
               </p>
             </div>
+          </div>
+
+          <div className="space-y-3">
+            {isEditing ? (
+              <>
+                <label className="block border-2 border-dashed border-border rounded-xl p-6 text-center cursor-pointer hover:bg-muted/40 transition-colors">
+                  <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-xs text-muted-foreground">
+                    {photoUploading ? "Upload en cours..." : "Cliquez pour charger une photo"}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    JPG, PNG, WEBP - 5 Mo maximum
+                  </p>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    disabled={photoUploading}
+                    onChange={(e) => uploadPhoto(e.target.files?.[0])}
+                  />
+                </label>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={photoMeta.est_principale}
+                      onChange={(e) => setPhotoMeta({ ...photoMeta, est_principale: e.target.checked })}
+                    />
+                    Photo principale
+                  </label>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Ordre"
+                    value={photoMeta.ordre}
+                    onChange={(e) => setPhotoMeta({ ...photoMeta, ordre: e.target.value })}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {photos.map((photo) => (
+                    <article key={photo.id} className="rounded-xl border border-border overflow-hidden bg-white">
+                      <img src={photo.url} alt="Terrain" className="h-24 w-full object-cover" loading="lazy" />
+                      <div className="p-2 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => markPrincipal(photo.id)}
+                          className={`text-[11px] inline-flex items-center gap-1 ${photo.est_principale ? "text-primary font-semibold" : "text-muted-foreground"}`}
+                        >
+                          <Star className="w-3 h-3" />
+                          {photo.est_principale ? "Principale" : "Définir"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removePhoto(photo.id)}
+                          className="text-destructive"
+                          aria-label="Supprimer la photo"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                {photos.length === 0 && (
+                  <p className="text-xs text-muted-foreground text-center py-2">Aucune photo enregistrée</p>
+                )}
+              </>
+            ) : (
+              <div className="border border-border rounded-xl p-4 bg-muted/30 text-xs text-muted-foreground">
+                Enregistrez d'abord le terrain, puis rouvrez-le pour ajouter ses photos.
+              </div>
+            )}
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
