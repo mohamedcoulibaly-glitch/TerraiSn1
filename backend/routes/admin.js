@@ -95,16 +95,16 @@ router.get('/terrains', async (req, res) => {
 router.post('/terrains', async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, quartier, ville, surface, taille, prix_heure, prix_moitie, prix_entier, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, photos, proprietaire_id } = req.body;
+    const { nom, quartier, ville, surface, taille, prix_heure, prix_moitie, prix_entier, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, photos, proprietaire_id, commodites } = req.body;
     if (!nom || !prix_heure || !proprietaire_id) return res.status(400).json({ error: 'Nom, prix et proprietaire requis' });
     const prixEntier = Number(prix_entier || prix_heure);
     const prixMoitie = Number(prix_moitie || prixEntier * 0.6);
-    const pourcentageAvance = Number(pourcentage_avance || 12.5);
+    const pourcentageAvance = Number(pourcentage_avance || 8);
     const avanceReference = montantAvanceReference(prixEntier, pourcentageAvance);
     const result = runSql(db, `INSERT INTO terrains
-      (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_entier, prix_moitie, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, photos, description, is_active)
-      VALUES (?, ?, ?, ?, 'foot', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      [proprietaire_id, nom, quartier, ville || 'Dakar', taille || '11v11', prixEntier, prixEntier, prixMoitie, avanceReference, avanceReference, pourcentageAvance, modele_revenus || 'commission', Number(commission_pourcentage || 0), Number(abonnement_montant || 0), Number(achat_definitif_montant || 0), Number.isFinite(Number(latitude)) ? Number(latitude) : null, Number.isFinite(Number(longitude)) ? Number(longitude) : null, JSON.stringify(photos || []), surface || 'synthetique']);
+      (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_entier, prix_moitie, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, photos, description, commodites, is_active)
+      VALUES (?, ?, ?, ?, 'foot', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      [proprietaire_id, nom, quartier, ville || 'Dakar', taille || '11v11', prixEntier, prixEntier, prixMoitie, avanceReference, avanceReference, pourcentageAvance, modele_revenus || 'commission', Number(commission_pourcentage || 0), Number(abonnement_montant || 0), Number(achat_definitif_montant || 0), Number.isFinite(Number(latitude)) ? Number(latitude) : null, Number.isFinite(Number(longitude)) ? Number(longitude) : null, JSON.stringify(photos || []), surface || 'synthetique', typeof commodites === 'string' ? commodites : JSON.stringify(Array.isArray(commodites) ? commodites : [])]);
     const terrainId = result.lastInsertRowid;
     for (const jour of ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']) {
       runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, '08:00', '22:00']);
@@ -172,7 +172,7 @@ router.patch('/terrains/:id/tarifs', async (req, res) => {
   const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   const prixReference = Number(terrain.prix_entier || terrain.prix_heure || 0);
-  const pourcentageAvance = Number(req.body.pourcentage_avance || (req.body.acompte ? (Number(req.body.acompte) * 100) / prixReference : terrain.pourcentage_avance || 12.5));
+  const pourcentageAvance = Number(req.body.pourcentage_avance || (req.body.acompte ? (Number(req.body.acompte) * 100) / prixReference : terrain.pourcentage_avance || 8));
   const avanceReference = montantAvanceReference(prixReference, pourcentageAvance);
   const commissionPourcentage = Number(req.body.commission_pourcentage || (req.body.commission ? (Number(req.body.commission) * 100) / avanceReference : terrain.commission_pourcentage || 0));
   const modeleRevenus = req.body.modele_revenus || terrain.modele_revenus || 'commission';

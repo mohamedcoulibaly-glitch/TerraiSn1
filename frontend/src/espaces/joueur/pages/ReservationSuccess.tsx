@@ -1,40 +1,125 @@
-import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { CheckCircle2 } from 'lucide-react';
-import { reservationsApi } from '@/lib/api';
-import { Button } from '@/components/ui/button';
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Check, Download } from "lucide-react";
+import { reservationsApi } from "@/lib/api";
 
 const ReservationSuccess = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [reservation, setReservation] = useState<any>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
+  const [showAnim, setShowAnim] = useState(true);
 
   useEffect(() => {
-    const id = params.get('id') || localStorage.getItem('terrainsn_last_reservation_id');
-    if (!id) return setError('Réservation introuvable');
+    const id = params.get("id") || localStorage.getItem("terrainsn_last_reservation_id");
+    if (!id) return setError("Réservation introuvable");
     reservationsApi.get(id).then(setReservation).catch((err) => setError(err.message));
   }, [params]);
 
-  if (error) return <div className="page-container flex items-center justify-center"><p>{error}</p></div>;
-  if (!reservation) return <div className="page-container flex items-center justify-center"><p>Vérification du paiement...</p></div>;
+  useEffect(() => {
+    const t = setTimeout(() => setShowAnim(false), 1500);
+    return () => clearTimeout(t);
+  }, []);
+
+  if (error) {
+    return (
+      <div className="page-container flex items-center justify-center">
+        <p className="text-sm text-[var(--color-text-secondary)]">{error}</p>
+      </div>
+    );
+  }
+
+  if (!reservation) {
+    return (
+      <div className="page-container flex items-center justify-center gap-2">
+        <div className="skeleton w-10 h-10 rounded-full" />
+        <p className="text-sm text-[var(--color-text-muted)]">Vérification du paiement...</p>
+      </div>
+    );
+  }
+
+  if (showAnim) {
+    return (
+      <div className="fixed inset-0 z-50 bg-[var(--surface)] flex items-center justify-center">
+        <div className="relative flex items-center justify-center">
+          <div className="absolute w-28 h-28 rounded-full bg-[var(--color-primary)]/20 animate-ping" />
+          <div className="w-20 h-20 rounded-full bg-[var(--color-primary)] flex items-center justify-center shadow-[var(--shadow-lg)]">
+            <Check className="w-12 h-12 text-white" strokeWidth={3} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const avance = Number(reservation.montant_avance || reservation.acompte || 0);
+  const reste = Number(reservation.montant_restant || reservation.reste_a_payer || 0);
+  const qrUrl = reservation.qr_code_url;
 
   return (
-    <div className="page-container flex items-center justify-center p-5">
-      <div className="glass-card max-w-md w-full p-6 text-center">
-        <CheckCircle2 className="w-16 h-16 text-accent mx-auto mb-4" />
-        <h1 className="font-display text-2xl font-bold">Réservation confirmée</h1>
-        <p className="mt-4 font-semibold">{reservation.terrain_nom}</p>
-        <p className="text-muted-foreground">{reservation.date} · {reservation.heure_debut} - {reservation.heure_fin}</p>
-        <p className="mt-2 text-sm">Acompte payé : <strong>{Number(reservation.acompte || 0).toLocaleString()} CFA</strong></p>
-        <p className="text-sm text-muted-foreground">Reste à payer après le match : {Number(reservation.reste_a_payer || 0).toLocaleString()} CFA</p>
-        {reservation.code_reservation ? (
-          <div className="my-6 rounded-xl bg-primary/10 p-5">
-            <p className="text-xs uppercase text-muted-foreground">Votre code</p>
-            <p className="font-display text-3xl font-bold text-primary">{reservation.code_reservation}</p>
+    <div className="page-container flex items-center justify-center p-5 page-enter">
+      <div className="bg-[var(--surface)] max-w-md w-full rounded-[var(--radius-xl)] shadow-[var(--shadow-lg)] overflow-hidden border border-[var(--color-border)]">
+        <div className="bg-[var(--color-primary-glow)] px-6 py-5 text-center">
+          <h1 className="text-[20px] font-bold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
+            C'est confirmé !
+          </h1>
+        </div>
+
+        <div className="p-6 text-center space-y-4">
+          <div>
+            <p className="font-semibold text-sm">{reservation.terrain_nom}</p>
+            <p className="text-[13px] text-[var(--color-text-muted)] mt-1">
+              {reservation.date} · {reservation.heure_debut} – {reservation.heure_fin}
+            </p>
           </div>
-        ) : <p className="my-6 text-sm">Paiement reçu, confirmation en cours...</p>}
-        <Button className="w-full" onClick={() => navigate('/reservations')}>Mes réservations</Button>
+
+          {reservation.code_reservation && (
+            <div className="rounded-[var(--radius-md)] bg-[var(--color-primary-glow)] py-4 px-3">
+              <p className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">Code réservation</p>
+              <p className="text-[28px] font-bold text-[var(--color-primary)] mt-1" style={{ fontFamily: "var(--font-display)" }}>
+                {reservation.code_reservation}
+              </p>
+            </div>
+          )}
+
+          {qrUrl && (
+            <div className="inline-block p-3 border-2 border-[var(--color-primary)] rounded-[var(--radius-lg)] bg-[var(--surface)]">
+              <img src={qrUrl} alt="QR code" className="w-[180px] h-[180px] object-contain" />
+            </div>
+          )}
+          <p className="text-[12px] text-[var(--color-text-muted)]">
+            Montre ce QR code au gérant le jour du match
+          </p>
+
+          <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
+            <p className="flex justify-between">
+              <span className="text-[var(--color-success)] font-medium">Avance payée</span>
+              <span className="text-[var(--color-success)]">{avance.toLocaleString()} FCFA</span>
+            </p>
+            <p className="flex justify-between">
+              <span className="text-[var(--color-text-secondary)]">Reste à payer sur place</span>
+              <span className="text-[var(--color-text-secondary)]">{reste.toLocaleString()} FCFA</span>
+            </p>
+          </div>
+
+          {qrUrl && (
+            <a
+              href={qrUrl}
+              download
+              className="flex items-center justify-center gap-2 w-full h-12 rounded-[var(--radius-md)] border-2 border-[var(--color-primary)] text-[var(--color-primary)] text-sm font-medium"
+            >
+              <Download className="w-4 h-4" />
+              Télécharger le QR code
+            </a>
+          )}
+
+          <button
+            type="button"
+            onClick={() => navigate("/reservations")}
+            className="w-full h-12 rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium"
+          >
+            Voir mes réservations
+          </button>
+        </div>
       </div>
     </div>
   );

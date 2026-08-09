@@ -7,6 +7,7 @@ import { authApi } from "@/lib/api";
 import { homeForUser, normalizeRole } from "@/auth/roles";
 import { formatPhoneDisplay, isValidSenegalMobile, phoneError, toLocal9 } from "@/auth/phone";
 import ForgotPasswordModal from "@/auth/ForgotPasswordModal";
+import { fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
 
 type Tab = "login" | "register";
 type Step = "form" | "otp";
@@ -271,8 +272,16 @@ export default function LoginPage() {
     "w-full bg-transparent outline-none text-sm text-[var(--color-text-primary)] placeholder:transparent";
 
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-4 py-10">
-      <div className="w-full max-w-[400px]">
+    <div className="min-h-screen relative flex flex-col justify-end sm:justify-center sm:items-center sm:px-4">
+      <img
+        src={fieldImageForId(2)}
+        alt=""
+        className="absolute inset-0 w-full h-full object-cover"
+        style={{ filter: "brightness(0.35)" }}
+        aria-hidden
+      />
+      <div className="absolute inset-0 bg-[var(--color-primary-dark)]/80" aria-hidden />
+      <div className="relative z-[1] w-full max-w-[420px] bg-white rounded-t-[var(--radius-xl)] sm:rounded-[var(--radius-xl)] px-5 pt-8 pb-10 min-h-[65dvh] sm:min-h-0 shadow-[var(--shadow-lg)]">
         <div className="text-center mb-8">
           <Link
             to="/"
@@ -282,7 +291,7 @@ export default function LoginPage() {
             TS
           </Link>
           <h1
-            className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight"
+            className="text-xl font-bold text-[var(--color-text-primary)] tracking-tight"
             style={{ fontFamily: "var(--font-display)" }}
           >
             TerrainSN

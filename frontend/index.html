@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#2d7f4b" />
+    <meta name="theme-color" content="#059669" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -26,9 +26,20 @@
     <meta name="twitter:title" content="TerrainSN - Réservation de terrains de sport au Sénégal">
     <meta name="twitter:description" content="Trouvez et réservez des terrains de football, basketball et tennis au Sénégal. Paiement Wave et Orange Money. Réservez en un clic !">
 
-    <!-- Preconnect to API -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com">
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('theme');
+          if (t !== 'dark' && t !== 'light') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          if (t === 'dark') document.documentElement.classList.add('dark');
+          else document.documentElement.classList.remove('dark');
+        } catch (e) {}
+      })();
+    </script>
   </head>
 
   <body>

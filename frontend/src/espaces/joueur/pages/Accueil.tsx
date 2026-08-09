@@ -1,28 +1,166 @@
-import { Search, ChevronRight } from "lucide-react";
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { MapPin } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { terrainsApi } from "@/lib/api";
 import FieldCard from "@/espaces/joueur/components/FieldCard";
+import BannerVideoHeader from "@/espaces/joueur/components/BannerVideoHeader";
+import SkeletonAccueil from "@/components/skeletons/SkeletonAccueil";
+import SkeletonTerrainCard from "@/components/skeletons/SkeletonTerrainCard";
+import FiltresTerrain, {
+  FILTRES_TERRAIN_DEFAUT,
+  FiltresTerrainValues,
+} from "@/espaces/joueur/components/FiltresTerrain";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
 
-const typeFilters = ["Tous", "5 vs 5", "7 vs 7", "11 vs 11"];
+type GeoState = {
+  lat: number | null;
+  lng: number | null;
+  denied: boolean;
+  ready: boolean;
+};
+
+/** Puces exclusives (une seule active) */
+type QuickFiltre =
+  | "tous"
+  | "pres"
+  | "demain"
+  | "weekend"
+  | "5v5"
+  | "7v7"
+  | "11v11";
+
+const QUICK_FILTRES: { id: QuickFiltre; label: string }[] = [
+  { id: "tous", label: "Tous" },
+  { id: "pres", label: "Près de toi" },
+  { id: "demain", label: "📅 Demain" },
+  { id: "weekend", label: "Ce week-end" },
+  { id: "5v5", label: "5v5" },
+  { id: "7v7", label: "7v7" },
+  { id: "11v11", label: "11v11" },
+];
+
+const FORMAT_FILTRES: QuickFiltre[] = ["5v5", "7v7", "11v11"];
+
+function toLocalISO(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function getTomorrowISO() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return toLocalISO(d);
+}
+
+/** Samedi + dimanche du week-end en cours ou à venir */
+function getWeekendISOs(): [string, string] {
+  const d = new Date();
+  const day = d.getDay(); // 0=dim … 6=sam
+  const sat = new Date(d);
+  if (day === 0) sat.setDate(d.getDate() - 1);
+  else if (day !== 6) sat.setDate(d.getDate() + (6 - day));
+  const sun = new Date(sat);
+  sun.setDate(sat.getDate() + 1);
+  return [toLocalISO(sat), toLocalISO(sun)];
+}
+
+function dateContextLabel(quick: QuickFiltre, advancedDate?: string): string | null {
+  if (quick === "demain") return "demain";
+  if (quick === "weekend") return "ce week-end";
+  if (advancedDate) {
+    if (advancedDate === getTomorrowISO()) return "demain";
+    const [y, m, day] = advancedDate.split("-");
+    if (y && m && day) return `le ${day}/${m}`;
+  }
+  return null;
+}
 
 const Accueil = () => {
-  const navigate = useNavigate();
-  const [selectedType, setSelectedType] = useState("Tous");
   const [searchQuery, setSearchQuery] = useState("");
   const [terrains, setTerrains] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showFiltres, setShowFiltres] = useState(false);
+  const [quickFiltre, setQuickFiltre] = useState<QuickFiltre>("tous");
+  const [favTick, setFavTick] = useState(0);
+  const [draftFiltres, setDraftFiltres] = useState<FiltresTerrainValues>(FILTRES_TERRAIN_DEFAUT);
+  const [appliedFiltres, setAppliedFiltres] = useState<FiltresTerrainValues>(FILTRES_TERRAIN_DEFAUT);  const [geo, setGeo] = useState<GeoState>({ lat: null, lng: null, denied: false, ready: false });
 
   useEffect(() => {
-    loadTerrains();
+    if (!navigator.geolocation) {
+      setGeo({ lat: null, lng: null, denied: true, ready: true });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGeo({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          denied: false,
+          ready: true,
+        });
+      },
+      () => {
+        setGeo({ lat: null, lng: null, denied: true, ready: true });
+      },
+      { timeout: 5000, maximumAge: 300000 }
+    );
   }, []);
 
-  const loadTerrains = async () => {
+  useEffect(() => {
+    const refresh = () => setFavTick((n) => n + 1);
+    window.addEventListener("storage", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.removeEventListener("storage", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
+  const loadTerrains = useCallback(async () => {
+    if (!geo.ready) return;
     try {
+      setLoading(true);
       setError(null);
-      const data = await terrainsApi.list();
-      setTerrains(data || []);
+      const filters: Record<string, string | number> = {};
+
+      const useGeo =
+        (!geo.denied && geo.lat != null && geo.lng != null) || quickFiltre === "pres";
+      if (useGeo && geo.lat != null && geo.lng != null) {
+        filters.lat = geo.lat;
+        filters.lng = geo.lng;
+        filters.distance_max =
+          quickFiltre === "pres" ? 3 : appliedFiltres.distance_max || 10;
+      }
+
+      if (appliedFiltres.quartier.trim()) filters.quartier = appliedFiltres.quartier.trim();
+      if (searchQuery.trim()) filters.search = searchQuery.trim();
+
+      // Format terrain (5v5 / 7v7 / 11v11) ou filtre avancé demi/entier
+      if (FORMAT_FILTRES.includes(quickFiltre)) filters.type = quickFiltre;
+      else if (appliedFiltres.type) filters.type = appliedFiltres.type;
+
+      // Dates selon puce rapide
+      if (quickFiltre === "demain") {
+        filters.date = getTomorrowISO();
+      } else if (quickFiltre === "weekend") {
+        filters.dates = getWeekendISOs().join(",");
+      } else if (appliedFiltres.date) {
+        filters.date = appliedFiltres.date;
+      }
+
+      if (appliedFiltres.heure) filters.heure = appliedFiltres.heure;
+      if (appliedFiltres.prix_max < 100000) filters.prix_max = appliedFiltres.prix_max;
+
+      const data = await terrainsApi.list(filters);
+      setTerrains(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
       setError("Une erreur est survenue lors du chargement des terrains.");
@@ -30,142 +168,220 @@ const Accueil = () => {
     } finally {
       setLoading(false);
     }
+  }, [geo, searchQuery, appliedFiltres, quickFiltre]);
+
+  useEffect(() => {
+    loadTerrains();
+  }, [loadTerrains]);
+
+  const activeFilterCount = useMemo(() => {
+    let n = 0;
+    if (appliedFiltres.date && quickFiltre !== "demain") n += 1;
+    if (appliedFiltres.heure) n += 1;
+    if (appliedFiltres.type) n += 1;
+    if (appliedFiltres.quartier.trim()) n += 1;
+    if (appliedFiltres.prix_max < 100000) n += 1;
+    if (!geo.denied && appliedFiltres.distance_max !== 10) n += 1;
+    return n;
+  }, [appliedFiltres, geo.denied, quickFiltre]);
+
+  const dateLabel = useMemo(
+    () => dateContextLabel(quickFiltre, appliedFiltres.date),
+    [quickFiltre, appliedFiltres.date]
+  );
+
+  const terrainsFiltres = useMemo(() => {
+    void favTick;
+    if (quickFiltre !== "pres") return terrains;
+    return [...terrains]
+      .filter((t) => t.distance_km != null && Number(t.distance_km) <= 3)
+      .sort((a, b) => Number(a.distance_km) - Number(b.distance_km));
+  }, [terrains, quickFiltre, favTick]);
+
+  const quartiers = Array.from(
+    new Set(
+      terrains
+        .map((t) => String(t.adresse || t.ville || "").split(",")[0].trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 40);
+
+  const applyFiltres = () => {
+    setAppliedFiltres(draftFiltres);
+    if (draftFiltres.date === getTomorrowISO()) {
+      setQuickFiltre("demain");
+    } else if (draftFiltres.date) {
+      setQuickFiltre("tous");
+    }
+    setShowFiltres(false);
   };
 
-  const filtered = terrains.filter((t) => {
-    const matchType = selectedType === "Tous" || t.type === selectedType;
-    const matchSearch =
-      t.nom.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.ville.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchType && matchSearch;
-  });
+  const resetFiltres = () => {
+    setDraftFiltres(FILTRES_TERRAIN_DEFAUT);
+    setAppliedFiltres(FILTRES_TERRAIN_DEFAUT);
+    setQuickFiltre("tous");
+  };
 
-  const popular = terrains.filter((t) => t.note >= 4.5).slice(0, 6);
+  const onQuickSelect = (id: QuickFiltre) => {
+    setQuickFiltre(id);
+    if (id === "demain") {
+      const demain = getTomorrowISO();
+      setDraftFiltres((f) => ({ ...f, date: demain, type: "" }));
+      setAppliedFiltres((f) => ({ ...f, date: demain, type: "" }));
+    } else {
+      setDraftFiltres((f) => ({ ...f, date: "", type: "" }));
+      setAppliedFiltres((f) => ({ ...f, date: "", type: "" }));
+    }
+  };
+
+  const emptyMessage = (() => {
+    if (quickFiltre === "pres") {
+      return geo.denied
+        ? "Active la localisation pour voir les terrains près de toi."
+        : "Aucun terrain à moins de 3 km pour le moment.";
+    }
+    if (quickFiltre === "demain") return "Aucun créneau libre demain. Essaie ce week-end ou tous les terrains.";
+    if (quickFiltre === "weekend") return "Aucun créneau libre ce week-end.";
+    if (FORMAT_FILTRES.includes(quickFiltre)) return `Aucun terrain ${quickFiltre} trouvé.`;
+    return "Essaie d'autres filtres ou un quartier différent.";
+  })();
+
+  if (!geo.ready || (loading && terrains.length === 0 && !error)) {
+    return <SkeletonAccueil />;
+  }
 
   return (
-    <div className="page-container !pt-0 !pb-6">
-      {/* Hero vert */}
-      <section className="bg-[var(--color-primary)] px-4 pt-8 pb-10 sm:px-6 lg:px-8">
-        <div className="max-w-2xl mx-auto">
-          <h1
-            className="text-white text-[1.65rem] sm:text-3xl font-semibold tracking-tight leading-tight"
-            style={{ fontFamily: "var(--font-display)" }}
-          >
-            Réserve ton terrain
-          </h1>
-          <p className="text-white/80 text-sm mt-2 max-w-md">
-            Trouve un créneau libre à Dakar et réserve en quelques minutes.
-          </p>
+    <div className="min-h-screen bg-[var(--bg)] pb-8 page-enter">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <BannerVideoHeader
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          onFilterClick={() => {
+            setDraftFiltres(appliedFiltres);
+            setShowFiltres(true);
+          }}
+          activeFilterCount={activeFilterCount}
+        />
 
-          <div className="mt-6 flex items-center gap-3 px-4 h-[52px] bg-white rounded-[var(--radius-xl)] shadow-[0_8px_24px_rgba(6,61,36,0.25)]">
-            <Search className="w-4 h-4 text-[var(--color-text-muted)] flex-shrink-0" />
-            <input
-              type="text"
-              placeholder="Terrain, quartier, ville…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-text-muted)] text-[var(--color-text-primary)]"
-              id="search-terrain"
-            />
+        {geo.denied && (
+          <div className="mt-2">
+            <div className="flex items-center gap-2 px-3 h-9 bg-[var(--surface)] border border-[var(--border)] rounded-2xl max-w-md">
+              <MapPin className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+              <input
+                type="text"
+                placeholder="Filtrer par quartier..."
+                value={draftFiltres.quartier}
+                onChange={(e) => {
+                  const quartier = e.target.value;
+                  setDraftFiltres((f) => ({ ...f, quartier }));
+                  setAppliedFiltres((f) => ({ ...f, quartier }));
+                }}
+                className="flex-1 bg-transparent text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+                id="filter-quartier"
+              />
+            </div>
           </div>
-        </div>
-      </section>
+        )}
 
-      <div className="responsive-padding -mt-4 relative z-[1]">
-        <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-          {typeFilters.map((type) => (
+        {/* Drawer filtres avancés */}
+        <Sheet open={showFiltres} onOpenChange={setShowFiltres}>
+          <SheetContent
+            side="bottom"
+            className="max-h-[85vh] overflow-y-auto rounded-t-2xl bg-[var(--bg)] border-[var(--border)] sm:max-w-lg sm:mx-auto"
+          >
+            <SheetHeader className="text-left mb-2">
+              <SheetTitle className="text-[var(--text-primary)]">Filtres</SheetTitle>
+              <SheetDescription className="text-[var(--text-muted)]">
+                Affiner par date, heure, prix et distance
+              </SheetDescription>
+            </SheetHeader>
+            <FiltresTerrain
+              value={draftFiltres}
+              onChange={setDraftFiltres}
+              onApply={applyFiltres}
+              onReset={resetFiltres}
+              geoAccordee={!geo.denied && geo.lat != null}
+              quartiers={quartiers}
+            />
+          </SheetContent>
+        </Sheet>
+
+        {/* Raccourcis date / features */}
+        <div
+          className="mt-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0 flex gap-2 overflow-x-auto scrollbar-none"
+          role="tablist"
+          aria-label="Filtres rapides"
+        >
+          {QUICK_FILTRES.map((f) => {
+            const active = quickFiltre === f.id;
+            return (
+              <button
+                key={f.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => onQuickSelect(f.id)}
+                className={`flex-shrink-0 px-3.5 min-h-[32px] rounded-full text-[13px] font-semibold transition-colors ${
+                  active
+                    ? "bg-[var(--primary)] text-white"
+                    : "bg-[var(--surface-2)]/80 text-[var(--text-primary)] border border-[var(--border)]"
+                }`}
+              >
+                {f.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {error ? (
+          <div className="mt-8 text-center">
+            <div className="text-red-400 text-sm mb-4">{error}</div>
             <button
-              key={type}
               type="button"
-              onClick={() => setSelectedType(type)}
-              className={`px-4 min-h-[40px] rounded-full text-sm font-medium transition-colors flex-shrink-0 ${
-                selectedType === type
-                  ? "bg-[var(--color-primary)] text-white shadow-sm"
-                  : "bg-white text-[var(--color-text-secondary)] border border-[var(--color-border)]"
-              }`}
+              onClick={loadTerrains}
+              className="px-6 py-2.5 rounded-xl bg-[var(--primary)] text-white font-bold text-sm active:scale-95 transition-transform"
             >
-              {type}
+              Réessayer
             </button>
-          ))}
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="responsive-padding mt-10 text-center text-[var(--color-text-secondary)]">
-          <div className="animate-pulse text-sm">Chargement des terrains...</div>
-        </div>
-      ) : error ? (
-        <div className="responsive-padding mt-10 text-center">
-          <div className="text-[var(--color-danger)] text-sm mb-4">{error}</div>
-          <button type="button" onClick={loadTerrains} className="btn-primary px-6">
-            Réessayer
-          </button>
-        </div>
-      ) : terrains.length === 0 ? (
-        <div className="responsive-padding mt-10 text-center text-[var(--color-text-secondary)]">
-          <p className="text-sm">Aucun terrain disponible pour le moment.</p>
-        </div>
-      ) : (
-        <>
-          {popular.length > 0 && (
-            <section className="mt-8 responsive-padding">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="section-title">Populaires</h2>
-                <button
-                  type="button"
-                  onClick={() => navigate("/explorer")}
-                  className="text-sm text-[var(--color-primary)] font-medium flex items-center gap-1 min-h-[44px]"
-                >
-                  Voir tout <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              <div className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 snap-x">
-                {popular.map((t) => (
-                  <div key={t.id} className="w-[78vw] max-w-[300px] flex-shrink-0 snap-start">
-                    <FieldCard terrain={t} variant="vertical" />
-                  </div>
+          </div>
+        ) : (
+          <section className="mt-3">
+            {loading ? (
+              <div className="flex flex-col gap-3 w-[94%] mx-auto max-w-2xl">
+                {[1, 2, 3].map((i) => (
+                  <SkeletonTerrainCard key={i} />
                 ))}
               </div>
-            </section>
-          )}
-
-          <section className="mt-8 responsive-padding">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="section-title">Près de chez vous</h2>
-              <button
-                type="button"
-                onClick={() => navigate("/explorer")}
-                className="text-sm text-[var(--color-primary)] font-medium flex items-center gap-1 min-h-[44px]"
-              >
-                Voir tout <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            {filtered.length === 0 ? (
-              <div className="text-center text-[var(--color-text-secondary)] text-sm py-6">
-                Aucun terrain ne correspond à votre recherche.
+            ) : terrainsFiltres.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="w-16 h-16 rounded-full bg-[var(--surface-2)] flex items-center justify-center mb-3">
+                  <span className="text-3xl">⚽</span>
+                </div>
+                <h3 className="text-[var(--text-primary)] font-bold text-base">Aucun terrain trouvé</h3>
+                <p className="text-[var(--text-muted)] text-sm mt-1.5 max-w-xs">{emptyMessage}</p>
+                <button
+                  type="button"
+                  onClick={resetFiltres}
+                  className="mt-5 px-5 py-2 rounded-xl border border-emerald-500 text-emerald-400 text-sm font-semibold active:scale-95 transition-transform min-h-[40px]"
+                >
+                  Réinitialiser
+                </button>
               </div>
             ) : (
-              <div className="flex flex-col gap-4 max-w-xl mx-auto sm:max-w-none sm:grid sm:grid-cols-2 lg:grid-cols-3">
-                {filtered.map((t) => (
-                  <FieldCard key={t.id} terrain={t} variant="vertical" />
+              <div className="flex flex-col gap-3 w-[94%] mx-auto max-w-2xl lg:max-w-3xl">
+                {terrainsFiltres.map((t) => (
+                  <FieldCard
+                    key={t.id}
+                    terrain={t}
+                    dateLabel={dateLabel}
+                    onFavoriteChange={() => setFavTick((n) => n + 1)}
+                  />
                 ))}
               </div>
             )}
           </section>
-        </>
-      )}
-
-      <footer className="mt-12 responsive-padding pb-6 text-center border-t border-[var(--color-border)] pt-8">
-        <p
-          className="font-semibold text-[var(--color-primary)] text-sm"
-          style={{ fontFamily: "var(--font-display)" }}
-        >
-          TerrainSN
-        </p>
-        <p className="text-xs text-[var(--color-text-secondary)] mt-1">
-          Réservation de terrains de football au Sénégal.
-        </p>
-      </footer>
+        )}
+      </div>
     </div>
   );
 };

@@ -13,7 +13,7 @@ export default function JoueurNavbar() {
   const navigate = useNavigate();
 
   return (
-    <header className="fixed top-0 inset-x-0 z-40 h-14 bg-white border-b border-[var(--color-border)]">
+    <header className="fixed top-0 inset-x-0 z-40 h-14 bg-[var(--surface)] border-b border-[var(--color-border)]">
       <div className="h-full max-w-screen-xl mx-auto px-4 flex items-center justify-between gap-3 relative">
         <Link
           to="/"

@@ -41,7 +41,7 @@ const MockPayment = () => {
         <div className="my-6 rounded-xl bg-muted p-4">
           <p className="font-semibold">{terrain}</p>
           <p className="mt-1 text-2xl font-bold text-primary">{montant.toLocaleString()} FCFA</p>
-          <p className="text-xs text-muted-foreground">Acompte sur {total.toLocaleString()} FCFA - reste {reste.toLocaleString()} FCFA</p>
+          <p className="text-xs text-muted-foreground">Avance sur {total.toLocaleString()} FCFA - reste {reste.toLocaleString()} FCFA</p>
           <p className="mt-2 text-xs text-muted-foreground">Référence : {refCommand}</p>
         </div>
         <div className="space-y-3">

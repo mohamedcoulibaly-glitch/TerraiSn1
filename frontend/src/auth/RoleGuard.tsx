@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/use-auth";
 import { AppRole, homeForUser, normalizeRole } from "@/auth/roles";
+import SkeletonSession from "@/components/skeletons/SkeletonSession";
 
 interface RoleGuardProps {
   roles: AppRole[];
@@ -9,11 +10,7 @@ interface RoleGuardProps {
 }
 
 function LoadingScreen() {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA]">
-      <div className="w-8 h-8 border-2 border-[#0A5C36] border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
+  return <SkeletonSession />;
 }
 
 /**

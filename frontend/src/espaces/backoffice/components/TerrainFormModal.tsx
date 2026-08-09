@@ -22,6 +22,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { terrainsApi } from "@/lib/api";
+import CommoditesPicker from "@/components/CommoditesPicker";
+import { parseCommodites, type CommoditeId } from "@/lib/commodites";
 
 interface TerrainFormModalProps {
   open: boolean;
@@ -43,7 +45,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
     prix_moitie: "",
     prix_entier: "",
     montant_acompte: "5000",
-    pourcentage_avance: "12.5",
+    pourcentage_avance: "8",
     modele_revenus: "commission",
     commission_pourcentage: "10",
     abonnement_montant: "",
@@ -59,6 +61,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
     heure_debut: "08:00",
     heure_fin: "23:00",
     photos: [] as string[],
+    commodites: [] as CommoditeId[],
   });
 
   useEffect(() => {
@@ -70,7 +73,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         prix_moitie: terrain.prix_moitie?.toString() || "",
         prix_entier: (terrain.prix_entier || terrain.prix_heure)?.toString() || "",
         montant_acompte: terrain.montant_acompte?.toString() || "5000",
-        pourcentage_avance: terrain.pourcentage_avance?.toString() || "12.5",
+        pourcentage_avance: terrain.pourcentage_avance?.toString() || "8",
         modele_revenus: terrain.modele_revenus || "commission",
         commission_pourcentage: terrain.commission_pourcentage?.toString() || "10",
         abonnement_montant: terrain.abonnement_montant?.toString() || "",
@@ -86,6 +89,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         heure_debut: terrain.heure_debut || "08:00",
         heure_fin: terrain.heure_fin || "23:00",
         photos: terrain.photos || [],
+        commodites: parseCommodites(terrain.commodites),
       });
     } else {
       setForm({
@@ -95,7 +99,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         prix_moitie: "",
         prix_entier: "",
         montant_acompte: "5000",
-        pourcentage_avance: "12.5",
+        pourcentage_avance: "8",
         modele_revenus: "commission",
         commission_pourcentage: "10",
         abonnement_montant: "",
@@ -111,6 +115,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         heure_debut: "08:00",
         heure_fin: "23:00",
         photos: [],
+        commodites: [],
       });
     }
   }, [terrain, open]);
@@ -263,7 +268,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
             </div>
             <div className="space-y-2">
               <Label htmlFor="pourcentage_avance">Avance de reservation (%) *</Label>
-              <Input id="pourcentage_avance" type="number" min="1" max="100" step="0.1" placeholder="Ex: 12.5" value={form.pourcentage_avance} onChange={(e) => setForm({ ...form, pourcentage_avance: e.target.value })} required />
+              <Input id="pourcentage_avance" type="number" min="1" max="100" step="0.1" placeholder="Ex: 8" value={form.pourcentage_avance} onChange={(e) => setForm({ ...form, pourcentage_avance: e.target.value })} required />
             </div>
           </div>
 
@@ -380,10 +385,21 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
             <Label htmlFor="description">Description</Label>
             <Textarea
               id="description"
-              placeholder="Décrivez les équipements, l'état du terrain, etc."
+              placeholder="Décrivez l'ambiance, l'accès, les consignes…"
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               rows={3}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Commodités &amp; services inclus</Label>
+            <p className="text-xs text-muted-foreground">
+              Coche les services proposés — affichés sur la fiche détaillée du joueur.
+            </p>
+            <CommoditesPicker
+              value={form.commodites}
+              onChange={(commodites) => setForm({ ...form, commodites })}
             />
           </div>
 

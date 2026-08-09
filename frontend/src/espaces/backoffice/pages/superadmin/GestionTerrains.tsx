@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Loader2, Upload } from "lucide-react";
 import { superAdminApi } from "@/services/superAdminApi";
+import CommoditesPicker from "@/components/CommoditesPicker";
+import type { CommoditeId } from "@/lib/commodites";
 
 const emptyForm = {
   nom: "",
@@ -10,7 +12,7 @@ const emptyForm = {
   taille: "11v11",
   prix_heure: "",
   prix_moitie: "",
-  pourcentage_avance: "12.5",
+  pourcentage_avance: "8",
   modele_revenus: "commission",
   commission_pourcentage: "10",
   abonnement_montant: "",
@@ -19,6 +21,7 @@ const emptyForm = {
   longitude: "",
   photos: "",
   proprietaire_id: "",
+  commodites: [] as CommoditeId[],
 };
 
 function revenueLabel(terrain: any) {
@@ -65,7 +68,7 @@ export default function GestionTerrains() {
         prix_heure: prixEntier,
         prix_entier: prixEntier,
         prix_moitie: Number(form.prix_moitie || prixEntier * 0.6),
-        pourcentage_avance: Number(form.pourcentage_avance || 12.5),
+        pourcentage_avance: Number(form.pourcentage_avance || 8),
         commission_pourcentage:
           form.modele_revenus === "commission" ? Number(form.commission_pourcentage || 0) : 0,
         abonnement_montant:
@@ -282,6 +285,16 @@ export default function GestionTerrains() {
               </option>
             ))}
           </select>
+          <div className="sm:col-span-2 rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 bg-white">
+            <p className="text-sm font-medium mb-1">Commodités &amp; services inclus</p>
+            <p className="text-xs text-[var(--color-text-muted)] mb-3">
+              Affichés sur la fiche détaillée joueur.
+            </p>
+            <CommoditesPicker
+              value={form.commodites}
+              onChange={(commodites) => setForm({ ...form, commodites })}
+            />
+          </div>
           <button
             type="submit"
             disabled={saving}
@@ -313,7 +326,7 @@ export default function GestionTerrains() {
                   {t.proprietaire_nom || "Sans proprietaire"}
                 </p>
                 <p className="text-xs text-[var(--color-text-secondary)] mt-1">
-                  Avance {Number(t.pourcentage_avance || 12.5).toLocaleString()}% - {revenueLabel(t)}
+                  Avance {Number(t.pourcentage_avance || 8).toLocaleString()}% - {revenueLabel(t)}
                 </p>
               </div>
               <span
@@ -390,7 +403,7 @@ export default function GestionTerrains() {
                 </td>
                 <td>{t.proprietaire_nom || "-"}</td>
                 <td>{revenueLabel(t)}</td>
-                <td>{Number(t.pourcentage_avance || 12.5).toLocaleString()}%</td>
+                <td>{Number(t.pourcentage_avance || 8).toLocaleString()}%</td>
                 <td>
                   <span
                     className={`badge-status ${t.is_active ? "badge-status-actif" : "badge-status-suspendu"}`}

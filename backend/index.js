@@ -2,6 +2,7 @@ require('dotenv').config();
 require('./whatsappClient');
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { getDb, queryAll, queryOne, runSql, saveDb, transaction } = require('./database');
@@ -31,6 +32,15 @@ const { logActivite } = require('./services/auditService');
 const scoreService = require('./services/scoreService');
 const path = require('path');
 const logger = require('./logger');
+const {
+  authMiddleware,
+  requireRole,
+  genererAccessToken,
+  genererRefreshToken,
+  hashRefreshToken,
+  JWT_SECRET,
+  JWT_REFRESH_SECRET,
+} = require('./middleware/auth');
 let cron = null;
 try {
   cron = require('node-cron');
@@ -40,7 +50,73 @@ try {
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'terrainsn_secret_key_2026';
+
+function refreshTableFor(accountType) {
+  if (accountType === 'proprietaire') return 'proprietaires';
+  if (accountType === 'employe') return 'employes';
+  return 'users';
+}
+
+function setRefreshCookie(res, refreshToken) {
+  res.cookie('refresh_token', refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    path: '/',
+  });
+}
+
+function clearRefreshCookie(res) {
+  res.clearCookie('refresh_token', { path: '/' });
+}
+
+function issueAuthTokens(res, db, tokenPayload) {
+  const accessToken = genererAccessToken(tokenPayload);
+  const refreshToken = genererRefreshToken(tokenPayload);
+  const table = refreshTableFor(tokenPayload.accountType || 'user');
+  runSql(
+    db,
+    `UPDATE ${table} SET refresh_token = ?, refresh_token_expire_at = datetime('now', '+30 days') WHERE id = ?`,
+    [hashRefreshToken(refreshToken), tokenPayload.id]
+  );
+  setRefreshCookie(res, refreshToken);
+  return accessToken;
+}
+
+function findAccountByRefreshToken(db, table, userId, refreshToken) {
+  const hashed = hashRefreshToken(refreshToken);
+  // Priorité au hash ; fallback legacy (token en clair) le temps de la bascule
+  return (
+    queryOne(
+      db,
+      `SELECT * FROM ${table}
+       WHERE id = ?
+         AND refresh_token = ?
+         AND refresh_token_expire_at > datetime('now')`,
+      [userId, hashed]
+    ) ||
+    queryOne(
+      db,
+      `SELECT * FROM ${table}
+       WHERE id = ?
+         AND refresh_token = ?
+         AND refresh_token_expire_at > datetime('now')`,
+      [userId, refreshToken]
+    )
+  );
+}
+
+function isAccountBlocked(account, accountType) {
+  if (!account) return true;
+  if (accountType === 'proprietaire') {
+    const statut = String(account.statut || '').toLowerCase();
+    return statut === 'bloque' || statut === 'suspendu' || statut === 'inactif';
+  }
+  if (Number(account.is_active) === 0) return true;
+  const statut = String(account.statut || '').toLowerCase();
+  return statut === 'bloque' || statut === 'suspendu';
+}
 
 function profileTableFor(accountType) {
   if (accountType === 'proprietaire') return 'proprietaires';
@@ -61,7 +137,7 @@ function selectProfileAccount(db, reqUser) {
       must_change_password, created_at
       FROM employes WHERE id = ?`, [reqUser.id]);
   }
-  return queryOne(db, `SELECT id, nom, prenom, email, telephone, role, terrain_id, is_active,
+  return queryOne(db, `SELECT id, nom, prenom, email, telephone, role, terrain_id, is_active, statut,
     quartier, date_naissance, bio, photo_url, must_change_password, created_at
     FROM users WHERE id = ?`, [reqUser.id]);
 }
@@ -173,7 +249,9 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
     return callback(null, false);
   },
+  credentials: true,
 }));
+app.use(cookieParser());
 app.use(express.json({ limit: '8mb' }));
 app.use('/uploads', express.static(UPLOAD_ROOT));
 app.use((err, req, res, next) => {
@@ -211,36 +289,8 @@ const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 12, keyPrefix: 
 const otpRateLimit = rateLimit({ windowMs: 10 * 60 * 1000, max: 5, keyPrefix: 'otp' });
 
 // ============================================================
-// MIDDLEWARE AUTH
+// MIDDLEWARE AUTH (voir backend/middleware/auth.js)
 // ============================================================
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token manquant' });
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    const isPasswordChangeFlow =
-      req.path === '/api/auth/change-password' ||
-      req.path === '/api/auth/me' ||
-      req.path === '/api/profil/password' ||
-      (req.path.startsWith('/api/profil/') && (req.method === 'GET' || req.path === '/api/profil/photo'));
-    if (decoded.must_change_password && !isPasswordChangeFlow) {
-      return res.status(403).json({ error: 'Changement de mot de passe requis', code: 'PASSWORD_CHANGE_REQUIRED' });
-    }
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Token invalide' });
-  }
-}
-
-function requireRole(...roles) {
-  return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Accès interdit' });
-    }
-    next();
-  };
-}
 
 // Middleware optionnel : attache l'utilisateur si un token valide est présent,
 // mais laisse passer sans erreur s'il n'y a pas de token (pour les joueurs non connectés)
@@ -314,7 +364,7 @@ app.post('/api/auth/register', otpRateLimit, async (req, res) => {
       userId = result.lastInsertRowid;
     }
 
-    await otpService.createAndSendOtp(db, { telephone: phoneDigits, userId });
+    await otpService.createAndSendOtp(db, { telephone: phoneDigits, userId, prenom });
 
     res.status(201).json({
       success: true,
@@ -359,13 +409,15 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       telephone_verified: 1,
     };
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email, telephone: user.telephone, role: 'joueur', accountType: 'user' },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const accessToken = issueAuthTokens(res, db, {
+      id: user.id,
+      email: user.email,
+      telephone: user.telephone,
+      role: 'joueur',
+      accountType: 'user',
+    });
 
-    res.json({ success: true, user: safeUser, token });
+    res.json({ success: true, user: safeUser, token: accessToken, accessToken });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -383,7 +435,7 @@ app.post('/api/auth/resend-otp', otpRateLimit, async (req, res) => {
     }
 
     const phoneDigits = otpService.normalizeTelephone(telephone);
-    const user = queryAll(db, 'SELECT id, telephone, telephone_verified FROM users')
+    const user = queryAll(db, 'SELECT id, prenom, telephone, telephone_verified FROM users')
       .find((u) => otpService.normalizeTelephone(u.telephone) === phoneDigits);
 
     if (!user) return res.status(404).json({ error: 'Aucun compte en attente pour ce numéro' });
@@ -391,7 +443,7 @@ app.post('/api/auth/resend-otp', otpRateLimit, async (req, res) => {
       return res.status(400).json({ error: 'Ce numéro est déjà vérifié. Connectez-vous.' });
     }
 
-    await otpService.createAndSendOtp(db, { telephone: phoneDigits, userId: user.id });
+    await otpService.createAndSendOtp(db, { telephone: phoneDigits, userId: user.id, prenom: user.prenom });
 
     res.json({ success: true, message: 'Code renvoyé' });
   } catch (err) {
@@ -460,6 +512,11 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
     if (!bcrypt.compareSync(password, account.password_hash)) {
       return res.status(401).json({ error: 'Identifiants incorrects' });
     }
+    if (isAccountBlocked(account, resolvedType || 'user')) {
+      return res.status(403).json({
+        error: 'Ton compte a été suspendu. Contacte le support.',
+      });
+    }
 
     // Joueurs inscrits via OTP : bloquer tant que le téléphone n'est pas vérifié
     if (
@@ -492,10 +549,14 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
       tokenPayload.proprietaire_id = account.id;
     }
 
-    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
+    const accessToken = issueAuthTokens(res, db, tokenPayload);
 
     const { password_hash, ...safeAccount } = account;
-    res.json({ user: { ...safeAccount, role, accountType: resolvedType || 'user' }, token });
+    res.json({
+      user: { ...safeAccount, role, accountType: resolvedType || 'user' },
+      token: accessToken,
+      accessToken,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -557,6 +618,11 @@ app.post('/api/backoffice/auth/login', authRateLimit, async (req, res) => {
     if (!bcrypt.compareSync(password, account.password_hash)) {
       return res.status(401).json({ error: 'Identifiants incorrects' });
     }
+    if (isAccountBlocked(account, resolvedType)) {
+      return res.status(403).json({
+        error: 'Ton compte a été suspendu. Contacte le support.',
+      });
+    }
 
     if (role === 'joueur' || role === 'user') {
       return res.status(403).json({ error: 'Accès non autorisé' });
@@ -578,12 +644,123 @@ app.post('/api/backoffice/auth/login', authRateLimit, async (req, res) => {
       tokenPayload.proprietaire_id = account.id;
     }
 
-    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '24h' });
+    const accessToken = issueAuthTokens(res, db, tokenPayload);
     const { password_hash, ...safeAccount } = account;
-    res.json({ user: { ...safeAccount, role, accountType: resolvedType }, token });
+    res.json({ user: { ...safeAccount, role, accountType: resolvedType }, token: accessToken, accessToken });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Renouvellement silencieux de l'access token
+app.post('/api/auth/refresh', async (req, res) => {
+  try {
+    const refreshToken = req.cookies?.refresh_token;
+    if (!refreshToken) {
+      return res.status(401).json({ error: 'Session expirée' });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+    } catch {
+      clearRefreshCookie(res);
+      return res.status(401).json({ error: 'Session expirée' });
+    }
+
+    const db = await getDb();
+    const accountType = payload.accountType || 'user';
+    const table = refreshTableFor(accountType);
+    const account = findAccountByRefreshToken(db, table, payload.id, refreshToken);
+
+    if (!account) {
+      clearRefreshCookie(res);
+      return res.status(401).json({ error: 'Session invalide' });
+    }
+
+    if (isAccountBlocked(account, accountType)) {
+      clearRefreshCookie(res);
+      return res.status(403).json({
+        error: 'Ton compte a été suspendu. Contacte le support.',
+      });
+    }
+
+    // Migration progressive : re-hasher si l'ancien token clair était encore en base
+    if (account.refresh_token === refreshToken) {
+      runSql(
+        db,
+        `UPDATE ${table} SET refresh_token = ? WHERE id = ?`,
+        [hashRefreshToken(refreshToken), account.id]
+      );
+    }
+
+    let role = account.role || (accountType === 'proprietaire' ? 'proprietaire' : accountType === 'employe' ? 'gerant' : 'joueur');
+    if (role === 'superadmin') role = 'super_admin';
+
+    const tokenPayload = {
+      id: account.id,
+      email: account.email,
+      telephone: account.telephone,
+      role,
+      accountType,
+      must_change_password: Boolean(account.must_change_password),
+    };
+    if (accountType === 'employe') {
+      tokenPayload.terrain_id = account.terrain_id;
+      tokenPayload.proprietaire_id = account.proprietaire_id;
+    }
+    if (accountType === 'proprietaire') {
+      tokenPayload.proprietaire_id = account.id;
+    }
+
+    const accessToken = genererAccessToken(tokenPayload);
+    res.json({ accessToken, token: accessToken });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const db = await getDb();
+    let userId = null;
+    let accountType = 'user';
+
+    const access = req.headers.authorization?.split(' ')[1];
+    if (access) {
+      try {
+        const decoded = jwt.verify(access, JWT_SECRET, { ignoreExpiration: true });
+        userId = decoded.id;
+        accountType = decoded.accountType || 'user';
+      } catch {
+        // ignore — on retombe sur le cookie
+      }
+    }
+
+    const refreshToken = req.cookies?.refresh_token;
+    if (!userId && refreshToken) {
+      try {
+        const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+        userId = decoded.id;
+        accountType = decoded.accountType || 'user';
+      } catch {
+        // cookie invalide
+      }
+    }
+
+    if (userId) {
+      const table = refreshTableFor(accountType);
+      runSql(db, `UPDATE ${table} SET refresh_token = NULL, refresh_token_expire_at = NULL WHERE id = ?`, [userId]);
+    }
+
+    clearRefreshCookie(res);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    clearRefreshCookie(res);
+    res.json({ success: true });
   }
 });
 
@@ -617,11 +794,95 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
 // TERRAINS
 // ============================================================
 
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+const JOURS_MAP = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+
+/** Compte les créneaux libres pour un terrain à une date (générés depuis horaires + résas). */
+function countCreneauxLibres(db, terrainId, dateStr) {
+  const d = new Date(`${dateStr}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return { libres: 0, total: 0, ferme: true };
+  const jour = JOURS_MAP[d.getDay()];
+  const horaire = queryOne(db, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [terrainId, jour]);
+  if (!horaire || !horaire.est_ouvert) return { libres: 0, total: 0, ferme: true };
+
+  const startHour = parseInt(String(horaire.heure_debut).split(':')[0], 10);
+  const endHour = parseInt(String(horaire.heure_fin).split(':')[0], 10);
+  if (!Number.isFinite(startHour) || !Number.isFinite(endHour) || endHour <= startHour) {
+    return { libres: 0, total: 0, ferme: true };
+  }
+
+  const reservations = queryAll(
+    db,
+    "SELECT heure_debut, heure_fin FROM reservations WHERE terrain_id = ? AND date = ? AND statut IN ('confirme', 'acceptee', 'en_attente', 'en_attente_paiement')",
+    [terrainId, dateStr]
+  );
+  const blocages = queryAll(
+    db,
+    'SELECT heure_debut, heure_fin FROM blocages_creneaux WHERE terrain_id = ? AND date = ?',
+    [terrainId, dateStr]
+  );
+
+  let libres = 0;
+  const total = endHour - startHour;
+  for (let h = startHour; h < endHour; h++) {
+    const slot = `${String(h).padStart(2, '0')}:00`;
+    const isReserved = reservations.some((r) => slot >= r.heure_debut && slot < r.heure_fin);
+    const isBlocked = blocages.some((b) => slot >= b.heure_debut && slot < b.heure_fin);
+    if (isReserved || isBlocked) continue;
+
+    const creneau = queryOne(
+      db,
+      'SELECT statut FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ?',
+      [terrainId, dateStr, slot]
+    );
+    if (!creneau || creneau.statut === 'libre') libres += 1;
+  }
+  return { libres, total, ferme: false };
+}
+
+function normalizeTerrainType(type) {
+  return String(type || '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/vs/g, 'v');
+}
+
+function serializeCommodites(raw) {
+  if (Array.isArray(raw)) {
+    return JSON.stringify(raw.map(String).filter(Boolean));
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return JSON.stringify(parsed.map(String).filter(Boolean));
+    } catch {
+      /* ignore */
+    }
+  }
+  return '[]';
+}
+
 // Liste publique
 app.get('/api/terrains', async (req, res) => {
   try {
     const db = await getDb();
-    const { ville, sport, type, prix_min, prix_max, search } = req.query;
+    const {
+      ville, sport, type, prix_min, prix_max, search,
+      lat, lng, distance_max, quartier, surface,
+      date, heure, dates,
+    } = req.query;
+
     let query = `
       SELECT t.*, 
         COALESCE(ROUND(AVG(a.note), 1), 0) as note,
@@ -630,20 +891,123 @@ app.get('/api/terrains', async (req, res) => {
       FROM terrains t
       LEFT JOIN avis a ON a.terrain_id = t.id
       LEFT JOIN proprietaires p ON p.id = t.proprietaire_id
-      WHERE 1=1
+      WHERE COALESCE(t.is_active, 1) = 1
     `;
     const params = [];
 
     if (ville && ville !== 'Toutes') { query += ' AND t.ville = ?'; params.push(ville); }
     if (sport) { query += ' AND t.sport = ?'; params.push(sport); }
-    if (type && type !== 'Tous') { query += ' AND t.type = ?'; params.push(type); }
+
+    const typeVal = String(type || '').trim();
+    if (typeVal && typeVal !== 'Tous') {
+      if (typeVal === 'demi_terrain' || typeVal === 'moitie') {
+        query += ' AND COALESCE(t.prix_moitie, 0) > 0';
+      } else if (typeVal === 'terrain_entier' || typeVal === 'entier') {
+        query += ' AND COALESCE(t.prix_entier, t.prix_heure, 0) > 0';
+      } else {
+        // 5v5 / 7v7 / 11v11 — tolère "5 vs 5", "5v5", etc.
+        const normalized = normalizeTerrainType(typeVal);
+        query += ` AND REPLACE(REPLACE(LOWER(COALESCE(t.type,'')), ' ', ''), 'vs', 'v') LIKE ?`;
+        params.push(`%${normalized}%`);
+      }
+    }
+
     if (prix_min) { query += ' AND t.prix_heure >= ?'; params.push(Number(prix_min)); }
-    if (prix_max) { query += ' AND t.prix_heure <= ?'; params.push(Number(prix_max)); }
-    if (search) { query += ' AND (t.nom LIKE ? OR t.ville LIKE ? OR t.adresse LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    if (prix_max) { query += ' AND COALESCE(t.prix_entier, t.prix_heure) <= ?'; params.push(Number(prix_max)); }
+    if (quartier) {
+      query += ' AND (t.adresse LIKE ? OR t.ville LIKE ? OR t.nom LIKE ?)';
+      const q = `%${quartier}%`;
+      params.push(q, q, q);
+    }
+    if (search) {
+      query += ' AND (t.nom LIKE ? OR t.ville LIKE ? OR t.adresse LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
 
-    query += ' GROUP BY t.id ORDER BY note DESC, avis_count DESC';
+    // Surface stockée en description côté admin (pas de colonne dédiée)
+    const surfaceVal = String(surface || '').trim().toLowerCase();
+    if (surfaceVal) {
+      if (surfaceVal.includes('synth')) {
+        query += ` AND LOWER(COALESCE(t.description,'')) LIKE '%synth%'`;
+      } else if (surfaceVal.includes('naturel')) {
+        query += ` AND (LOWER(COALESCE(t.description,'')) LIKE '%naturel%' OR LOWER(COALESCE(t.description,'')) LIKE '%gazon_naturel%')`;
+      } else if (surfaceVal.includes('beton') || surfaceVal.includes('béton')) {
+        query += ` AND LOWER(COALESCE(t.description,'')) LIKE '%beton%'`;
+      } else {
+        query += ` AND LOWER(COALESCE(t.description,'')) LIKE ?`;
+        params.push(`%${surfaceVal}%`);
+      }
+    }
 
-    const terrains = queryAll(db, query, params);
+    // Dates ciblées pour enrichissement dispo (Demain / week-end)
+    const dateList = [];
+    if (dates) {
+      String(dates)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .forEach((d) => dateList.push(d));
+    } else if (date) {
+      dateList.push(String(date));
+    }
+
+    // Ancien filtre EXISTS désactivé : les créneaux sont souvent créés à la demande.
+    // On filtre après enrichissement sur creneaux_libres.
+    void heure;
+
+    const userLat = parseFloat(lat);
+    const userLng = parseFloat(lng);
+    const hasGeo = Number.isFinite(userLat) && Number.isFinite(userLng);
+
+    query += hasGeo
+      ? ' GROUP BY t.id'
+      : ' GROUP BY t.id ORDER BY t.nom COLLATE NOCASE ASC';
+
+    let terrains = queryAll(db, query, params);
+
+    if (dateList.length > 0) {
+      terrains = terrains.map((t) => {
+        let libres = 0;
+        let total = 0;
+        let ferme = true;
+        for (const d of dateList) {
+          const info = countCreneauxLibres(db, t.id, d);
+          libres += info.libres;
+          total += info.total;
+          if (!info.ferme) ferme = false;
+        }
+        return { ...t, creneaux_libres: libres, creneaux_total: total, ferme_date: ferme };
+      });
+      // Ouverts avec créneaux d'abord, puis presque complets, puis complets/fermés
+      terrains.sort((a, b) => {
+        const score = (t) => {
+          if (t.ferme_date) return -1;
+          return Number(t.creneaux_libres) || 0;
+        };
+        return score(b) - score(a);
+      });
+    }
+
+    if (hasGeo) {
+      const distanceMax = parseFloat(distance_max);
+      const maxKm = Number.isFinite(distanceMax) && distanceMax > 0 ? distanceMax : 10;
+      terrains = terrains
+        .map((t) => {
+          const tLat = Number(t.latitude);
+          const tLng = Number(t.longitude);
+          const distance_km = Number.isFinite(tLat) && Number.isFinite(tLng)
+            ? Math.round(haversineKm(userLat, userLng, tLat, tLng) * 10) / 10
+            : null;
+          return { ...t, distance_km };
+        })
+        .filter((t) => t.distance_km === null || t.distance_km <= maxKm)
+        .sort((a, b) => {
+          if (a.distance_km === null) return 1;
+          if (b.distance_km === null) return -1;
+          return a.distance_km - b.distance_km;
+        });
+    }
+
     res.json(terrains);
   } catch (err) {
     console.error(err);
@@ -733,15 +1097,15 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
 app.post('/api/terrains', authMiddleware, requireRole('proprietaire'), async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone } = req.body;
+    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone, commodites } = req.body;
     const prixEntier = Number(prix_entier || prix_heure);
     const prixMoitie = Number(prix_moitie || prixEntier * 0.6);
-    const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : 12.5));
+    const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : 8));
     const avanceTerrain = Math.round((prixEntier * pourcentageAvance) / 100);
     const result = runSql(db, `INSERT INTO terrains
-      (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, description, telephone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [req.user.id, nom, adresse, ville, sport || 'foot', type || '11 vs 11', prixEntier, prixMoitie, prixEntier, avanceTerrain, avanceTerrain, pourcentageAvance, 'commission', 0, 0, 0, Number.isFinite(Number(latitude)) ? Number(latitude) : null, Number.isFinite(Number(longitude)) ? Number(longitude) : null, description, telephone]);
+      (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, description, telephone, commodites)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.id, nom, adresse, ville, sport || 'foot', type || '11v11', prixEntier, prixMoitie, prixEntier, avanceTerrain, avanceTerrain, pourcentageAvance, 'commission', 0, 0, 0, Number.isFinite(Number(latitude)) ? Number(latitude) : null, Number.isFinite(Number(longitude)) ? Number(longitude) : null, description, telephone, serializeCommodites(commodites)]);
     
     const jours = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
     for (const jour of jours) {
@@ -761,13 +1125,15 @@ app.put('/api/terrains/:id', authMiddleware, requireRole('proprietaire'), async 
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ? AND proprietaire_id = ?', [Number(req.params.id), req.user.id]);
     if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
-    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone, is_active } = req.body;
+    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone, is_active, commodites } = req.body;
     const prixEntier = Number(prix_entier || prix_heure || terrain.prix_entier || terrain.prix_heure);
-    const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : terrain.pourcentage_avance || 12.5));
+    const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : terrain.pourcentage_avance || 8));
     const avanceTerrain = Math.round((prixEntier * pourcentageAvance) / 100);
+    const commoditesJson =
+      commodites !== undefined ? serializeCommodites(commodites) : (terrain.commodites || '[]');
     runSql(db, `UPDATE terrains SET nom=?, adresse=?, ville=?, sport=?, type=?, prix_heure=?, prix_moitie=?, prix_entier=?,
-      montant_acompte=?, acompte=?, pourcentage_avance=?, latitude=?, longitude=?, description=?, telephone=?, is_active=? WHERE id=?`,
-      [nom || terrain.nom, adresse || terrain.adresse, ville || terrain.ville, sport || terrain.sport, type || terrain.type, prixEntier, Number(prix_moitie || terrain.prix_moitie || prixEntier * 0.6), prixEntier, avanceTerrain, avanceTerrain, pourcentageAvance, latitude === '' || latitude == null ? terrain.latitude : (Number.isFinite(Number(latitude)) ? Number(latitude) : null), longitude === '' || longitude == null ? terrain.longitude : (Number.isFinite(Number(longitude)) ? Number(longitude) : null), description || terrain.description, telephone || terrain.telephone, is_active !== undefined ? is_active : terrain.is_active, terrain.id]);
+      montant_acompte=?, acompte=?, pourcentage_avance=?, latitude=?, longitude=?, description=?, telephone=?, is_active=?, commodites=? WHERE id=?`,
+      [nom || terrain.nom, adresse || terrain.adresse, ville || terrain.ville, sport || terrain.sport, type || terrain.type, prixEntier, Number(prix_moitie || terrain.prix_moitie || prixEntier * 0.6), prixEntier, avanceTerrain, avanceTerrain, pourcentageAvance, latitude === '' || latitude == null ? terrain.latitude : (Number.isFinite(Number(latitude)) ? Number(latitude) : null), longitude === '' || longitude == null ? terrain.longitude : (Number.isFinite(Number(longitude)) ? Number(longitude) : null), description || terrain.description, telephone || terrain.telephone, is_active !== undefined ? is_active : terrain.is_active, commoditesJson, terrain.id]);
     
     const updated = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrain.id]);
     res.json(updated);
@@ -1135,13 +1501,15 @@ function reservationIdDepuisReference(refCommand) {
   return match ? Number(match[1]) : 0;
 }
 
+const POURCENTAGE_AVANCE_DEFAUT = 8;
+
 function calculerMontantAvance(terrain, prixChoisi) {
   const montant = Number(prixChoisi || 0);
   const pourcentageAvance = Number(terrain?.pourcentage_avance);
-  if (Number.isFinite(pourcentageAvance) && pourcentageAvance > 0) {
-    return Math.min(montant, Math.round((montant * pourcentageAvance) / 100));
-  }
-  return Math.min(montant, Number(terrain?.acompte || terrain?.montant_acompte || 5000));
+  const taux = Number.isFinite(pourcentageAvance) && pourcentageAvance > 0
+    ? pourcentageAvance
+    : POURCENTAGE_AVANCE_DEFAUT;
+  return Math.min(montant, Math.round((montant * taux) / 100));
 }
 
 function calculerCommissionPrelevee(terrain, montantAvance) {

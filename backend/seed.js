@@ -29,17 +29,22 @@ async function seed() {
 
   // --- TERRAINS ---
   const terrainsData = [
-    [1, 'Complexe Sportif Pikine', 'Rue 10, Pikine', 'Dakar', 'foot', '11 vs 11', 5000, 'Terrain en gazon synthétique de dernière génération avec éclairage LED.', '+221 77 123 45 67', '[]', 1],
-    [1, 'Terrain Almadies', 'Les Almadies', 'Dakar', 'foot', '7 vs 7', 7500, 'Petit terrain en gazon synthétique idéal pour les matchs 7v7.', '+221 77 234 56 78', '[]', 1],
-    [2, 'Stade Municipal Saly', 'Saly Portudal', 'Thiès', 'foot', '11 vs 11', 6000, 'Grand terrain avec vestiaires et parking gratuit.', '+221 77 345 67 89', '[]', 1],
-    [1, 'Foot Indoor Ouakam', 'Ouakam', 'Dakar', 'foot', '5 vs 5', 4000, 'Terrain indoor couvert, jouable même sous la pluie.', '+221 77 456 78 90', '[]', 0],
-    [2, 'Stade Demba Diop', 'Plateau', 'Dakar', 'foot', '11 vs 11', 8000, 'Terrain homologué avec tribunes et vestiaires modernes.', '+221 77 567 89 01', '[]', 1],
-    [3, 'Terrain Guédiawaye', 'Guédiawaye', 'Dakar', 'foot', '7 vs 7', 3500, 'Terrain de quartier bien entretenu, ambiance conviviale.', '+221 77 678 90 12', '[]', 1],
-    [1, 'Complexe Sportif Thiaroye', 'Thiaroye', 'Dakar', 'foot', '11 vs 11', 4500, 'Deux terrains côte à côte avec buvette sur place.', '+221 77 789 01 23', '[]', 1],
-    [3, 'Terrain Saint-Louis Centre', 'Centre-ville', 'Saint-Louis', 'foot', '7 vs 7', 3000, 'Terrain en plein cœur de Saint-Louis avec vue sur le fleuve.', '+221 77 890 12 34', '[]', 1],
+    // proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites
+    [1, 'Complexe Sportif Pikine', 'Rue 10, Pikine', 'Dakar', 'foot', '11v11', 5000, 'Terrain en gazon synthétique de dernière génération.', '+221 77 123 45 67', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking', 'buvette'])],
+    [1, 'Terrain Almadies', 'Les Almadies', 'Dakar', 'foot', '7v7', 7500, 'Petit terrain idéal pour les matchs 7v7.', '+221 77 234 56 78', '[]', 1, JSON.stringify(['dossards', 'ballon', 'eau', 'vestiaires'])],
+    [2, 'Stade Municipal Saly', 'Saly Portudal', 'Thiès', 'foot', '11v11', 6000, 'Grand terrain avec vestiaires et parking.', '+221 77 345 67 89', '[]', 1, JSON.stringify(['vestiaires', 'toilettes', 'parking', 'tribune'])],
+    [1, 'Foot Indoor Ouakam', 'Ouakam', 'Dakar', 'foot', '5v5', 4000, 'Terrain indoor couvert.', '+221 77 456 78 90', '[]', 0, JSON.stringify(['dossards', 'eau', 'vestiaires'])],
+    [2, 'Stade Demba Diop', 'Plateau', 'Dakar', 'foot', '11v11', 8000, 'Terrain homologué avec tribunes.', '+221 77 567 89 01', '[]', 1, JSON.stringify(['vestiaires', 'toilettes', 'tribune', 'parking', 'buvette', 'secours'])],
+    [3, 'Terrain Guédiawaye', 'Guédiawaye', 'Dakar', 'foot', '7v7', 3500, 'Terrain de quartier bien entretenu.', '+221 77 678 90 12', '[]', 1, JSON.stringify(['eau', 'parking', 'priere'])],
+    [1, 'Complexe Sportif Thiaroye', 'Thiaroye', 'Dakar', 'foot', '11v11', 4500, 'Deux terrains côte à côte avec buvette.', '+221 77 789 01 23', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'buvette', 'glacons'])],
+    [3, 'Terrain Saint-Louis Centre', 'Centre-ville', 'Saint-Louis', 'foot', '7v7', 3000, 'Terrain en plein cœur de Saint-Louis.', '+221 77 890 12 34', '[]', 1, JSON.stringify(['eau', 'vestiaires', 'parking'])],
+    [1, 'Obélisque', 'Place de l\'Obélisque, Plateau', 'Dakar', 'foot', '5v5', 8000, 'Terrain très demandé près de l\'Obélisque — réservation anticipée conseillée.', '+221 77 900 11 22', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking', 'toilettes', 'buvette'])],
   ];
   for (const t of terrainsData) {
-    db.run('INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', t);
+    db.run(
+      'INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      t
+    );
   }
 
   // --- EMPLOYES ---
@@ -56,12 +61,37 @@ async function seed() {
 
   // --- HORAIRES (pour chaque terrain, 7 jours) ---
   const jours = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
-  for (let terrainId = 1; terrainId <= 8; terrainId++) {
+  const terrainCount = terrainsData.length;
+  for (let terrainId = 1; terrainId <= terrainCount; terrainId++) {
     for (const jour of jours) {
       const isWeekend = (jour === 'samedi' || jour === 'dimanche');
       const debut = isWeekend ? '09:00' : '08:00';
-      const fin = jour === 'vendredi' || jour === 'samedi' ? '23:00' : jour === 'dimanche' ? '20:00' : '22:00';
+      const fin = jour === 'vendredi' || jour === 'samedi' ? '23:00' : jour === 'dimanche' ? '22:00' : '23:00';
       db.run('INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, debut, fin]);
+    }
+  }
+
+  // Créneaux soir démo (demain → +3 jours) pour tous les terrains
+  function toLocalISO(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  for (let terrainId = 1; terrainId <= terrainCount; terrainId++) {
+    for (let dayOffset = 1; dayOffset <= 3; dayOffset++) {
+      const d = new Date();
+      d.setHours(12, 0, 0, 0);
+      d.setDate(d.getDate() + dayOffset);
+      const dateStr = toLocalISO(d);
+      for (const hour of [18, 19, 20, 21]) {
+        const debut = `${String(hour).padStart(2, '0')}:00`;
+        const fin = `${String(hour + 1).padStart(2, '0')}:00`;
+        db.run(
+          "INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, 'libre')",
+          [terrainId, dateStr, debut, fin]
+        );
+      }
     }
   }
 
@@ -90,6 +120,9 @@ async function seed() {
     [null, 3, 'Moussa Ba', 2, 4, 'Terrain correct, bien situé aux Almadies.'],
     [null, 5, 'Ibrahima Fall', 3, 5, 'Vestiaires propres, terrain de qualité.'],
     [null, 6, 'Cheikh Mbaye', 6, 4, 'Bonne ambiance de quartier.'],
+    [null, 1, 'Abdou Sow', 9, 5, 'Obélisque au top — dossards et eau inclus !'],
+    [null, 2, 'Fatou Diallo', 9, 4, 'Pratique, parking sécurisé.'],
+    [null, 3, 'Moussa Ba', 9, 5, 'On réserve toujours la veille ici.'],
   ];
   for (const a of avisData) {
     db.run('INSERT INTO avis (reservation_id, joueur_id, joueur_nom, terrain_id, note, commentaire) VALUES (?, ?, ?, ?, ?, ?)', a);

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { profilApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { normalizeRole } from "@/auth/roles";
+import { fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
 
 export type ProfileAccount = {
   prenom?: string;
@@ -93,11 +94,11 @@ export function ProfilePhoto({ account, onUpdated }: { account?: ProfileAccount 
   };
 
   return (
-    <div className="relative mx-auto w-[110px] h-[110px]">
+    <div className="relative mx-auto w-[100px] h-[100px]">
       <button
         type="button"
         onClick={() => fileRef.current?.click()}
-        className="w-[110px] h-[110px] rounded-full overflow-hidden bg-[var(--color-primary)] text-white border-4 border-white shadow-sm inline-flex items-center justify-center"
+        className="w-[100px] h-[100px] rounded-full overflow-hidden bg-[var(--color-primary)] text-white border-4 border-white shadow-[var(--shadow-md)] inline-flex items-center justify-center"
         aria-label="Modifier la photo de profil"
       >
         {account?.photo_url ? (
@@ -109,7 +110,7 @@ export function ProfilePhoto({ account, onUpdated }: { account?: ProfileAccount 
       <button
         type="button"
         onClick={() => fileRef.current?.click()}
-        className="absolute bottom-1 right-1 w-6 h-6 rounded-full bg-white border border-[var(--color-border)] shadow-sm inline-flex items-center justify-center text-[var(--color-primary)]"
+        className="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-[var(--color-primary)] shadow-sm inline-flex items-center justify-center text-white"
         aria-label="Choisir une photo"
       >
         <Camera className="w-3.5 h-3.5" />
@@ -134,15 +135,24 @@ export function ProfileShell({
   const displayName = [account?.prenom, account?.nom].filter(Boolean).join(" ").trim() || account?.nom || "Utilisateur";
 
   return (
-    <main className="min-h-screen bg-[var(--color-bg)] px-4 py-8">
-      <div className="mx-auto w-full max-w-md">
+    <main className="min-h-screen bg-[var(--color-bg)] page-enter">
+      <div className="relative h-[180px] bg-[var(--color-primary)] overflow-hidden">
+        <img
+          src={fieldImageForId(1)}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover opacity-30"
+          style={{ filter: "brightness(0.5)" }}
+          aria-hidden
+        />
+      </div>
+      <div className="mx-auto w-full max-w-md px-4 -mt-[50px] relative z-[1] pb-10">
         <section className="text-center">
           <ProfilePhoto account={{ ...account, photo_url: photoUrl || account?.photo_url }} onUpdated={setPhotoUrl} />
-          <h1 className="mt-4 text-xl font-bold text-[var(--color-text-primary)]" style={{ fontFamily: "var(--font-display)" }}>
+          <h1 className="mt-14 text-xl font-bold text-[var(--color-text-primary)]" style={{ fontFamily: "var(--font-display)" }}>
             {displayName}
           </h1>
-          <div className="mt-2 inline-flex items-center rounded-full bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] px-3 py-1 text-xs font-semibold text-[var(--color-primary)]">
-            {roleLabel}
+          <div className="mt-2 inline-flex items-center rounded-full bg-[var(--color-primary-glow)] px-3 py-1 text-[12px] font-semibold text-[var(--color-primary)]">
+            {roleLabel === "Joueur" ? "Joueur ⚽" : roleLabel}
           </div>
           {subtitle && <p className="mt-2 text-sm text-[var(--color-text-muted)]">{subtitle}</p>}
         </section>
@@ -155,13 +165,17 @@ export function ProfileShell({
 
 export function StatGrid({ stats }: { stats: { label: string; value: string | number }[] }) {
   return (
-    <section className="mt-8">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-3">Stats</h2>
-      <div className="grid grid-cols-2 gap-3">
-        {stats.map((stat) => (
-          <div key={stat.label} className="glass-card p-4 text-center">
-            <p className="text-2xl font-bold text-[var(--color-text-primary)]" style={{ fontFamily: "var(--font-display)" }}>{stat.value}</p>
-            <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{stat.label}</p>
+    <section className="mt-8 bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] shadow-[var(--shadow-sm)] p-4">
+      <h2 className="text-[12px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-3 border-b border-[var(--color-border)] pb-2">
+        Stats
+      </h2>
+      <div className="grid grid-cols-3 gap-2">
+        {stats.slice(0, 3).map((stat) => (
+          <div key={stat.label} className="text-center py-2">
+            <p className="text-xl font-bold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
+              {stat.value}
+            </p>
+            <p className="mt-1 text-[11px] text-[var(--color-text-muted)] leading-tight">{stat.label}</p>
           </div>
         ))}
       </div>
@@ -220,14 +234,14 @@ export function LogoutBlock() {
   };
 
   return (
-    <section className="mt-10 border-t border-[var(--color-border)] pt-5">
-      <Button type="button" variant="outline" className="w-full min-h-[48px] border-red-500 text-red-600 hover:bg-red-50" onClick={() => setOpen(true)}>
+    <section className="mt-8 border-t border-[var(--color-border)] pt-8">
+      <Button type="button" variant="outline" className="w-full h-12 border-[var(--color-danger)] text-[var(--color-danger)] hover:bg-red-50" onClick={() => setOpen(true)}>
         <LogOut className="w-4 h-4 mr-2" />
-        Se deconnecter
+        Se déconnecter
       </Button>
       {open && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/45 px-4 py-6">
-          <div className="w-full max-w-sm rounded-[var(--radius-lg)] bg-white p-5 shadow-xl">
+          <div className="w-full max-w-sm rounded-[var(--radius-lg)] bg-[var(--surface)] p-5 shadow-xl">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Tu veux vraiment partir ?</h2>

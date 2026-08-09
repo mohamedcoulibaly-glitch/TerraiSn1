@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { queryOne, runSql } = require('./database');
-const { envoyerMessage } = require('./notificationService');
+const { envoyerOTP } = require('./notificationService');
 
 /** Normalise un numéro sénégalais en digits (221XXXXXXXXX ou 9 chiffres locaux). */
 function normalizeTelephone(telephone) {
@@ -32,7 +32,7 @@ async function invalidateOtps(db, telephoneDigits) {
   runSql(db, 'UPDATE auth_otps SET used = 1 WHERE telephone = ? AND used = 0', [telephoneDigits]);
 }
 
-async function createAndSendOtp(db, { telephone, userId }) {
+async function createAndSendOtp(db, { telephone, userId, prenom }) {
   const telephoneDigits = normalizeTelephone(telephone);
   if (!isValidSenegalMobile(telephoneDigits)) {
     throw new Error('Numéro de téléphone sénégalais invalide (format 7X XXX XX XX)');
@@ -49,16 +49,15 @@ async function createAndSendOtp(db, { telephone, userId }) {
     [telephoneDigits, code, userId || null, expiresAt]
   );
 
-  const message = `🔐 Votre code de vérification : ${code}. Valable 10 minutes.`;
   try {
-    await envoyerMessage(formatDisplayPhone(telephoneDigits), message);
+    await envoyerOTP({
+      telephone: formatDisplayPhone(telephoneDigits),
+      prenom: prenom || '',
+      code,
+    });
   } catch (err) {
-    // OTP déjà stocké : on logue le code pour debug / mock partiel
     console.warn(`[OTP] Envoi WhatsApp échoué (${telephoneDigits}): ${err.message}`);
     console.log(`[OTP] Code de vérification : ${code} (valable jusqu'à ${expiresAt})`);
-    if (String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
-      // On ne bloque pas : le code est en DB, verify-otp / resend-otp restent possibles
-    }
   }
 
   return { telephone: telephoneDigits, expiresAt, code };

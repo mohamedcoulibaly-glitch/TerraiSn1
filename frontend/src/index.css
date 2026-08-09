@@ -1,89 +1,249 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600&family=Sora:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  /* ============================================
+     MODE CLAIR — Défaut
+     Inspiré Airbnb / Booking — chaleureux, contrasté
+     ============================================ */
   :root {
-    /* Polices */
-    --font-primary: 'Plus Jakarta Sans', sans-serif;
-    --font-display: 'Sora', sans-serif;
+    --font-primary:        'Plus Jakarta Sans', sans-serif;
+    --font-display:        'Outfit', sans-serif;
 
-    /* Primaire — vert terrain profond */
-    --color-primary:       #0A5C36;
-    --color-primary-light: #1A7A4A;
-    --color-primary-dark:  #063D24;
-
-    /* Accent — or sénégalais */
-    --color-accent:        #C9A84C;
-    --color-accent-light:  #E8C97A;
-
-    /* Surfaces */
-    --color-bg:            #F4F6F9;
-    --color-surface:       #FFFFFF;
-    --color-surface-2:     #EEF1F5;
-    --color-border:        #E2E6ED;
+    /* Fond et surfaces */
+    --bg:                  #F0F4F8;
+    --surface:             #FFFFFF;
+    --surface-2:           #E8EDF3;
+    --surface-3:           #D1DAE6;
+    --border:              #D4DBE6;
+    --border-strong:       #B0BDCC;
 
     /* Texte */
-    --color-text-primary:  #111827;
-    --color-text-secondary:#4B5563;
-    --color-text-muted:    #9CA3AF;
+    --text-primary:        #0D1B2A;
+    --text-secondary:      #3D5166;
+    --text-muted:          #7A8FA6;
+
+    /* Primaire — Vert terrain */
+    --primary:             #059669;
+    --primary-light:       #10B981;
+    --primary-dark:        #047857;
+    --primary-glow:        rgba(5, 150, 105, 0.12);
+    --primary-glow-strong: rgba(5, 150, 105, 0.25);
+
+    /* Accent — Or chaud */
+    --accent:              #D97706;
+    --accent-light:        #F59E0B;
 
     /* Statuts */
-    --color-success:       #0A5C36;
-    --color-warning:       #D97706;
-    --color-danger:        #DC2626;
-    --color-info:          #2563EB;
+    --success:             #059669;
+    --warning:             #EA580C;
+    --danger:              #DC2626;
+    --info:                #2563EB;
 
-    /* Backoffice sidebar */
-    --color-sidebar:       #0F1923;
-    --color-sidebar-hover: #1C2E3E;
-    --color-sidebar-active:#0A5C36;
+    /* Paiement */
+    --wave:                #0EA5E9;
+    --orange-money:        #EA580C;
 
-    /* Espacements / rayons */
-    --radius-sm:   8px;
-    --radius-md:   12px;
-    --radius-lg:   16px;
-    --radius-xl:   24px;
+    /* Hero mode clair */
+    --hero-overlay-from:   rgba(5, 30, 20, 0.75);
+    --hero-overlay-to:     rgba(3, 20, 12, 0.95);
+    --hero-badge-bg:       rgba(5, 150, 105, 0.2);
+    --hero-badge-border:   rgba(5, 150, 105, 0.4);
+    --hero-search-bg:      rgba(255, 255, 255, 0.92);
+    --hero-search-border:  rgba(255, 255, 255, 0.8);
+    --hero-search-text:    #0D1B2A;
 
-    /* Alias rétrocompat (code existant) */
-    --color-background: var(--color-bg);
+    /* Cards */
+    --card-bg:             #FFFFFF;
+    --card-border:         #E2E8F0;
+    --card-shadow:         0 4px 24px -4px rgba(13, 27, 42, 0.10);
+    --card-shadow-hover:   0 8px 32px -4px rgba(13, 27, 42, 0.16);
 
-    /* Tokens shadcn (HSL) alignés sur la palette */
-    --background: 220 16% 97%;
-    --foreground: 220 39% 11%;
-    --card: 0 0% 100%;
-    --card-foreground: 220 39% 11%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 220 39% 11%;
-    --primary: 151 80% 20%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 43 54% 54%;
-    --secondary-foreground: 220 39% 11%;
-    --muted: 214 20% 94%;
-    --muted-foreground: 220 9% 46%;
-    --accent: 151 30% 94%;
-    --accent-foreground: 151 80% 18%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 220 16% 91%;
-    --input: 220 16% 91%;
-    --ring: 151 80% 20%;
-    --radius: var(--radius-md);
+    /* Ombres */
+    --shadow-sm:           0 2px 8px -2px rgba(13,27,42,0.08);
+    --shadow-md:           0 4px 20px -2px rgba(13,27,42,0.10);
+    --shadow-lg:           0 8px 32px -4px rgba(13,27,42,0.14);
 
-    --sidebar-background: 210 36% 10%;
-    --sidebar-foreground: 0 0% 98%;
-    --sidebar-primary: 151 80% 20%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 210 30% 16%;
-    --sidebar-accent-foreground: 0 0% 98%;
-    --sidebar-border: 210 20% 18%;
-    --sidebar-ring: 151 80% 20%;
+    /* Bottom nav */
+    --nav-bg:              rgba(255, 255, 255, 0.92);
+    --nav-border:          rgba(212, 219, 230, 0.8);
 
-    --success: 151 80% 20%;
-    --warning: 32 95% 44%;
-    --info: 217 91% 53%;
+    /* Espacements */
+    --radius-sm:    6px;
+    --radius-md:    12px;
+    --radius-lg:    16px;
+    --radius-xl:    24px;
+    --radius-full:  9999px;
+    --radius:       var(--radius-md);
+
+    /* Alias rétrocompat (composants existants --color-*) */
+    --color-bg:             var(--bg);
+    --color-surface:        var(--surface);
+    --color-surface-2:      var(--surface-2);
+    --color-border:         var(--border);
+    --color-border-strong:  var(--border-strong);
+    --color-text-primary:   var(--text-primary);
+    --color-text-secondary: var(--text-secondary);
+    --color-text-muted:     var(--text-muted);
+    --color-primary:        var(--primary);
+    --color-primary-light:  var(--primary-light);
+    --color-primary-dark:   var(--primary-dark);
+    --color-primary-glow:   var(--primary-glow);
+    --color-accent:         var(--accent);
+    --color-accent-light:   var(--accent-light);
+    --color-success:        var(--success);
+    --color-warning:        var(--warning);
+    --color-danger:         var(--danger);
+    --color-info:           var(--info);
+    --color-wave:           var(--wave);
+    --color-wave-dark:      var(--wave);
+    --color-orange-money:   var(--orange-money);
+    --color-background:     var(--bg);
+
+    /* Backoffice sidebar (conservé) */
+    --color-sidebar:        #0F1923;
+    --color-sidebar-hover:  #1C2E3E;
+    --color-sidebar-active: var(--primary);
+
+    /* Tokens shadcn (HSL) — préfixe --s- pour éviter collision avec --primary hex */
+    --s-background: 210 33% 95%;
+    --s-foreground: 210 50% 11%;
+    --s-card: 0 0% 100%;
+    --s-card-foreground: 210 50% 11%;
+    --s-popover: 0 0% 100%;
+    --s-popover-foreground: 210 50% 11%;
+    --s-primary: 160 84% 30%;
+    --s-primary-foreground: 0 0% 100%;
+    --s-secondary: 32 95% 44%;
+    --s-secondary-foreground: 210 50% 11%;
+    --s-muted: 214 32% 93%;
+    --s-muted-foreground: 210 20% 45%;
+    --s-accent: 160 40% 94%;
+    --s-accent-foreground: 160 84% 24%;
+    --s-destructive: 0 72% 51%;
+    --s-destructive-foreground: 0 0% 100%;
+    --s-border: 214 25% 85%;
+    --s-input: 214 25% 85%;
+    --s-ring: 160 84% 30%;
+    --s-sidebar-background: 210 36% 10%;
+    --s-sidebar-foreground: 0 0% 98%;
+    --s-sidebar-primary: 160 84% 30%;
+    --s-sidebar-primary-foreground: 0 0% 100%;
+    --s-sidebar-accent: 210 30% 16%;
+    --s-sidebar-accent-foreground: 0 0% 98%;
+    --s-sidebar-border: 210 20% 18%;
+    --s-sidebar-ring: 160 84% 30%;
+    --s-success: 160 84% 30%;
+    --s-warning: 21 90% 48%;
+    --s-info: 217 91% 55%;
+
+    /* Bridge shadcn → mêmes noms attendus par hsl(var(--xxx)) via aliases HSL */
+    --background: var(--s-background);
+    --foreground: var(--s-foreground);
+    --card: var(--s-card);
+    --card-foreground: var(--s-card-foreground);
+    --popover: var(--s-popover);
+    --popover-foreground: var(--s-popover-foreground);
+    /* NOTE: --primary / --border / --accent hex ci-dessus pour le thème joueur.
+       Shadcn utilise hsl(var(--s-primary)) dans tailwind.config — pas --primary. */
+    --primary-foreground: var(--s-primary-foreground);
+    --secondary: var(--s-secondary);
+    --secondary-foreground: var(--s-secondary-foreground);
+    --muted: var(--s-muted);
+    --muted-foreground: var(--s-muted-foreground);
+    --accent-foreground: var(--s-accent-foreground);
+    --destructive: var(--s-destructive);
+    --destructive-foreground: var(--s-destructive-foreground);
+    --input: var(--s-input);
+    --ring: var(--s-ring);
+    --sidebar-background: var(--s-sidebar-background);
+    --sidebar-foreground: var(--s-sidebar-foreground);
+    --sidebar-primary: var(--s-sidebar-primary);
+    --sidebar-primary-foreground: var(--s-sidebar-primary-foreground);
+    --sidebar-accent: var(--s-sidebar-accent);
+    --sidebar-accent-foreground: var(--s-sidebar-accent-foreground);
+    --sidebar-border: var(--s-sidebar-border);
+    --sidebar-ring: var(--s-sidebar-ring);
+  }
+
+  /* ============================================
+     MODE SOMBRE — .dark sur <html>
+     Inspiré Nike / Strava
+     ============================================ */
+  .dark {
+    --bg:                  #070D14;
+    --surface:             #0F1923;
+    --surface-2:           #162233;
+    --surface-3:           #1E2D40;
+    --border:              #1F2D3D;
+    --border-strong:       #2A3F55;
+
+    --text-primary:        #F0F6FF;
+    --text-secondary:      #8BAFC8;
+    --text-muted:          #4A6278;
+
+    --primary:             #10B981;
+    --primary-light:       #34D399;
+    --primary-dark:        #059669;
+    --primary-glow:        rgba(16, 185, 129, 0.15);
+    --primary-glow-strong: rgba(16, 185, 129, 0.30);
+
+    --accent:              #F59E0B;
+    --accent-light:        #FBBF24;
+
+    --success:             #10B981;
+    --warning:             #F97316;
+    --danger:              #EF4444;
+    --info:                #3B82F6;
+
+    --wave:                #0EA5E9;
+    --orange-money:        #F97316;
+
+    --hero-overlay-from:   rgba(7, 13, 20, 0.70);
+    --hero-overlay-to:     rgba(7, 13, 20, 0.96);
+    --hero-badge-bg:       rgba(16, 185, 129, 0.15);
+    --hero-badge-border:   rgba(16, 185, 129, 0.35);
+    --hero-search-bg:      rgba(15, 25, 35, 0.85);
+    --hero-search-border:  rgba(31, 45, 61, 0.9);
+    --hero-search-text:    #F0F6FF;
+
+    --card-bg:             #0F1923;
+    --card-border:         #1F2D3D;
+    --card-shadow:         0 4px 24px -4px rgba(0, 0, 0, 0.40);
+    --card-shadow-hover:   0 8px 32px -4px rgba(0, 0, 0, 0.55);
+
+    --shadow-sm:           0 2px 8px -2px rgba(0,0,0,0.30);
+    --shadow-md:           0 4px 20px -2px rgba(0,0,0,0.40);
+    --shadow-lg:           0 8px 32px -4px rgba(0,0,0,0.55);
+
+    --nav-bg:              rgba(7, 13, 20, 0.92);
+    --nav-border:          rgba(31, 45, 61, 0.8);
+
+    --s-background: 210 40% 5%;
+    --s-foreground: 210 40% 96%;
+    --s-card: 210 36% 10%;
+    --s-card-foreground: 210 40% 96%;
+    --s-popover: 210 36% 10%;
+    --s-popover-foreground: 210 40% 96%;
+    --s-primary: 160 84% 39%;
+    --s-primary-foreground: 210 40% 5%;
+    --s-secondary: 38 92% 50%;
+    --s-secondary-foreground: 210 40% 5%;
+    --s-muted: 210 30% 14%;
+    --s-muted-foreground: 210 20% 55%;
+    --s-accent: 160 30% 14%;
+    --s-accent-foreground: 160 84% 70%;
+    --s-destructive: 0 84% 60%;
+    --s-destructive-foreground: 0 0% 100%;
+    --s-border: 210 25% 18%;
+    --s-input: 210 25% 18%;
+    --s-ring: 160 84% 39%;
+    --s-success: 160 84% 39%;
+    --s-warning: 25 95% 53%;
+    --s-info: 217 91% 60%;
   }
 }
 
@@ -109,8 +269,9 @@
     min-height: 100dvh;
     overflow-x: hidden;
     overscroll-behavior-x: none;
-    background-color: var(--color-bg);
-    color: var(--color-text-primary);
+    background-color: var(--bg);
+    color: var(--text-primary);
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 
   #root {
@@ -133,8 +294,21 @@
     color: var(--color-text-primary);
   }
 
-  a, button, [role="button"], input, select, textarea {
-    transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+  a, [role="button"], input, select, textarea {
+    transition: color 0.15s ease, background-color 0.15s ease,
+                border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  }
+
+  /* Micro-interactions globales */
+  button, .btn, .card-interactive {
+    transition: transform 0.15s ease, opacity 0.15s ease,
+                box-shadow 0.15s ease, background-color 0.15s ease,
+                color 0.15s ease, border-color 0.15s ease;
+  }
+
+  button:active:not(:disabled),
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
   }
 }
 
@@ -143,7 +317,7 @@
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
-    box-shadow: 0 1px 3px rgba(17, 24, 39, 0.06);
+    box-shadow: var(--shadow-sm);
   }
 
   .stat-card {
@@ -151,31 +325,38 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     padding: 24px;
-    box-shadow: 0 1px 3px rgba(17, 24, 39, 0.06);
+    box-shadow: var(--shadow-sm);
   }
 
   .field-card {
     background: var(--color-surface);
     border-radius: var(--radius-lg);
     overflow: hidden;
-    box-shadow: 0 1px 3px rgba(17, 24, 39, 0.08);
-    transition: box-shadow 0.2s ease;
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
   }
 
   .field-card:hover {
-    box-shadow: 0 4px 12px rgba(17, 24, 39, 0.1);
+    box-shadow: var(--shadow-md);
   }
 
+  /* Safe area iOS — bottom nav thématisée */
   .bottom-nav {
     position: fixed;
     bottom: 0;
     left: 0;
     right: 0;
     z-index: 50;
-    background: rgba(255, 255, 255, 0.98);
-    backdrop-filter: blur(8px);
-    border-top: 1px solid var(--color-border);
+    background: var(--nav-bg);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-top: 1px solid var(--nav-border);
     padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .joueur-app .bottom-nav {
+    background: var(--nav-bg);
+    border-top-color: var(--nav-border);
   }
 
   .page-container {
@@ -187,9 +368,13 @@
     padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
   }
 
+  .page-enter {
+    animation: fadeSlideUp 0.2s ease forwards;
+  }
+
   .section-title {
     font-family: var(--font-display);
-    font-size: 1.05rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--color-text-primary);
     line-height: 1.3;
@@ -199,10 +384,10 @@
     display: inline-flex;
     align-items: center;
     padding: 0.25rem 0.625rem;
-    border-radius: 9999px;
+    border-radius: var(--radius-full);
     font-size: 0.75rem;
     font-weight: 500;
-    background: color-mix(in srgb, var(--color-primary) 12%, white);
+    background: var(--color-primary-glow);
     color: var(--color-primary);
   }
 
@@ -210,14 +395,14 @@
     display: inline-flex;
     align-items: center;
     padding: 0.25rem 0.625rem;
-    border-radius: 9999px;
+    border-radius: var(--radius-full);
     font-size: 0.75rem;
     font-weight: 500;
   }
 
   .badge-status-libre,
   .badge-status-actif {
-    background: color-mix(in srgb, var(--color-success) 12%, white);
+    background: var(--color-primary-glow);
     color: var(--color-success);
   }
 
@@ -250,7 +435,6 @@
     color: white;
     font-size: 0.875rem;
     font-weight: 500;
-    transition: background-color 0.2s ease;
   }
 
   .btn-primary:hover:not(:disabled) {
@@ -258,8 +442,12 @@
   }
 
   .btn-primary:disabled {
-    background: var(--color-text-muted);
+    opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .pulse-dot {
+    animation: pulse-dot 1.8s ease-in-out infinite;
   }
 
   .bo-table {
@@ -353,7 +541,78 @@
     overscroll-behavior-x: contain;
     -webkit-overflow-scrolling: touch;
   }
+
+  /* Skeleton animation */
+  @keyframes shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position:  200% 0; }
+  }
+
+  .skeleton,
+  .skeleton-line,
+  .skeleton-image,
+  .skeleton-btn {
+    background: linear-gradient(
+      90deg,
+      var(--surface-2) 25%,
+      var(--surface-3) 50%,
+      var(--surface-2) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 8px;
+  }
+
+  /* Pulse badge disponible */
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.6; transform: scale(1.4); }
+  }
+
+  /* Transitions de page */
+  @keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
 }
+
+/* ── Espace joueur — suit le thème global (:root / .dark) ── */
+.joueur-app {
+  font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  background-color: var(--bg);
+  min-height: 100vh;
+  color: var(--text-primary);
+}
+
+/* ============================================
+   CLASSES UTILITAIRES THÈME
+   ============================================ */
+.t-bg       { background-color: var(--bg); }
+.t-surface  { background-color: var(--surface); }
+.t-surface2 { background-color: var(--surface-2); }
+.t-border   { border-color: var(--border); }
+.t-text     { color: var(--text-primary); }
+.t-text-2   { color: var(--text-secondary); }
+.t-muted    { color: var(--text-muted); }
+.t-primary  { color: var(--primary); }
+.t-card {
+  background-color: var(--card-bg);
+  border-color: var(--card-border);
+  box-shadow: var(--card-shadow);
+}
+
+:root .terrain-card:hover,
+.terrain-card:hover {
+  box-shadow: var(--card-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+.btn-press:active { transform: scale(0.96); }
+.card-press:active { transform: scale(0.98); }
 
 @media (max-width: 640px) {
   input, select, textarea {

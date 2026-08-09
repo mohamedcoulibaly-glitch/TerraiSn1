@@ -1,4 +1,4 @@
-ï»¿import { CheckCircle, Calendar, Clock, MapPin, Users, ArrowRight, Home } from "lucide-react";
+import { CheckCircle, Calendar, Clock, MapPin, Users, ArrowRight, Home } from "lucide-react";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
@@ -77,7 +77,7 @@ const ReservationConfirmation = () => {
     return (
       <div className="min-h-[70vh] flex items-center justify-center px-4" style={{ background: "#F0F7F4" }}>
         <div className="text-center">
-          <p className="text-[var(--color-text-secondary)] mb-4 text-sm">Aucune rÃ©servation trouvÃ©e</p>
+          <p className="text-[var(--color-text-secondary)] mb-4 text-sm">Aucune réservation trouvée</p>
           <button
             type="button"
             onClick={() => navigate("/explorer")}
@@ -109,27 +109,27 @@ const ReservationConfirmation = () => {
       className: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
     },
     acceptee: {
-      label: "ConfirmÃ©e",
+      label: "Confirmée",
       className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
     },
     confirme: {
-      label: "ConfirmÃ©e",
+      label: "Confirmée",
       className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
     },
     joue: {
-      label: "JouÃ©e",
+      label: "Jouée",
       className: "bg-[var(--color-primary)] text-white",
     },
     refusee: {
-      label: "RefusÃ©e",
+      label: "Refusée",
       className: "bg-[color-mix(in_srgb,var(--color-danger)_12%,white)] text-[var(--color-danger)]",
     },
     annulee: {
-      label: "AnnulÃ©e",
+      label: "Annulée",
       className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
     },
     annule: {
-      label: "AnnulÃ©e",
+      label: "Annulée",
       className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
     },
   };
@@ -148,10 +148,10 @@ const ReservationConfirmation = () => {
             className="text-2xl sm:text-3xl font-semibold text-[var(--color-text-primary)] mb-2"
             style={{ fontFamily: "var(--font-display)" }}
           >
-            RÃ©servation confirmÃ©e
+            Réservation confirmée
           </h1>
           <p className="text-sm text-[var(--color-text-secondary)]">
-            Votre crÃ©neau est enregistrÃ©. Conservez votre code.
+            Votre créneau est enregistré. Conservez votre code.
           </p>
         </div>
 
@@ -164,7 +164,7 @@ const ReservationConfirmation = () => {
             </span>
           </div>
 
-          <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--color-border)] p-5 mb-4 shadow-sm">
+          <div className="bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] p-5 mb-4 shadow-sm">
             <div className="mb-4">
               <h2
                 className="text-lg font-semibold text-[var(--color-text-primary)]"
@@ -201,7 +201,7 @@ const ReservationConfirmation = () => {
                 <div>
                   <p className="text-[11px] text-[var(--color-text-muted)]">Heure</p>
                   <p className="text-sm font-medium">
-                    {heureDebut} â€“ {heureFin} ({duree}h)
+                    {heureDebut} – {heureFin} ({duree}h)
                   </p>
                 </div>
               </div>
@@ -209,7 +209,7 @@ const ReservationConfirmation = () => {
 
             <div className="mt-5 pt-4 border-t border-[var(--color-border)] text-center">
               <p className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
-                Code rÃ©servation
+                Code réservation
               </p>
               <p
                 className="text-3xl font-semibold tracking-[0.12em] text-[var(--color-primary)]"
@@ -236,23 +236,23 @@ const ReservationConfirmation = () => {
               className="w-full min-h-[52px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium inline-flex items-center justify-center gap-2 hover:bg-[var(--color-primary-light)]"
               onClick={() => navigate("/reservations")}
             >
-              Voir mes rÃ©servations
+              Voir mes réservations
               <ArrowRight className="w-4 h-4" />
             </button>
             <button
               type="button"
-              className="w-full min-h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white text-sm font-medium inline-flex items-center justify-center gap-2 text-[var(--color-text-primary)]"
+              className="w-full min-h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--surface)] text-sm font-medium inline-flex items-center justify-center gap-2 text-[var(--color-text-primary)]"
               onClick={() => navigate("/")}
             >
               <Home className="w-4 h-4" />
-              Retour Ã  l&apos;accueil
+              Retour à l&apos;accueil
             </button>
           </div>
 
           {statut === "en_attente" && (
-            <div className="mt-6 p-4 rounded-[var(--radius-md)] bg-white border border-[var(--color-border)]">
+            <div className="mt-6 p-4 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--color-border)]">
               <p className="text-xs text-[var(--color-text-secondary)] text-center leading-relaxed">
-                Vous recevrez une notification WhatsApp lorsque le gÃ©rant confirmera votre rÃ©servation.
+                Vous recevrez une notification WhatsApp lorsque le gérant confirmera votre réservation.
               </p>
             </div>
           )}

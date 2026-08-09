@@ -11,21 +11,37 @@ export function fieldImageForId(id?: number | string) {
 }
 
 export function resolveTerrainPhoto(terrain: { id?: number | string; photos?: unknown }) {
+  const list = resolveTerrainPhotos(terrain);
+  return list[0] || fieldImageForId(terrain?.id);
+}
+
+export function resolveTerrainPhotos(terrain: { id?: number | string; photos?: unknown }): string[] {
   const raw = terrain?.photos;
-  if (Array.isArray(raw) && raw[0]) return String(raw[0]);
-  if (typeof raw === "string" && raw.trim()) {
+  let list: string[] = [];
+  if (Array.isArray(raw)) list = raw.map(String).filter(Boolean);
+  else if (typeof raw === "string" && raw.trim()) {
     if (raw.startsWith("[")) {
       try {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed[0]) return String(parsed[0]);
+        if (Array.isArray(parsed)) list = parsed.map(String).filter(Boolean);
       } catch {
         /* ignore */
       }
     } else if (raw.startsWith("http") || raw.startsWith("/")) {
-      return raw;
+      list = [raw];
     }
   }
-  return fieldImageForId(terrain?.id);
+  if (list.length === 0) list = [fieldImageForId(terrain?.id)];
+  // Varier le carrousel si une seule photo (démo visuelle)
+  if (list.length === 1) {
+    const base = Number(terrain?.id) || 1;
+    list = [
+      list[0],
+      fieldImageForId(base + 1),
+      fieldImageForId(base + 2),
+    ];
+  }
+  return list;
 }
 
 type FieldPhotoProps = {

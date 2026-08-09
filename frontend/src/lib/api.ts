@@ -2,14 +2,16 @@ const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 // Récupérer le token depuis le localStorage
 function getToken(): string | null {
-  return localStorage.getItem('terrainsn_token');
+  return localStorage.getItem('terrainsn_token') || localStorage.getItem('access_token');
 }
 
 function setToken(token: string) {
+  localStorage.setItem('access_token', token);
   localStorage.setItem('terrainsn_token', token);
 }
 
 function removeToken() {
+  localStorage.removeItem('access_token');
   localStorage.removeItem('terrainsn_token');
 }
 
@@ -44,6 +46,10 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
     return 'Trop de tentatives. Réessayez dans quelques minutes.';
   }
 
+  if (/suspendu|bloque|bloqué/i.test(raw)) {
+    return raw;
+  }
+
   const path = endpoint.toLowerCase();
   const isAuth = path.includes('/auth') || path.includes('otp') || path.includes('login') || path.includes('password');
   const isPayment =
@@ -73,8 +79,53 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
   return raw;
 }
 
+let refreshPromise: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        removeToken();
+        removeUser();
+        return null;
+      }
+      const data = await res.json();
+      const next = data.accessToken || data.token;
+      if (!next) {
+        removeToken();
+        removeUser();
+        return null;
+      }
+      setToken(next);
+      return next as string;
+    } catch {
+      removeToken();
+      removeUser();
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
+function parseJwtExp(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return typeof payload.exp === 'number' ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
 // Requête générique
-async function request(endpoint: string, options: RequestInit = {}) {
+async function request(endpoint: string, options: RequestInit = {}, retried = false): Promise<any> {
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -89,14 +140,30 @@ async function request(endpoint: string, options: RequestInit = {}) {
     res = await fetch(`${API_URL}${endpoint}`, {
       ...options,
       headers,
+      credentials: 'include',
     });
   } catch {
     throw new Error('Connexion au serveur impossible. Vérifiez votre connexion.');
   }
 
   if (res.status === 401) {
-    removeToken();
-    removeUser();
+    let data: Record<string, unknown> = {};
+    try {
+      data = await res.clone().json();
+    } catch {
+      data = {};
+    }
+    const isExpire = data.error === 'TOKEN_EXPIRE' || !retried;
+    if (!retried && endpoint !== '/auth/refresh' && endpoint !== '/auth/login' && isExpire) {
+      const next = await refreshAccessToken();
+      if (next) {
+        return request(endpoint, options, true);
+      }
+    }
+    if (endpoint !== '/auth/refresh' && endpoint !== '/auth/login') {
+      removeToken();
+      removeUser();
+    }
   }
 
   let data: Record<string, unknown> = {};
@@ -127,8 +194,8 @@ export const authApi = {
   async register(data: { nom: string; email: string; password: string; telephone: string }) {
     // Legacy — préférer registerJoueur (OTP). Ne stocke un token que s'il est renvoyé.
     const result = await request('/auth/register', { method: 'POST', body: JSON.stringify(data) });
-    if (result.token) {
-      setToken(result.token);
+    if (result.token || result.accessToken) {
+      setToken(result.accessToken || result.token);
       setUser(result.user);
     }
     return result;
@@ -136,7 +203,7 @@ export const authApi = {
 
   async login(data: { email?: string; telephone?: string; password: string; accountType?: string }) {
     const result = await request('/auth/login', { method: 'POST', body: JSON.stringify(data) });
-    setToken(result.token);
+    setToken(result.accessToken || result.token);
     setUser(result.user);
     localStorage.removeItem('admin_token');
     localStorage.removeItem('admin_user');
@@ -159,8 +226,8 @@ export const authApi = {
 
   async verifyOtp(data: { telephone: string; code: string }) {
     const result = await request('/auth/verify-otp', { method: 'POST', body: JSON.stringify(data) });
-    if (result.token) {
-      setToken(result.token);
+    if (result.token || result.accessToken) {
+      setToken(result.accessToken || result.token);
       setUser(result.user);
       localStorage.removeItem('admin_token');
       localStorage.removeItem('admin_user');
@@ -180,7 +247,40 @@ export const authApi = {
     return await request('/auth/change-password', { method: 'POST', body: JSON.stringify({ password }) });
   },
 
-  logout() {
+  async refresh() {
+    return refreshAccessToken();
+  },
+
+  async restoreSession(): Promise<any | null> {
+    const token = getToken();
+    if (!token) {
+      // Tentative refresh cookie silencieux (PWA / nouvel onglet)
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) return null;
+      return this.me();
+    }
+    const exp = parseJwtExp(token);
+    const now = Date.now() / 1000;
+    if (exp && exp > now + 30) {
+      try {
+        return await this.me();
+      } catch {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return null;
+        return this.me();
+      }
+    }
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) return null;
+    return this.me();
+  },
+
+  async logout() {
+    try {
+      await request('/auth/logout', { method: 'POST' });
+    } catch {
+      // ignore — nettoyage local de toute façon
+    }
     removeToken();
     removeUser();
     localStorage.removeItem('admin_token');
@@ -199,7 +299,23 @@ export const authApi = {
 // TERRAINS
 // ============================================================
 export const terrainsApi = {
-  async list(filters?: { ville?: string; type?: string; search?: string; prix_min?: number; prix_max?: number }) {
+  async list(filters?: {
+    ville?: string;
+    type?: string;
+    search?: string;
+    prix_min?: number;
+    prix_max?: number;
+    lat?: number;
+    lng?: number;
+    distance_max?: number;
+    quartier?: string;
+    /** Filtre via description (surface admin) */
+    surface?: string;
+    date?: string;
+    /** Dates CSV pour week-end (ex: 2026-08-15,2026-08-16) */
+    dates?: string;
+    heure?: string;
+  }) {
     const params = new URLSearchParams();
     if (filters) {
       Object.entries(filters).forEach(([k, v]) => {

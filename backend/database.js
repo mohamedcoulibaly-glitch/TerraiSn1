@@ -189,6 +189,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'reservations', 'montant_avance', 'INTEGER');
   addColumnIfMissing(database, 'reservations', 'montant_restant', 'INTEGER');
   addColumnIfMissing(database, 'reservations', 'qr_code_scanne_at', 'DATETIME');
+  addColumnIfMissing(database, 'reservations', 'qr_code_url', 'TEXT');
   addColumnIfMissing(database, 'paiements', 'reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'paiements', 'montant_acompte', 'INTEGER');
   addColumnIfMissing(database, 'paiements', 'montant_commission', 'INTEGER');
@@ -199,7 +200,20 @@ function initDb(database) {
   addColumnIfMissing(database, 'terrains', 'montant_acompte', 'DECIMAL(10, 2) DEFAULT 5000');
   addColumnIfMissing(database, 'terrains', 'acompte', 'INTEGER DEFAULT 5000');
   addColumnIfMissing(database, 'terrains', 'commission', 'INTEGER DEFAULT 400');
-  addColumnIfMissing(database, 'terrains', 'pourcentage_avance', 'REAL DEFAULT 12.5');
+  addColumnIfMissing(database, 'terrains', 'pourcentage_avance', 'REAL DEFAULT 8');
+  addColumnIfMissing(database, 'users', 'refresh_token', 'TEXT');
+  addColumnIfMissing(database, 'users', 'refresh_token_expire_at', 'DATETIME');
+  // CDC babacar : statut compte joueur (bloque / suspendu / actif)
+  addColumnIfMissing(
+    database,
+    'users',
+    'statut',
+    "TEXT DEFAULT 'actif' CHECK(statut IN ('actif', 'suspendu', 'bloque'))"
+  );
+  addColumnIfMissing(database, 'proprietaires', 'refresh_token', 'TEXT');
+  addColumnIfMissing(database, 'proprietaires', 'refresh_token_expire_at', 'DATETIME');
+  addColumnIfMissing(database, 'employes', 'refresh_token', 'TEXT');
+  addColumnIfMissing(database, 'employes', 'refresh_token_expire_at', 'DATETIME');
   addColumnIfMissing(database, 'terrains', 'modele_revenus', "TEXT DEFAULT 'commission'");
   addColumnIfMissing(database, 'terrains', 'commission_pourcentage', 'REAL DEFAULT 0');
   addColumnIfMissing(database, 'terrains', 'abonnement_montant', 'INTEGER DEFAULT 0');
@@ -209,6 +223,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'terrains', 'achat_definitif_paye', 'INTEGER DEFAULT 0');
   addColumnIfMissing(database, 'terrains', 'latitude', 'REAL');
   addColumnIfMissing(database, 'terrains', 'longitude', 'REAL');
+  addColumnIfMissing(database, 'terrains', 'commodites', "TEXT DEFAULT '[]'");
   addColumnIfMissing(database, 'users', 'terrain_id', 'INTEGER');
   addColumnIfMissing(database, 'users', 'must_change_password', 'INTEGER DEFAULT 0');
   addColumnIfMissing(database, 'users', 'prenom', 'VARCHAR(255)');
