@@ -1,4 +1,6 @@
 const PLAYED_STATUSES = ['match_joue', 'joue'];
+/** Avances déjà payées : visibles proprio dès confirmation, pas seulement après le match. */
+const REVENUE_STATUSES = ['confirme', 'match_joue', 'joue'];
 
 function periodDays(period) {
   if (period === 'semaine') return 7;
@@ -34,8 +36,12 @@ function commissionSql(terrainAlias = 't', paymentAlias = 'p', reservationAlias 
   END`;
 }
 
+function revenueStatusSql(alias = 'r') {
+  return `${alias}.statut IN ('${REVENUE_STATUSES.join("','")}')`;
+}
+
 function ownerRevenueRowsSql({ ownerWhere = 't.proprietaire_id = ?', dateWhere = 'AND r.date >= ?' } = {}) {
-  const played = playedStatusSql('r');
+  const played = revenueStatusSql('r');
   const advance = paidAdvanceSql('p', 'r');
   const commission = commissionSql('t', 'p', 'r');
   return `SELECT
@@ -68,8 +74,10 @@ function summarizeOwnerRevenue(rows) {
 
 module.exports = {
   PLAYED_STATUSES,
+  REVENUE_STATUSES,
   periodStart,
   playedStatusSql,
+  revenueStatusSql,
   ownerRevenueRowsSql,
   summarizeOwnerRevenue,
 };

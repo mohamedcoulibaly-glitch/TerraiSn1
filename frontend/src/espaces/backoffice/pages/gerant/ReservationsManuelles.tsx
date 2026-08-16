@@ -1,9 +1,10 @@
 ﻿import { useEffect, useState } from "react";
-import { Clock } from "lucide-react";
+import { Clock, MessageCircle } from "lucide-react";
 import { gerantApi, reservationsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { localYmd } from "@/lib/localDate";
 
 const statusMeta: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
@@ -22,7 +23,12 @@ const statusMeta: Record<string, { label: string; border: string; badge: string 
     badge: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   joue: {
-    label: "Jouée",
+    label: "Match joué",
+    border: "border-l-[var(--color-primary)]",
+    badge: "bg-[var(--color-primary)] text-white",
+  },
+  match_joue: {
+    label: "Match joué",
     border: "border-l-[var(--color-primary)]",
     badge: "bg-[var(--color-primary)] text-white",
   },
@@ -49,7 +55,16 @@ export default function ReservationsManuelles() {
   const [dashboard, setDashboard] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [manualLoading, setManualLoading] = useState(false);
+  const [resendId, setResendId] = useState<number | null>(null);
   const [dateFilter, setDateFilter] = useState<"today" | "week" | "all">("today");
+  const [phoneFieldError, setPhoneFieldError] = useState<string | null>(null);
+  const [devis, setDevis] = useState<{
+    montant?: number;
+    montant_avance?: number;
+    montant_restant?: number;
+    pourcentage_avance?: number;
+  } | null>(null);
+  const [devisLoading, setDevisLoading] = useState(false);
   const [manual, setManual] = useState({
     joueur_nom: "",
     joueur_telephone: "",
@@ -70,6 +85,43 @@ export default function ReservationsManuelles() {
     load();
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    if (!manual.date || !manual.heure_debut || !manual.heure_fin) {
+      setDevis(null);
+      return;
+    }
+    const start = parseInt(String(manual.heure_debut).split(":")[0], 10);
+    const end = parseInt(String(manual.heure_fin).split(":")[0], 10);
+    if (!(end > start)) {
+      setDevis(null);
+      return;
+    }
+    let cancelled = false;
+    setDevisLoading(true);
+    const timer = window.setTimeout(() => {
+      gerantApi
+        .getDevis({
+          date: manual.date,
+          heure_debut: manual.heure_debut,
+          heure_fin: manual.heure_fin,
+          format: manual.format_terrain,
+        })
+        .then((payload) => {
+          if (!cancelled) setDevis(payload as typeof devis);
+        })
+        .catch(() => {
+          if (!cancelled) setDevis(null);
+        })
+        .finally(() => {
+          if (!cancelled) setDevisLoading(false);
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [manual.date, manual.heure_debut, manual.heure_fin, manual.format_terrain]);
+
   const load = async () => {
     try {
       const data = await gerantApi.dashboard();
@@ -84,7 +136,7 @@ export default function ReservationsManuelles() {
   const filterReservations = (reservations: any[]) => {
     if (dateFilter === "all") return reservations;
     const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
+    const todayStr = localYmd();
     if (dateFilter === "today") {
       return reservations.filter((r: any) => r.date === todayStr);
     }
@@ -98,25 +150,60 @@ export default function ReservationsManuelles() {
     });
   };
 
-  const handleMatchJoue = async (id: number) => {
-    if (!window.confirm("Confirmer que le match est joué et que le solde a été encaissé en espèces ?"))
-      return;
+  const handleOpenFiche = (id: number) => {
+    navigate(`/backoffice/gerant/reservations/${id}`);
+  };
+
+  const handleResendWhatsApp = async (id: number) => {
+    setResendId(id);
     try {
-      await reservationsApi.marquerJoue(id, "especes");
-      toast.success("Match joué : solde encaissé et revenu comptabilisé");
-      await load();
+      await reservationsApi.renvoyerLienWhatsApp(id);
+      toast.success("Lien de paiement renvoyé par WhatsApp");
     } catch (err: any) {
-      toast.error(err.message);
+      toast.error(err.message || "Impossible d'envoyer le WhatsApp");
+    } finally {
+      setResendId(null);
     }
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!dashboard?.terrain?.id) return;
+
+    const errPhone = phoneError(manual.joueur_telephone);
+    if (errPhone) {
+      setPhoneFieldError(errPhone);
+      toast.error(errPhone);
+      return;
+    }
+    setPhoneFieldError(null);
     setManualLoading(true);
     try {
-      await reservationsApi.createGerant({ ...manual, terrain_id: dashboard.terrain.id });
-      toast.success("Lien de paiement envoyé au joueur par SMS");
+      const result = (await reservationsApi.createGerant({
+        ...manual,
+        joueur_telephone: toLocal9(manual.joueur_telephone),
+        terrain_id: dashboard.terrain.id,
+      })) as {
+        whatsapp_sent?: boolean;
+        whatsapp_error?: string | null;
+        reservation_id?: number;
+      };
+
+      if (result?.whatsapp_sent) {
+        const montant = Number((result as any)?.montant || devis?.montant || 0);
+        toast.success(
+          montant > 0
+            ? `Lien WhatsApp envoyé · total ${montant.toLocaleString("fr-FR")} CFA`
+            : "Réservation créée — lien WhatsApp envoyé au joueur",
+        );
+      } else {
+        toast.warning(
+          `Réservation créée, mais WhatsApp non envoyé${
+            result?.whatsapp_error ? ` : ${result.whatsapp_error}` : ""
+          }`
+        );
+      }
+
       setManual({
         joueur_nom: "",
         joueur_telephone: "",
@@ -125,6 +212,7 @@ export default function ReservationsManuelles() {
         heure_fin: "",
         format_terrain: "entier",
       });
+      setDevis(null);
       await load();
     } catch (err: any) {
       toast.error(err.message);
@@ -191,7 +279,11 @@ export default function ReservationsManuelles() {
               className={`bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] border-l-4 ${meta.border} p-4 shadow-sm`}
             >
               <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
+                <button
+                  type="button"
+                  className="min-w-0 text-left"
+                  onClick={() => navigate(`/backoffice/gerant/reservations/${r.id}`)}
+                >
                   <p
                     className="font-semibold text-sm truncate"
                     style={{ fontFamily: "var(--font-display)" }}
@@ -202,7 +294,7 @@ export default function ReservationsManuelles() {
                     <Clock className="w-3 h-3" />
                     {r.date} · {r.heure_debut}–{r.heure_fin}
                   </p>
-                </div>
+                </button>
                 <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${meta.badge}`}>
                   {meta.label}
                 </span>
@@ -210,15 +302,31 @@ export default function ReservationsManuelles() {
               <p className="text-xs text-[var(--color-text-secondary)] mt-2">
                 {(r.montant || 0).toLocaleString()} CFA ·{" "}
                 {r.format_terrain === "moitie" ? "Moitié" : "Entier"}
+                {r.code_reservation ? (
+                  <span className="block mt-1 font-semibold text-[var(--color-primary)]">
+                    Code : {r.code_reservation}
+                  </span>
+                ) : null}
               </p>
-              <div className="mt-3 flex items-center gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {r.statut === "en_attente" && (
+                  <button
+                    type="button"
+                    onClick={() => handleResendWhatsApp(r.id)}
+                    disabled={resendId === r.id}
+                    className="min-h-[44px] px-4 rounded-[var(--radius-sm)] bg-[#25D366] text-white text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    {resendId === r.id ? "Envoi..." : "Renvoyer WhatsApp"}
+                  </button>
+                )}
                 {r.statut === "confirme" && (
                   <button
                     type="button"
-                    onClick={() => handleMatchJoue(r.id)}
+                    onClick={() => handleOpenFiche(r.id)}
                     className="min-h-[44px] px-4 rounded-[var(--radius-sm)] bg-[var(--color-primary)] text-white text-xs font-medium"
                   >
-                    Match joué
+                    Ouvrir la fiche / scanner
                   </button>
                 )}
               </div>
@@ -238,6 +346,7 @@ export default function ReservationsManuelles() {
           <thead>
             <tr>
               <th>Joueur</th>
+              <th>Code</th>
               <th>Date</th>
               <th>Heure</th>
               <th>Montant</th>
@@ -250,7 +359,18 @@ export default function ReservationsManuelles() {
               const meta = statusMeta[r.statut] || statusMeta.en_attente;
               return (
                 <tr key={r.id}>
-                  <td className="font-medium">{r.joueur_nom}</td>
+                  <td className="font-medium">
+                    <button
+                      type="button"
+                      className="hover:underline text-left"
+                      onClick={() => navigate(`/backoffice/gerant/reservations/${r.id}`)}
+                    >
+                      {r.joueur_nom}
+                    </button>
+                  </td>
+                  <td className="font-semibold text-[var(--color-primary)] text-xs">
+                    {r.code_reservation || "—"}
+                  </td>
                   <td>{r.date}</td>
                   <td>
                     {r.heure_debut}–{r.heure_fin}
@@ -263,25 +383,35 @@ export default function ReservationsManuelles() {
                       {meta.label}
                     </span>
                   </td>
-                  <td>
+                  <td className="space-x-2">
+                    {r.statut === "en_attente" && (
+                      <button
+                        type="button"
+                        onClick={() => handleResendWhatsApp(r.id)}
+                        disabled={resendId === r.id}
+                        className="text-xs font-medium text-[#128C7E] hover:underline disabled:opacity-60"
+                      >
+                        {resendId === r.id ? "Envoi..." : "Renvoyer WhatsApp"}
+                      </button>
+                    )}
                     {r.statut === "confirme" ? (
                       <button
                         type="button"
-                        onClick={() => handleMatchJoue(r.id)}
+                        onClick={() => handleOpenFiche(r.id)}
                         className="text-xs font-medium text-[var(--color-primary)] hover:underline"
                       >
-                        Match joué
+                        Fiche / scanner
                       </button>
-                    ) : (
+                    ) : r.statut !== "en_attente" ? (
                       "—"
-                    )}
+                    ) : null}
                   </td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-center text-[var(--color-text-muted)] py-8">
+                <td colSpan={7} className="text-center text-[var(--color-text-muted)] py-8">
                   Aucune réservation
                 </td>
               </tr>
@@ -311,16 +441,31 @@ export default function ReservationsManuelles() {
           </div>
           <div>
             <label className="text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 block">
-              Téléphone
+              Téléphone WhatsApp
             </label>
-            <input
-              required
-              type="tel"
-              placeholder="+221 77 000 00 00"
-              value={manual.joueur_telephone}
-              onChange={(e) => setManual({ ...manual, joueur_telephone: e.target.value })}
-              className="w-full h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 text-sm outline-none focus:border-[var(--color-primary)]"
-            />
+            <div className="flex items-center gap-2 h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 focus-within:border-[var(--color-primary)]">
+              <span className="text-sm text-[var(--color-text-muted)] select-none">+221</span>
+              <input
+                required
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                placeholder="77 826 12 25"
+                value={manual.joueur_telephone}
+                onChange={(e) => {
+                  const formatted = formatPhoneDisplay(e.target.value);
+                  setManual({ ...manual, joueur_telephone: formatted });
+                  setPhoneFieldError(formatted ? phoneError(formatted) : null);
+                }}
+                className="flex-1 h-full bg-transparent outline-none text-sm min-w-[8rem]"
+              />
+            </div>
+            {phoneFieldError && (
+              <p className="text-xs text-[var(--color-danger)] mt-1">{phoneFieldError}</p>
+            )}
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+              9 chiffres sans l&apos;indicatif (ex. 77 826 12 25)
+            </p>
           </div>
           <div>
             <label className="text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 block">
@@ -373,12 +518,55 @@ export default function ReservationsManuelles() {
               className="w-full h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 text-sm outline-none focus:border-[var(--color-primary)]"
             />
           </div>
+
+          {(devisLoading || devis) && (
+            <div className="sm:col-span-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-primary)_6%,white)] p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
+                Devis dynamique (grille Tarifs)
+              </p>
+              {devisLoading && !devis ? (
+                <p className="text-sm text-[var(--color-text-secondary)] animate-pulse">Calcul…</p>
+              ) : (
+                <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-muted)]">Total</p>
+                    <p className="font-semibold">
+                      {Number(devis?.montant || 0).toLocaleString("fr-FR")} CFA
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-muted)]">
+                      Avance ({devis?.pourcentage_avance || 12.5}%)
+                    </p>
+                    <p className="font-semibold text-[var(--color-primary)]">
+                      {Number(devis?.montant_avance || 0).toLocaleString("fr-FR")} CFA
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-muted)]">Reste sur place</p>
+                    <p className="font-semibold">
+                      {Number(devis?.montant_restant || 0).toLocaleString("fr-FR")} CFA
+                    </p>
+                  </div>
+                </div>
+              )}
+              <p className="text-[11px] text-[var(--color-text-muted)] mt-2">
+                Même prix que le joueur verra · créneau déjà pris → refus automatique
+              </p>
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={manualLoading}
-            className="sm:col-span-2 w-full min-h-[52px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium hover:bg-[var(--color-primary-light)] disabled:bg-[var(--color-text-muted)]"
+            className="sm:col-span-2 w-full min-h-[52px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium hover:bg-[var(--color-primary-light)] disabled:bg-[var(--color-text-muted)] inline-flex items-center justify-center gap-2"
           >
-            {manualLoading ? "Création..." : "Créer et envoyer le lien de paiement"}
+            <MessageCircle className="w-4 h-4" />
+            {manualLoading
+              ? "Création..."
+              : devis?.montant_avance
+                ? `Créer · avance ${Number(devis.montant_avance).toLocaleString("fr-FR")} CFA`
+                : "Créer et envoyer le lien WhatsApp"}
           </button>
         </form>
       </section>

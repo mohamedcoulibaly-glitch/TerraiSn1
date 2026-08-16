@@ -15,7 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import TerrainFormModal from "@/espaces/backoffice/components/TerrainFormModal";
 import EmployeeFormModal from "@/espaces/backoffice/components/EmployeeFormModal";
-import { fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
+import { resolveTerrainPhoto } from "@/espaces/joueur/components/FieldPhoto";
 
 const tabs = ["Vue d'ensemble", "Réservations", "Gérant"];
 
@@ -107,7 +107,7 @@ const OwnerTerrainDetail = () => {
     );
   }
 
-  const terrainImage = terrain.photos?.[0] || fieldImageForId(terrain.id);
+  const terrainImage = resolveTerrainPhoto(terrain);
 
   return (
     <div className="min-h-screen bg-background pb-8">

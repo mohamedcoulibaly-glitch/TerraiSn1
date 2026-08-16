@@ -6,8 +6,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/hooks/use-auth";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import AppRouter from "@/router/AppRouter";
+import InstallPrompt from "@/components/pwa/InstallPrompt";
+import OfflineBanner from "@/components/pwa/OfflineBanner";
+import { REACT_QUERY_CONFIG } from "@/lib/optimizations";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: REACT_QUERY_CONFIG,
+});
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -16,8 +21,10 @@ const App = () => (
         <TooltipProvider>
           <Toaster />
           <Sonner />
+          <OfflineBanner />
           <BrowserRouter>
             <AppRouter />
+            <InstallPrompt />
           </BrowserRouter>
         </TooltipProvider>
       </AuthProvider>

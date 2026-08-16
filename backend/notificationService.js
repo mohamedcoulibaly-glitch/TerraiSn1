@@ -5,14 +5,30 @@ const client = require('./whatsappClient');
 const { getDb, queryOne, runSql } = require('./database');
 const { UPLOAD_ROOT } = require('./terrainPhotoService');
 
-function formatNumero(telephone) {
+function digitsPhone(telephone) {
   let numero = String(telephone || '').replace(/\D/g, '');
   if (numero.startsWith('00')) numero = numero.slice(2);
-  if (numero.length === 9) numero = `221${numero}`;
-  if (!numero.startsWith('221') || numero.length !== 12) {
+  if (numero.startsWith('0') && numero.length === 10) numero = numero.slice(1);
+  if (numero.startsWith('221') && numero.length >= 12) return numero.slice(0, 12);
+  if (numero.length === 9) return `221${numero}`;
+  return numero;
+}
+
+function formatNumero(telephone) {
+  const numero = digitsPhone(telephone);
+  if (!/^2217\d{8}$/.test(numero)) {
     throw new Error(`Numero WhatsApp senegalais invalide : ${telephone}`);
   }
   return `${numero}@c.us`;
+}
+
+/** Stockage / affichage normalise : +221 77 XXX XX XX */
+function normalizeTelephoneStore(telephone) {
+  const numero = digitsPhone(telephone);
+  if (!/^2217\d{8}$/.test(numero)) {
+    throw new Error('Numero WhatsApp invalide. Saisissez 9 chiffres (ex: 77 826 12 25)');
+  }
+  return `+${numero.slice(0, 3)} ${numero.slice(3, 5)} ${numero.slice(5, 8)} ${numero.slice(8, 10)} ${numero.slice(10)}`;
 }
 
 function formaterDate(dateStr) {
@@ -265,6 +281,7 @@ async function envoyerAlerteSilencieuse({ telephone, prenom, gerant_prenom, terr
 
 module.exports = {
   formatNumero,
+  normalizeTelephoneStore,
   formaterDate,
   formaterHeure,
   formaterMontant,

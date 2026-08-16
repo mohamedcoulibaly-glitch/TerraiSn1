@@ -21,13 +21,15 @@ export const OPTIMIZATION_HINTS = {
 // Configuration pour React Query
 export const REACT_QUERY_CONFIG = {
   queries: {
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    cacheTime: 1000 * 60 * 10, // 10 minutes
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 10,
     retry: 1,
     refetchOnWindowFocus: false,
+    networkMode: 'offlineFirst' as const,
   },
   mutations: {
     retry: 1,
+    networkMode: 'offlineFirst' as const,
   },
 };
 

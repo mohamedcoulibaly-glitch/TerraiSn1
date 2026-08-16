@@ -8,7 +8,10 @@
     "dev": "nodemon index.js",
     "seed": "node seed.js",
     "seed:demo": "node scripts/seed_commodites_demo.js",
-    "migrate": "node scripts/migrate.js"
+    "seed:mohamed": "node scripts/seed-mohamed.js",
+    "migrate": "node scripts/migrate.js",
+    "setup": "node scripts/migrate.js && node seed.js",
+    "whatsapp:test": "node scripts/test-whatsapp.js"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +28,7 @@
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "sql.js": "^1.11.0",
+    "web-push": "^3.6.7",
     "whatsapp-web.js": "^1.34.7"
   },
   "devDependencies": {

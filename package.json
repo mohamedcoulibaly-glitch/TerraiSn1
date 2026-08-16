@@ -1,0 +1,15 @@
+{
+  "name": "terrainsn-dev",
+  "private": true,
+  "version": "1.0.0",
+  "description": "TerrainSN — commandes de développement unifiées (backend + frontends)",
+  "scripts": {
+    "dev": "node dev.js",
+    "dev:app": "node dev.js --no-admin",
+    "dev:admin": "node dev.js --no-frontend",
+    "accounts": "node dev.js --accounts"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

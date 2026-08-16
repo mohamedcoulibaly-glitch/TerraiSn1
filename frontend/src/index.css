@@ -287,6 +287,13 @@
     font: inherit;
   }
 
+  /* * { min-width: 0 } ci-dessus fait collapser les inputs flex (préfixe +221). */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  select,
+  textarea {
+    min-width: 1px;
+  }
+
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-display);
     font-weight: 600;

@@ -1,0 +1,55 @@
+name: PWA Lighthouse Audit
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/pwa-lighthouse.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/pwa-lighthouse.yml'
+
+jobs:
+  lighthouse-pwa:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate PWA icons
+        run: npm run generate-icons
+
+      - name: Build frontend (PWA)
+        run: npm run build
+
+      - name: Audit PWA installabilité (manifest + SW + icônes)
+        run: npm run audit:pwa
+
+      - name: Run Lighthouse CI (perf / a11y / best-practices)
+        run: npx @lhci/cli@0.14.0 autorun --config=./lighthouserc.cjs
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+
+      - name: Upload Lighthouse report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-pwa-report
+          path: frontend/.lighthouseci/
+          retention-days: 14

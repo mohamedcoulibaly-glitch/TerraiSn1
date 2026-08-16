@@ -45,9 +45,15 @@ function FloatingField({
   const floated = focused || filled;
   return (
     <div
-      className={`relative flex items-center gap-2 rounded-[var(--radius-md)] border bg-white px-4 min-h-[56px] transition-colors ${
-        focused ? "border-[var(--color-primary)]" : "border-[var(--color-border)]"
-      }`}
+      className={`relative flex items-center gap-2 rounded-[var(--radius-md)] border bg-white min-h-[56px] transition-colors cursor-text ${
+        prefix ? "pl-4 pr-3" : "px-4"
+      } ${focused ? "border-[var(--color-primary)]" : "border-[var(--color-border)]"}`}
+      onMouseDown={(e) => {
+        const target = e.target as HTMLElement;
+        if (target.closest("button, a, input, textarea, select")) return;
+        e.preventDefault();
+        (document.getElementById(id) as HTMLInputElement | null)?.focus();
+      }}
     >
       <label
         htmlFor={id}
@@ -62,11 +68,11 @@ function FloatingField({
         {label}
       </label>
       {prefix && (
-        <div className="flex items-center shrink-0 self-end pb-3.5 text-[var(--color-text-muted)]">
+        <div className="flex items-center shrink-0 self-stretch pt-6 text-[var(--color-text-muted)] pointer-events-none">
           {prefix}
         </div>
       )}
-      <div className="flex-1 flex items-center gap-1 self-end pb-2.5 min-w-0">{children}</div>
+      <div className="flex-1 flex items-center gap-1 self-stretch pt-5 pb-2 min-w-[2rem]">{children}</div>
     </div>
   );
 }
@@ -95,7 +101,7 @@ export default function LoginPage() {
   const [showForgot, setShowForgot] = useState(false);
   const [focus, setFocus] = useState<string | null>(null);
 
-  const [loginForm, setLoginForm] = useState({ telephone: "", password: "" });
+  const [loginForm, setLoginForm] = useState({ identifier: "", password: "" });
   const [registerForm, setRegisterForm] = useState({
     prenom: "",
     nom: "",
@@ -126,22 +132,48 @@ export default function LoginPage() {
     });
   };
 
+  const onLoginIdentifierChange = (raw: string) => {
+    if (raw.includes("@")) {
+      setLoginForm((f) => ({ ...f, identifier: raw }));
+    } else {
+      const hasLetter = /[a-zA-Z]/.test(raw);
+      setLoginForm((f) => ({ ...f, identifier: hasLetter ? raw : formatPhoneDisplay(raw) }));
+    }
+    setErrors((e) => {
+      const next = { ...e };
+      delete next.identifier;
+      delete next.form;
+      return next;
+    });
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const nextErrors: Record<string, string> = {};
-    const phoneErr = phoneError(loginForm.telephone);
-    if (phoneErr) nextErrors.telephone = phoneErr;
+    const rawId = loginForm.identifier.trim();
+    if (!rawId) {
+      nextErrors.identifier = "Téléphone ou email requis";
+    } else if (rawId.includes("@")) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawId)) {
+        nextErrors.identifier = "Adresse email invalide";
+      }
+    } else {
+      const phoneErr = phoneError(rawId);
+      if (phoneErr) nextErrors.identifier = phoneErr;
+    }
     if (!loginForm.password) nextErrors.password = "Mot de passe requis";
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
 
+    const identifier = rawId.includes("@") ? rawId : toLocal9(rawId);
+
     setSubmitting(true);
     try {
-      const connected = await login(toLocal9(loginForm.telephone), loginForm.password);
+      const connected = await login(identifier, loginForm.password);
       const role = normalizeRole(connected);
-      if (role !== "joueur") {
-        logout();
-        toast.error("Cet espace est réservé aux joueurs.");
+      if (role && role !== "joueur") {
+        toast.success("Connexion réussie — redirection vers votre espace");
+        navigate(homeForUser(connected), { replace: true });
         return;
       }
       if (connected?.must_change_password) {
@@ -152,7 +184,7 @@ export default function LoginPage() {
       navigate(redirectTo, { replace: true });
     } catch (err: any) {
       if (err?.code === "OTP_REQUIRED" || /non vérifié|OTP/i.test(err?.message || "")) {
-        setOtpPhone(formatPhoneDisplay(loginForm.telephone));
+        setOtpPhone(formatPhoneDisplay(rawId.includes("@") ? err?.telephone || "" : rawId));
         setStep("otp");
         toast.message("Validez le code reçu sur WhatsApp");
         return;
@@ -269,7 +301,7 @@ export default function LoginPage() {
   };
 
   const inputClass =
-    "w-full bg-transparent outline-none text-sm text-[var(--color-text-primary)] placeholder:transparent";
+    "relative z-[2] w-full min-w-[2rem] h-full bg-transparent outline-none text-sm text-[var(--color-text-primary)] placeholder:transparent";
 
   return (
     <div className="min-h-screen relative flex flex-col justify-end sm:justify-center sm:items-center sm:px-4">
@@ -405,31 +437,35 @@ export default function LoginPage() {
               <form onSubmit={handleLogin} className="flex flex-col gap-4" noValidate>
                 <div>
                   <FloatingField
-                    id="login-phone"
-                    label="Numéro de téléphone"
-                    focused={focus === "login-phone"}
-                    filled={!!loginForm.telephone}
-                    prefix={<span className="text-sm text-[var(--color-text-muted)]">+221</span>}
+                    id="login-id"
+                    label="Téléphone ou email"
+                    focused={focus === "login-id"}
+                    filled={!!loginForm.identifier}
+                    prefix={
+                      loginForm.identifier.includes("@") || /[a-zA-Z]/.test(loginForm.identifier) ? undefined : (
+                        <span className="text-sm text-[var(--color-text-muted)]">+221</span>
+                      )
+                    }
                   >
                     <input
-                      id="login-phone"
-                      type="tel"
-                      inputMode="tel"
-                      autoComplete="tel"
-                      value={loginForm.telephone}
-                      onFocus={() => setFocus("login-phone")}
+                      id="login-id"
+                      type="text"
+                      inputMode="text"
+                      autoComplete="username"
+                      value={loginForm.identifier}
+                      onFocus={() => setFocus("login-id")}
                       onBlur={() => setFocus(null)}
-                      onChange={(e) =>
-                        onPhoneChange(
-                          e.target.value,
-                          (v) => setLoginForm((f) => ({ ...f, telephone: v })),
-                          "telephone"
-                        )
-                      }
+                      onChange={(e) => onLoginIdentifierChange(e.target.value)}
                       className={inputClass}
+                      placeholder=""
                     />
                   </FloatingField>
-                  <FieldError message={errors.telephone} />
+                  <FieldError message={errors.identifier} />
+                  <p className="mt-1.5 text-[11px] text-[var(--color-text-muted)]">
+                    Démo joueur : <span className="font-medium">77 123 45 67</span> ou{" "}
+                    <span className="font-medium">abdou@email.com</span> · mdp{" "}
+                    <span className="font-medium">password123</span>
+                  </p>
                 </div>
 
                 <div>

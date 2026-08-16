@@ -54,6 +54,7 @@ async function seed() {
     [1, 4, 'Amadou Niang', 'niang@terrainsn.sn', hash, '+221 77 333 44 55', '+221773334455', 0],
     [2, 3, 'Aminata Sy', 'aminata@terrainsn.sn', hash, '+221 77 444 55 66', '+221774445566', 1],
     [3, 6, 'Pape Gueye', 'gueye@terrainsn.sn', hash, '+221 77 555 66 77', '+221775556677', 1],
+    [1, 1, 'Mohamed Coulibaly', 'mohamed.gerant@gmail.com', hash, '+221 77 826 12 25', '+221778261225', 1],
   ];
   for (const e of employesData) {
     db.run('INSERT INTO employes (proprietaire_id, terrain_id, nom, email, password_hash, telephone, whatsapp_number, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', e);

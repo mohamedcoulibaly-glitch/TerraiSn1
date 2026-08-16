@@ -58,8 +58,8 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
     description: "",
     telephone: "",
     is_active: true,
-    heure_debut: "08:00",
-    heure_fin: "23:00",
+    heure_debut: "06:00",
+    heure_fin: "00:00",
     photos: [] as string[],
     commodites: [] as CommoditeId[],
   });
@@ -86,8 +86,8 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         description: terrain.description || "",
         telephone: terrain.telephone || "",
         is_active: terrain.is_active ?? true,
-        heure_debut: terrain.heure_debut || "08:00",
-        heure_fin: terrain.heure_fin || "23:00",
+        heure_debut: terrain.heure_debut || "06:00",
+        heure_fin: terrain.heure_fin || "00:00",
         photos: terrain.photos || [],
         commodites: parseCommodites(terrain.commodites),
       });
@@ -112,8 +112,8 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         description: "",
         telephone: "",
         is_active: true,
-        heure_debut: "08:00",
-        heure_fin: "23:00",
+        heure_debut: "06:00",
+        heure_fin: "00:00",
         photos: [],
         commodites: [],
       });
@@ -188,6 +188,16 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
 
       if (isEditing) {
         await terrainsApi.update(terrain.id, data);
+        const jours = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
+        await terrainsApi.updateHoraires(
+          terrain.id,
+          jours.map((jour) => ({
+            jour,
+            heure_debut: form.heure_debut || "06:00",
+            heure_fin: form.heure_fin || "00:00",
+            est_ouvert: 1,
+          })),
+        );
         toast.success("Terrain modifié avec succès !");
       } else {
         await terrainsApi.create(data);
@@ -412,7 +422,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="heure_debut" className="text-xs text-muted-foreground">
-                  Heure d'ouverture
+                  Heure d&apos;ouverture
                 </Label>
                 <Input
                   id="heure_debut"
@@ -423,7 +433,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
               </div>
               <div className="space-y-2">
                 <Label htmlFor="heure_fin" className="text-xs text-muted-foreground">
-                  Heure de fermeture
+                  Heure de fermeture (00:00 = minuit)
                 </Label>
                 <Input
                   id="heure_fin"
@@ -433,6 +443,10 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
                 />
               </div>
             </div>
+            <p className="text-[11px] text-muted-foreground">
+              Plages libres (avant 08h / après 22h OK). Fin à 00:00 active le créneau « … minuit »
+              (vendredi 00h = Jeudi minuit).
+            </p>
           </div>
 
           {/* Statut actif */}

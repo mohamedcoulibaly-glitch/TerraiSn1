@@ -1,6 +1,5 @@
 const { getDb, queryAll, queryOne, runSql } = require('../database');
 const notificationService = require('../notificationService');
-const { playedStatusSql } = require('../ownerRevenueService');
 
 const LOW_SCORE_THRESHOLD = 50;
 
@@ -26,7 +25,7 @@ function getScoreInputs(db, gerantId, terrainId, sinceIso = sixtyDaysAgoIso()) {
   const scanStats = queryOne(db, `
     SELECT
       COUNT(*) AS total_confirmes,
-      SUM(CASE WHEN ${playedStatusSql('r')} OR r.qr_code_scanne_at IS NOT NULL THEN 1 ELSE 0 END) AS total_scannes
+      SUM(CASE WHEN r.qr_code_scanne_at IS NOT NULL THEN 1 ELSE 0 END) AS total_scannes
     FROM reservations r
     WHERE r.terrain_id = ?
       AND r.statut IN ('confirme', 'joue', 'match_joue')
@@ -153,7 +152,7 @@ function getSanteTerrain(db, terrainId) {
   const row = queryOne(db, `
     SELECT
       COUNT(*) AS total_confirmes,
-      SUM(CASE WHEN ${playedStatusSql('r')} OR r.qr_code_scanne_at IS NOT NULL THEN 1 ELSE 0 END) AS matchs_scannes
+      SUM(CASE WHEN r.qr_code_scanne_at IS NOT NULL THEN 1 ELSE 0 END) AS matchs_scannes
     FROM reservations r
     WHERE r.terrain_id = ?
       AND r.statut IN ('confirme', 'joue', 'match_joue')

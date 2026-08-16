@@ -139,16 +139,71 @@ async function creerLienPaiement(reservation) {
   });
 }
 
+function timingSafeEqualHex(a, b) {
+  const left = String(a || '').trim().toLowerCase();
+  const right = String(b || '').trim().toLowerCase();
+  if (!left || !right || left.length !== right.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(left), Buffer.from(right));
+  } catch {
+    return false;
+  }
+}
+
 function verifierHash(refCommand, receivedHash) {
   const secret = secretSignature();
   if (!refCommand || !receivedHash || !secret) return false;
   const expected = crypto.createHash('sha256').update(`${refCommand}${secret}`).digest('hex');
-  const received = String(receivedHash).trim().toLowerCase();
-  return expected.length === received.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+  return timingSafeEqualHex(expected, receivedHash);
 }
 
 function signerReference(refCommand) {
   return crypto.createHash('sha256').update(`${refCommand}${secretSignature()}`).digest('hex');
+}
+
+function decoderCustomField(raw) {
+  if (raw == null || raw === '') return {};
+  if (typeof raw === 'object') return raw;
+  const text = String(raw);
+  try {
+    return JSON.parse(text);
+  } catch {
+    try {
+      const decoded = Buffer.from(text, 'base64').toString('utf8');
+      return JSON.parse(decoded);
+    } catch {
+      return {};
+    }
+  }
+}
+
+function verifierIpnPaytech(payload = {}, headers = {}) {
+  if (estModeMock()) {
+    const refCommand = payload.ref_command || payload.refCommand;
+    const headerHash = headers['x-paytech-signature'] || headers['x-paytech-hash'] || headers.hash;
+    if (verifierHash(refCommand, headerHash)) return true;
+  }
+
+  const apiKey = process.env.PAYTECH_API_KEY || '';
+  const apiSecret = process.env.PAYTECH_API_SECRET || '';
+  if (!apiKey || !apiSecret) return false;
+
+  const hmacCompute = payload.hmac_compute;
+  if (hmacCompute) {
+    const amount = payload.final_item_price ?? payload.item_price ?? payload.item_price_xof;
+    const refCommand = payload.ref_command || payload.refCommand;
+    if (amount == null || !refCommand) return false;
+    const message = `${amount}|${refCommand}|${apiKey}`;
+    const expectedHmac = crypto.createHmac('sha256', apiSecret).update(message).digest('hex');
+    return timingSafeEqualHex(expectedHmac, hmacCompute);
+  }
+
+  const expectedKey = crypto.createHash('sha256').update(apiKey).digest('hex');
+  const expectedSecret = crypto.createHash('sha256').update(apiSecret).digest('hex');
+  return (
+    timingSafeEqualHex(expectedKey, payload.api_key_sha256)
+    && timingSafeEqualHex(expectedSecret, payload.api_secret_sha256)
+  );
 }
 
 async function rembourser(reference) {
@@ -175,6 +230,8 @@ module.exports = {
   creerLienPaiement,
   calculerMontantAvance,
   verifierHash,
+  verifierIpnPaytech,
+  decoderCustomField,
   signerReference,
   rembourser,
   estModeMock,

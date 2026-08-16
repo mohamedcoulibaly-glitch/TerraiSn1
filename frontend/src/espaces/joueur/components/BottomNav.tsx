@@ -2,6 +2,7 @@ import { Home, Search, Calendar, User } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
+import { hapticSelection } from "@/lib/haptics";
 
 const BottomNav = () => {
   const location = useLocation();
@@ -28,6 +29,11 @@ const BottomNav = () => {
     },
   ];
 
+  const handleNav = (path: string) => {
+    hapticSelection();
+    navigate(path);
+  };
+
   return (
     <nav
       className="bottom-nav md:hidden border-t border-[var(--nav-border)] bg-[var(--nav-bg)] pt-2 backdrop-blur-xl pb-[max(1.25rem,env(safe-area-inset-bottom,0px))]"
@@ -40,7 +46,7 @@ const BottomNav = () => {
             <button
               key={item.label}
               type="button"
-              onClick={() => navigate(item.path)}
+              onClick={() => handleNav(item.path)}
               className={`flex h-full w-full flex-col items-center justify-center gap-1 px-1 ${
                 isActive ? "text-[var(--primary)]" : "text-[var(--text-muted)]"
               }`}

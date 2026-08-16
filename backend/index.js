@@ -8,9 +8,13 @@ const bcrypt = require('bcryptjs');
 const { getDb, queryAll, queryOne, runSql, saveDb, transaction } = require('./database');
 const paytechService = require('./paytechService');
 const notificationService = require('./notificationService');
+const pushService = require('./pushService');
 const otpService = require('./otpService');
 const adminRoutes = require('./routes/admin');
 const roleRoutes = require('./routes/roles');
+const { mountPaymentRoutes } = require('./payments/routes');
+const { mountGerantCheckinRoutes } = require('./gerantCheckin');
+const { mountGerantCrmRoutes } = require('./gerantCrm');
 const {
   ensurePendingAbonnement,
   appliquerSuspensionsAbonnements: appliquerSuspensionsAbonnementsDb,
@@ -30,7 +34,27 @@ const {
 const { saveProfilePhoto } = require('./profilePhotoService');
 const { logActivite } = require('./services/auditService');
 const scoreService = require('./services/scoreService');
+const { assertFenetreScanQr, calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
+const { serializeQrPayload, parseQrPayload, assertQrMatchesReservation } = require('./services/qrPayload');
+const {
+  lockCreneauxAtomique,
+  libererCreneauxReservation,
+  confirmerCreneauxReservation,
+  rowsModified,
+  normalizeHourString,
+} = require('./reservationLockService');
+const { calculerPrixReservation, prixHoraireEffectif, calculerDevis, calculerMontantAvance } = require('./pricingService');
+const {
+  buildSlotsForOpenDay,
+  jourDepuisDate,
+  addDaysYmd,
+  parseEndHour,
+  labelHeureSenegal,
+  courtLabelHeureSenegal,
+  validateHorairePayload,
+} = require('./scheduleService');
 const path = require('path');
+const fs = require('fs');
 const logger = require('./logger');
 const {
   authMiddleware,
@@ -116,6 +140,24 @@ function isAccountBlocked(account, accountType) {
   if (Number(account.is_active) === 0) return true;
   const statut = String(account.statut || '').toLowerCase();
   return statut === 'bloque' || statut === 'suspendu';
+}
+
+function parsePhotos(raw) {
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch {
+      if (raw.startsWith('/') || raw.startsWith('http')) return [raw];
+    }
+  }
+  return [];
+}
+
+function serializeTerrain(terrain) {
+  if (!terrain) return terrain;
+  return { ...terrain, photos: parsePhotos(terrain.photos) };
 }
 
 function profileTableFor(accountType) {
@@ -253,7 +295,35 @@ app.use(cors({
 }));
 app.use(cookieParser());
 app.use(express.json({ limit: '8mb' }));
+fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
 app.use('/uploads', express.static(UPLOAD_ROOT));
+
+/** En-têtes de cache pour soutenir la stratégie PWA / Service Worker */
+app.use((req, res, next) => {
+  const reqPath = req.path.toLowerCase();
+
+  if (reqPath.startsWith('/api/terrains') && req.method === 'GET') {
+    res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=86400');
+    res.set('Vary', 'Authorization, Accept-Encoding');
+  } else if (reqPath.startsWith('/api/reservations/mes') && req.method === 'GET') {
+    res.set('Cache-Control', 'private, max-age=60, stale-while-revalidate=3600');
+    res.set('Vary', 'Authorization');
+  } else if (/^\/api\/reservations\/\d+$/.test(reqPath) && req.method === 'GET') {
+    res.set('Cache-Control', 'private, max-age=30, stale-while-revalidate=300');
+    res.set('Vary', 'Authorization');
+  } else if (reqPath.startsWith('/api/') && req.method === 'GET') {
+    res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+  } else if (reqPath.startsWith('/api/') && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  }
+
+  if (/\.(js|css|png|jpg|jpeg|webp|avif|svg|woff2|ico)$/i.test(reqPath)) {
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+
+  next();
+});
+
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
     logger.error('index.js', 'JSON invalide recu', err);
@@ -263,6 +333,9 @@ app.use((err, req, res, next) => {
 });
 app.use('/api/admin', adminRoutes);
 app.use('/api', roleRoutes);
+mountPaymentRoutes(app);
+mountGerantCheckinRoutes(app);
+mountGerantCrmRoutes(app);
 
 const rateLimitBuckets = new Map();
 function rateLimit({ windowMs, max, keyPrefix }) {
@@ -1037,59 +1110,178 @@ app.get('/api/terrains/:id', async (req, res) => {
     const avis = queryAll(db, 'SELECT a.*, u.nom as joueur_nom FROM avis a LEFT JOIN users u ON u.id = a.joueur_id WHERE a.terrain_id = ? ORDER BY a.created_at DESC', [terrain.id]);
     const employe = queryOne(db, 'SELECT whatsapp_number, nom FROM employes WHERE terrain_id = ? AND is_active = 1 LIMIT 1', [terrain.id]);
 
-    res.json({ ...terrain, horaires, avis, employe });
+    res.json({ ...serializeTerrain(terrain), horaires, avis, employe });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
-// Créneaux disponibles
+// Créneaux disponibles (plages horaires configurables + minuit culturel SN)
 app.get('/api/terrains/:id/creneaux', async (req, res) => {
   try {
     const db = await getDb();
     const { date } = req.query;
     if (!date) return res.status(400).json({ error: 'Date requise' });
+    const dateStr = String(date).slice(0, 10);
 
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
     if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
-    const d = new Date(date);
-    const joursMap = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
-    const jour = joursMap[d.getDay()];
-
+    const jour = jourDepuisDate(dateStr);
     const horaire = queryOne(db, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [terrain.id, jour]);
-    if (!horaire || !horaire.est_ouvert) {
-      return res.json({ creneaux: [], message: 'Fermé ce jour' });
-    }
 
-    const reservationsExistantes = queryAll(db, "SELECT heure_debut, heure_fin FROM reservations WHERE terrain_id = ? AND date = ? AND statut IN ('confirme', 'acceptee', 'en_attente')", [terrain.id, date]);
-    const blocages = queryAll(db, 'SELECT heure_debut, heure_fin FROM blocages_creneaux WHERE terrain_id = ? AND date = ?', [terrain.id, date]);
+    // Slots du jour + éventuel minuit culturel (calendrier lendemain)
+    let planned = buildSlotsForOpenDay(dateStr, horaire);
 
-    const startHour = parseInt(horaire.heure_debut.split(':')[0]);
-    const endHour = parseInt(horaire.heure_fin.split(':')[0]);
-    const creneaux = [];
-
-    for (let h = startHour; h < endHour; h++) {
-      const slot = `${h.toString().padStart(2, '0')}:00`;
-      const slotEnd = `${(h + 1).toString().padStart(2, '0')}:00`;
-
-      const isReserved = reservationsExistantes.some(r => slot >= r.heure_debut && slot < r.heure_fin);
-      const isBlocked = blocages.some(b => slot >= b.heure_debut && slot < b.heure_fin);
-
-      let creneau = queryOne(db, 'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?', [terrain.id, date, slot, slotEnd]);
-      if (!creneau) {
-        runSql(db, 'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)', [terrain.id, date, slot, slotEnd, isReserved ? 'reserve' : 'libre']);
-        creneau = queryOne(db, 'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?', [terrain.id, date, slot, slotEnd]);
+    // Si la veille ferme à minuit, exposer aussi 00:00 ce jour (label « … minuit »)
+    const prevDate = addDaysYmd(dateStr, -1);
+    const prevJour = jourDepuisDate(prevDate);
+    const prevHoraire = queryOne(db, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [terrain.id, prevJour]);
+    if (prevHoraire && Number(prevHoraire.est_ouvert) && parseEndHour(prevHoraire.heure_fin) === 24) {
+      const hasMidnight = planned.some((s) => s.date === dateStr && s.heure_debut === '00:00');
+      if (!hasMidnight) {
+        planned = [
+          {
+            date: dateStr,
+            heure_debut: '00:00',
+            heure_fin: '01:00',
+            label: labelHeureSenegal(dateStr, '00:00'),
+            label_court: courtLabelHeureSenegal(dateStr, '00:00'),
+            est_minuit_culturel: true,
+            jour_tarif: prevJour,
+            date_affichage: prevDate,
+          },
+          ...planned,
+        ];
       }
-      const disponible = creneau.statut === 'libre' && !isReserved && !isBlocked;
-      creneaux.push({ id: creneau.id, heure: slot, heure_fin: slotEnd, statut: creneau.statut, disponible, bloque: isBlocked });
     }
 
-    res.json({ creneaux, horaire });
+    if (!planned.length) {
+      return res.json({
+        creneaux: [],
+        message: 'Fermé ce jour',
+        horaire: horaire || null,
+        calendrier: 'senegal',
+      });
+    }
+
+    // Occupations : par date réelle du slot (minuit = jour calendaire suivant)
+    const datesNeeded = [...new Set(planned.map((s) => s.date))];
+    const reservationsExistantes = queryAll(
+      db,
+      `SELECT date, heure_debut, heure_fin FROM reservations
+        WHERE terrain_id = ? AND date IN (${datesNeeded.map(() => '?').join(',')})
+          AND statut IN ('confirme', 'acceptee', 'en_attente')`,
+      [terrain.id, ...datesNeeded],
+    );
+    const blocages = queryAll(
+      db,
+      `SELECT date, heure_debut, heure_fin FROM blocages_creneaux
+        WHERE terrain_id = ? AND date IN (${datesNeeded.map(() => '?').join(',')})`,
+      [terrain.id, ...datesNeeded],
+    );
+
+    const creneaux = [];
+    for (const slotPlan of planned) {
+      const slot = slotPlan.heure_debut;
+      const slotEnd = slotPlan.heure_fin;
+      const slotDate = slotPlan.date;
+
+      const isReserved = reservationsExistantes.some(
+        (r) => r.date === slotDate && slot >= r.heure_debut && slot < r.heure_fin,
+      );
+      const isBlocked = blocages.some(
+        (b) => b.date === slotDate && slot >= b.heure_debut && slot < b.heure_fin,
+      );
+
+      let creneau = queryOne(
+        db,
+        'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
+        [terrain.id, slotDate, slot, slotEnd],
+      );
+      if (!creneau) {
+        runSql(
+          db,
+          'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
+          [terrain.id, slotDate, slot, slotEnd, isReserved ? 'reserve' : 'libre'],
+        );
+        creneau = queryOne(
+          db,
+          'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
+          [terrain.id, slotDate, slot, slotEnd],
+        );
+      }
+
+      const disponible = creneau.statut === 'libre' && !isReserved && !isBlocked;
+      const prixEntier = prixHoraireEffectif(
+        db,
+        terrain,
+        slotDate,
+        slot,
+        'entier',
+        slotPlan.jour_tarif || null,
+      );
+      const prixMoitie = prixHoraireEffectif(
+        db,
+        terrain,
+        slotDate,
+        slot,
+        'moitie',
+        slotPlan.jour_tarif || null,
+      );
+
+      creneaux.push({
+        id: creneau.id,
+        date: slotDate,
+        date_selection: dateStr,
+        heure: slot,
+        heure_fin: slotEnd,
+        label: slotPlan.label || labelHeureSenegal(slotDate, slot),
+        label_court: slotPlan.label_court || courtLabelHeureSenegal(slotDate, slot),
+        est_minuit_culturel: Boolean(slotPlan.est_minuit_culturel),
+        statut: creneau.statut,
+        disponible,
+        bloque: isBlocked,
+        prix_entier: prixEntier,
+        prix_moitie: prixMoitie,
+      });
+    }
+
+    res.json({
+      creneaux,
+      horaire: horaire || null,
+      calendrier: 'senegal',
+      note_minuit:
+        'Le créneau 00:00 (ex. vendredi) s’affiche et se programme comme « Jeudi minuit ».',
+      prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
+      prix_moitie_base: Number(terrain.prix_moitie || 0),
+      pourcentage_avance: Number(terrain.pourcentage_avance || 12.5),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Devis prix dynamique (joueur / public)
+app.get('/api/terrains/:id/devis', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
+    const date = String(req.query.date || '');
+    const heure_debut = normalizeHourString(req.query.heure_debut || req.query.debut || '');
+    const heure_fin = normalizeHourString(req.query.heure_fin || req.query.fin || '');
+    const format_terrain = req.query.format === 'moitie' ? 'moitie' : 'entier';
+    if (!date || !heure_debut || !heure_fin) {
+      return res.status(400).json({ error: 'date, heure_debut et heure_fin requis' });
+    }
+    const devis = calculerDevis(db, terrain, { date, heure_debut, heure_fin, format_terrain });
+    res.json(devis);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -1097,7 +1289,7 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
 app.post('/api/terrains', authMiddleware, requireRole('proprietaire'), async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone, commodites } = req.body;
+    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone, commodites, heure_debut, heure_fin } = req.body;
     const prixEntier = Number(prix_entier || prix_heure);
     const prixMoitie = Number(prix_moitie || prixEntier * 0.6);
     const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : 8));
@@ -1107,12 +1299,14 @@ app.post('/api/terrains', authMiddleware, requireRole('proprietaire'), async (re
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [req.user.id, nom, adresse, ville, sport || 'foot', type || '11v11', prixEntier, prixMoitie, prixEntier, avanceTerrain, avanceTerrain, pourcentageAvance, 'commission', 0, 0, 0, Number.isFinite(Number(latitude)) ? Number(latitude) : null, Number.isFinite(Number(longitude)) ? Number(longitude) : null, description, telephone, serializeCommodites(commodites)]);
     
+    const openStart = String(heure_debut || '06:00').slice(0, 5);
+    const openEnd = String(heure_fin || '00:00').slice(0, 5); // 00:00 = jusqu'à minuit par défaut élargi
     const jours = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
     for (const jour of jours) {
-      runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [result.lastInsertRowid, jour, '08:00', '22:00']);
+      runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [result.lastInsertRowid, jour, openStart, openEnd]);
     }
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [result.lastInsertRowid]);
-    res.status(201).json(terrain);
+    res.status(201).json(serializeTerrain(terrain));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -1136,7 +1330,7 @@ app.put('/api/terrains/:id', authMiddleware, requireRole('proprietaire'), async 
       [nom || terrain.nom, adresse || terrain.adresse, ville || terrain.ville, sport || terrain.sport, type || terrain.type, prixEntier, Number(prix_moitie || terrain.prix_moitie || prixEntier * 0.6), prixEntier, avanceTerrain, avanceTerrain, pourcentageAvance, latitude === '' || latitude == null ? terrain.latitude : (Number.isFinite(Number(latitude)) ? Number(latitude) : null), longitude === '' || longitude == null ? terrain.longitude : (Number.isFinite(Number(longitude)) ? Number(longitude) : null), description || terrain.description, telephone || terrain.telephone, is_active !== undefined ? is_active : terrain.is_active, commoditesJson, terrain.id]);
     
     const updated = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrain.id]);
-    res.json(updated);
+    res.json(serializeTerrain(updated));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -1224,37 +1418,36 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
       return res.status(400).json({ error: 'Nom et téléphone du joueur requis' });
     }
 
+    let telephoneNorm;
+    try {
+      telephoneNorm = notificationService.normalizeTelephoneStore(joueur_telephone);
+    } catch (phoneErr) {
+      return res.status(400).json({ error: phoneErr.message || 'Numéro WhatsApp invalide' });
+    }
+
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
     if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
     if (!date || !heure_debut || !heure_fin) return res.status(400).json({ error: 'Créneau invalide' });
-    const startH = parseInt(heure_debut.split(':')[0]);
-    const endH = parseInt(heure_fin.split(':')[0]);
+    const heureDebutNorm = normalizeHourString(heure_debut);
+    const heureFinNorm = normalizeHourString(heure_fin);
+    const startH = parseInt(heureDebutNorm.split(':')[0], 10);
+    const endH = parseInt(heureFinNorm.split(':')[0], 10);
     const duree = endH - startH;
     if (duree <= 0) return res.status(400).json({ error: 'Créneau invalide' });
     if (!['moitie', 'entier'].includes(format_terrain)) return res.status(400).json({ error: 'Format de terrain invalide' });
-    const prixHoraire = Number(format_terrain === 'moitie' ? terrain.prix_moitie : terrain.prix_entier);
-    const montant = prixHoraire * duree;
+    const montant = calculerPrixReservation(db, terrain, date, heureDebutNorm, heureFinNorm, format_terrain);
     const montantAvance = calculerMontantAvance(terrain, montant);
     const montantRestant = Math.max(0, montant - montantAvance);
     const verrouExpireAt = Date.now() + lockDurationMs;
 
+    // Transaction ACID : verrou IMMEDIATE + UPDATE conditionnel sur chaque heure (anti double-booking)
     const reservationId = transaction(db, () => {
-      let creneau = queryOne(db, 'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?', [terrainId, date, heure_debut, heure_fin]);
-      if (!creneau) {
-        db.run('INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)', [terrainId, date, heure_debut, heure_fin, 'libre']);
-        creneau = queryOne(db, 'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?', [terrainId, date, heure_debut, heure_fin]);
-      }
-      if (creneau.statut !== 'libre') {
-        const error = new Error('Créneau déjà réservé ou en attente de paiement');
-        error.statusCode = 409;
-        throw error;
-      }
-      db.run("UPDATE creneaux SET statut = 'en_attente_paiement' WHERE id = ? AND statut = 'libre'", [creneau.id]);
+      const creneauId = lockCreneauxAtomique(db, terrainId, date, heureDebutNorm, heureFinNorm);
       db.run(`INSERT INTO reservations
         (terrain_id, creneau_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain, statut, expire_at, verrou_expire_at, cree_par)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)`,
-        [terrainId, creneau.id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, montant, montantAvance, montantRestant, montantAvance, montantRestant, format_terrain, new Date(verrouExpireAt).toISOString(), verrouExpireAt, creePar]);
+        [terrainId, creneauId, joueur_nom, telephoneNorm, date, heureDebutNorm, heureFinNorm, montant, montant, montantAvance, montantRestant, montantAvance, montantRestant, format_terrain, new Date(verrouExpireAt).toISOString(), verrouExpireAt, creePar]);
       return queryOne(db, 'SELECT last_insert_rowid() AS id').id;
     });
 
@@ -1265,11 +1458,20 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
 
     try {
       const payment = await paytechService.creerLienPaiement(reservation);
-      runSql(db, 'UPDATE reservations SET lien_paiement = ? WHERE id = ?', [payment.redirectUrl, reservation.id]);
-      reservation = { ...reservation, lien_paiement: payment.redirectUrl, redirect_url: payment.redirectUrl };
+      runSql(db, 'UPDATE reservations SET lien_paiement = ?, reference_paytech = ? WHERE id = ?', [
+        payment.redirectUrl,
+        payment.reference,
+        reservation.id,
+      ]);
+      reservation = {
+        ...reservation,
+        lien_paiement: payment.redirectUrl,
+        reference_paytech: payment.reference,
+        redirect_url: payment.redirectUrl,
+      };
     } catch (error) {
       transaction(db, () => {
-        db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'", [reservation.creneau_id]);
+        libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
         db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservation.id]);
       });
       throw error;
@@ -1283,14 +1485,35 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
         reservation_id: reservation.id,
         details: {
           date,
-          heure_debut,
-          heure_fin,
+          heure_debut: heureDebutNorm,
+          heure_fin: heureFinNorm,
           format_terrain,
           montant,
         },
       }).catch((error) => logger.error('index.js', 'Log activite reservation_creee', error));
-      await notificationService.envoyerLienPaiement(reservation.id).catch((error) => logger.error('index.js', 'Envoi lien paiement WhatsApp impossible', error));
-      return res.status(201).json({ success: true, reservation_id: reservation.id });
+
+      let whatsapp_sent = false;
+      let whatsapp_error = null;
+      try {
+        await notificationService.envoyerLienPaiement(reservation.id);
+        whatsapp_sent = true;
+      } catch (error) {
+        whatsapp_error = error.message || 'Envoi WhatsApp impossible';
+        logger.error('index.js', 'Envoi lien paiement WhatsApp impossible', error);
+      }
+
+      return res.status(201).json({
+        success: true,
+        reservation_id: reservation.id,
+        montant,
+        montant_avance: montantAvance,
+        montant_restant: montantRestant,
+        heure_debut: heureDebutNorm,
+        heure_fin: heureFinNorm,
+        joueur_telephone: telephoneNorm,
+        whatsapp_sent,
+        whatsapp_error,
+      });
     }
 
     res.status(201).json(reservation);
@@ -1314,9 +1537,77 @@ app.post('/api/gerant/reservations', authMiddleware, requireRole('gerant'), asyn
   return creerReservationAvecPaiement(req, res, 'gerant', 2 * 60 * 60 * 1000, Number(req.user.terrain_id));
 });
 
-app.get('/api/whatsapp/status', authMiddleware, requireRole('gerant', 'proprietaire'), (req, res) => {
+app.get('/api/whatsapp/status', (req, res) => {
   const whatsappClient = require('./whatsappClient');
-  res.json({ connected: Boolean(whatsappClient.isReady), mock: String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true' });
+  res.json(typeof whatsappClient.getStatus === 'function' ? whatsappClient.getStatus() : {
+    connected: Boolean(whatsappClient.isReady),
+    mock: String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true',
+  });
+});
+
+app.get('/api/whatsapp/qr', (req, res) => {
+  const whatsappClient = require('./whatsappClient');
+  const payload = typeof whatsappClient.getQrPayload === 'function'
+    ? whatsappClient.getQrPayload()
+    : { connected: Boolean(whatsappClient.isReady), mock: false };
+  res.json(payload);
+});
+
+app.get('/whatsapp-qr', (req, res) => {
+  const whatsappClient = require('./whatsappClient');
+  const payload = typeof whatsappClient.getQrPayload === 'function'
+    ? whatsappClient.getQrPayload()
+    : { connected: Boolean(whatsappClient.isReady) };
+  const status = typeof whatsappClient.getStatus === 'function' ? whatsappClient.getStatus() : {};
+  const img = payload.dataUrl
+    ? `<img src="${payload.dataUrl}" alt="QR WhatsApp" width="320" height="320" />`
+    : payload.connected
+      ? `<p style="color:#0A5C36;font-size:1.25rem">WhatsApp deja connecte</p>`
+      : status.mock
+        ? `<p>Mode MOCK actif (WHATSAPP_MOCK=true)</p>`
+        : `<p>En attente du QR… rafraîchissement auto</p><script>setTimeout(()=>location.reload(),2500)</script>`;
+  res.type('html').send(`<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"/><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>TerrainSN — Connecter WhatsApp</title>
+<style>
+ body{font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;
+  background:#F4F6F9;color:#122;margin:0}
+ .card{background:#fff;padding:2rem;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center;max-width:420px}
+ h1{font-size:1.25rem;margin:0 0 .5rem} p{color:#556;line-height:1.4}
+</style></head><body><div class="card">
+<h1>Scanner pour activer WhatsApp</h1>
+<p>WhatsApp → Paramètres → Appareils connectés → Connecter un appareil</p>
+${img}
+<p style="margin-top:1rem;font-size:.85rem">Puis un test peut être envoyé à ${process.env.WHATSAPP_TEST_NUMBER || ''}</p>
+</div></body></html>`);
+});
+
+/** Envoi de test (dev uniquement) — body: { telephone, message? } */
+app.post('/api/whatsapp/test', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Non disponible' });
+  }
+  try {
+    const whatsappClient = require('./whatsappClient');
+    if (typeof whatsappClient.ensureStarted === 'function') {
+      await whatsappClient.ensureStarted();
+    }
+    const telephone = req.body?.telephone || process.env.WHATSAPP_TEST_NUMBER;
+    const message = req.body?.message ||
+      `\u2705 *TerrainSN* — test WhatsApp OK \u26BD\n` +
+      `\uD83D\uDCF1 Envoye le ${new Date().toLocaleString('fr-SN')}\n` +
+      `L'integration WhatsApp fonctionne !`;
+    if (!telephone) return res.status(400).json({ error: 'telephone requis' });
+    await notificationService.envoyerMessage(telephone, message);
+    res.json({
+      ok: true,
+      telephone,
+      mock: String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true',
+      connected: Boolean(whatsappClient.isReady),
+    });
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'Envoi WhatsApp impossible' });
+  }
 });
 
 app.post('/api/reservations/:id/renvoyer-lien', authMiddleware, requireRole('gerant'), async (req, res) => {
@@ -1328,6 +1619,38 @@ app.post('/api/reservations/:id/renvoyer-lien', authMiddleware, requireRole('ger
     res.json({ message: 'Lien WhatsApp renvoyé' });
   } catch (error) {
     console.error('Renvoi WhatsApp:', error);
+    res.status(503).json({ error: error.message || 'Envoi WhatsApp impossible' });
+  }
+});
+
+/** Renvoi confirmation + QR image (dev / dépannage) — body optionnel, auth gerant ou admin */
+app.post('/api/reservations/:id(\\d+)/renvoyer-confirmation', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const reservation = queryOne(
+      db,
+      `SELECT id, statut, code_reservation, joueur_telephone FROM reservations WHERE id = ? AND terrain_id = ?`,
+      [Number(req.params.id), req.user.terrain_id]
+    );
+    if (!reservation) return res.status(404).json({ error: 'Réservation introuvable' });
+    if (reservation.statut !== 'confirme' && reservation.statut !== 'acceptee') {
+      return res.status(400).json({
+        error: `La réservation doit être confirmée (statut actuel: ${reservation.statut})`,
+      });
+    }
+    if (!reservation.code_reservation) {
+      return res.status(400).json({ error: 'Pas de code_reservation — impossible de générer le QR' });
+    }
+    await notificationService.envoyerConfirmation(reservation.id);
+    res.json({
+      ok: true,
+      reservation_id: reservation.id,
+      code_reservation: reservation.code_reservation,
+      telephone: reservation.joueur_telephone,
+      message: 'Confirmation WhatsApp + QR envoyés',
+    });
+  } catch (error) {
+    console.error('Renvoi confirmation WhatsApp:', error);
     res.status(503).json({ error: error.message || 'Envoi WhatsApp impossible' });
   }
 });
@@ -1364,6 +1687,56 @@ app.get('/api/reservations/:id(\\d+)', optionalAuth, async (req, res) => {
   }
 });
 
+/** PNG du QR code (JSON métier ou fallback code) — page succès joueur / fiche gérant */
+app.get('/api/reservations/:id(\\d+)/qr.png', optionalAuth, async (req, res) => {
+  try {
+    const db = await getDb();
+    const reservation = queryOne(
+      db,
+      `SELECT r.id, r.joueur_id, r.code_reservation, r.qr_code_payload, r.creneau_id, r.terrain_id, r.date, r.heure_debut, r.heure_fin,
+              COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
+       FROM reservations r
+       LEFT JOIN creneaux c ON c.id = r.creneau_id
+       WHERE r.id = ?`,
+      [Number(req.params.id)]
+    );
+    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
+    if (req.user && reservation.joueur_id && Number(reservation.joueur_id) !== Number(req.user.id) && req.user.role === 'joueur') {
+      return res.status(403).json({ error: 'Accès interdit' });
+    }
+
+    let payload = reservation.qr_code_payload;
+    if (!payload && reservation.code_reservation) {
+      const fenetre = calculerFenetreCheckIn({
+        date: reservation.date,
+        heure_debut: reservation.heure_debut,
+        heure_fin: reservation.heure_fin,
+        fenetre_retard: reservation.fenetre_retard,
+      });
+      payload = serializeQrPayload({
+        reservation_id: reservation.id,
+        code: reservation.code_reservation,
+        creneau_id: reservation.creneau_id,
+        terrain_id: reservation.terrain_id,
+        expire_at: Math.floor(fenetre.finFenetre / 1000),
+      });
+    }
+    if (!payload) payload = String(reservation.id);
+
+    const png = await require('qrcode').toBuffer(payload, {
+      type: 'png',
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 512,
+    });
+    res.set('Cache-Control', 'private, max-age=300');
+    res.type('png').send(png);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Génération QR impossible' });
+  }
+});
+
 app.get('/api/reservations/mes', optionalAuth, async (req, res) => {
   try {
     // Sans compte connecté, retourner un tableau vide (accès libre pour les joueurs)
@@ -1396,9 +1769,16 @@ app.put('/api/reservations/:id/annuler', optionalAuth, async (req, res) => {
       return res.status(400).json({ error: 'Réservation ne peut pas être annulée' });
     }
     transaction(db, () => {
-      db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservation.id]);
-      if (reservation.statut === 'en_attente' && reservation.creneau_id) {
-        db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'", [reservation.creneau_id]);
+      db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')", [reservation.id]);
+      if (rowsModified(db) !== 1) {
+        const error = new Error('Réservation ne peut pas être annulée');
+        error.statusCode = 400;
+        throw error;
+      }
+      if (reservation.statut === 'en_attente') {
+        libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
+      } else {
+        libererCreneauxReservation(db, reservation, ['reserve', 'en_attente_paiement']);
       }
     });
     res.json({ message: 'Réservation annulée' });
@@ -1417,10 +1797,13 @@ app.patch('/api/gerant/reservations/:id/annuler', authMiddleware, requireRole('g
       return res.status(400).json({ error: 'Reservation ne peut pas etre annulee' });
     }
     transaction(db, () => {
-      db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ?", [req.user.id, reservation.id]);
-      if (reservation.creneau_id) {
-        db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut IN ('en_attente_paiement', 'reserve')", [reservation.creneau_id]);
+      db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')", [req.user.id, reservation.id]);
+      if (rowsModified(db) !== 1) {
+        const error = new Error('Reservation ne peut pas etre annulee');
+        error.statusCode = 400;
+        throw error;
       }
+      libererCreneauxReservation(db, reservation, ['en_attente_paiement', 'reserve']);
     });
     await logActivite({
       gerant_id: req.user.id,
@@ -1450,8 +1833,8 @@ app.put('/api/reservations/:id/traiter', authMiddleware, requireRole('gerant', '
     const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [Number(req.params.id)]);
     if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
     transaction(db, () => {
-      db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ?", [req.user.id, reservation.id]);
-      if (reservation.creneau_id) db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'", [reservation.creneau_id]);
+      db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')", [req.user.id, reservation.id]);
+      libererCreneauxReservation(db, reservation, ['en_attente_paiement', 'reserve']);
     });
     if (req.user.role === 'gerant') {
       await logActivite({
@@ -1486,349 +1869,8 @@ app.get('/api/reservations/terrain/:terrainId', authMiddleware, requireRole('ger
 });
 
 // ============================================================
-// PAIEMENTS
-// ============================================================
-function genererCodeReservation(db) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const code = `TF-${Math.floor(100000 + Math.random() * 900000)}`;
-    if (!queryOne(db, 'SELECT id FROM reservations WHERE code_reservation = ?', [code])) return code;
-  }
-  throw new Error('Impossible de générer un code de réservation unique');
-}
+// Paiement isolé : voir backend/payments/
 
-function reservationIdDepuisReference(refCommand) {
-  const match = String(refCommand || '').match(/^TF-(\d+)-/);
-  return match ? Number(match[1]) : 0;
-}
-
-const POURCENTAGE_AVANCE_DEFAUT = 8;
-
-function calculerMontantAvance(terrain, prixChoisi) {
-  const montant = Number(prixChoisi || 0);
-  const pourcentageAvance = Number(terrain?.pourcentage_avance);
-  const taux = Number.isFinite(pourcentageAvance) && pourcentageAvance > 0
-    ? pourcentageAvance
-    : POURCENTAGE_AVANCE_DEFAUT;
-  return Math.min(montant, Math.round((montant * taux) / 100));
-}
-
-function calculerCommissionPrelevee(terrain, montantAvance) {
-  if (terrain?.modele_revenus && terrain.modele_revenus !== 'commission') return 0;
-  const commissionPourcentage = Number(terrain?.commission_pourcentage);
-  if (Number.isFinite(commissionPourcentage) && commissionPourcentage > 0) {
-    return Math.min(montantAvance, Math.round((montantAvance * commissionPourcentage) / 100));
-  }
-  return Math.min(montantAvance, Number(terrain?.commission || 0));
-}
-
-async function traiterConfirmationPaytech(db, reservationId, refCommand) {
-  let action = 'ignore';
-  let reversementInfo = null;
-
-  transaction(db, () => {
-    const currentReservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-    if (!currentReservation) return;
-    const existingPaidPayment = queryOne(db, "SELECT id FROM paiements WHERE reservation_id = ? AND statut = 'paye' LIMIT 1", [reservationId]);
-    const existingReversement = queryOne(db, 'SELECT id FROM reversements WHERE reservation_id = ? LIMIT 1', [reservationId]);
-    if (currentReservation.statut === 'confirme' || existingPaidPayment || existingReversement) {
-      action = 'already_confirmed';
-      return;
-    }
-    const creneau = queryOne(db, 'SELECT * FROM creneaux WHERE id = ?', [currentReservation.creneau_id]);
-
-    if (creneau?.statut === 'en_attente_paiement' && currentReservation.statut === 'en_attente') {
-      const terrain = queryOne(db, `SELECT t.id AS terrain_id, t.acompte, t.montant_acompte, t.commission,
-        t.pourcentage_avance, t.modele_revenus, t.commission_pourcentage,
-        e.id AS gerant_id, e.telephone AS gerant_tel, e.whatsapp_number AS gerant_whatsapp, e.nom AS gerant_nom
-        FROM terrains t
-        LEFT JOIN employes e ON e.terrain_id = t.id AND e.is_active = 1
-        WHERE t.id = ?
-        LIMIT 1`, [currentReservation.terrain_id]);
-      const montantAvance = Number(currentReservation.montant_avance || currentReservation.acompte || calculerMontantAvance(terrain, currentReservation.prix_total || currentReservation.montant));
-      const montantCommission = calculerCommissionPrelevee(terrain, montantAvance);
-      const montantReverse = Math.max(0, montantAvance - montantCommission);
-      const code = genererCodeReservation(db);
-
-      db.run("UPDATE creneaux SET statut = 'reserve' WHERE id = ?", [creneau.id]);
-      db.run("UPDATE reservations SET statut = 'confirme', code_reservation = ?, acompte = ?, montant_avance = ?, reste_a_payer = MAX(0, COALESCE(prix_total, montant, 0) - ?), montant_restant = MAX(0, COALESCE(prix_total, montant, 0) - ?) WHERE id = ?", [code, montantAvance, montantAvance, montantAvance, montantAvance, reservationId]);
-      db.run(`INSERT INTO paiements
-        (reservation_id, montant, methode, statut, reference_externe, reference_paytech, montant_acompte, montant_commission, montant_reverse, statut_reversement)
-        VALUES (?, ?, 'paytech', 'paye', ?, ?, ?, ?, ?, ?)`,
-        [reservationId, montantAvance, refCommand, refCommand, montantAvance, montantCommission, montantReverse, terrain?.gerant_id ? 'effectue' : 'en_attente']);
-
-      if (terrain?.gerant_id) {
-        db.run(`INSERT INTO portefeuille_gerant
-          (gerant_id, terrain_id, solde_disponible, total_encaisse, total_commission_prelevee)
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(gerant_id, terrain_id) DO UPDATE SET
-            solde_disponible = solde_disponible + excluded.solde_disponible,
-            total_encaisse = total_encaisse + excluded.total_encaisse,
-            total_commission_prelevee = total_commission_prelevee + excluded.total_commission_prelevee,
-            updated_at = CURRENT_TIMESTAMP`,
-          [terrain.gerant_id, terrain.terrain_id, montantReverse, montantAvance, montantCommission]);
-        db.run(`INSERT OR IGNORE INTO reversements (gerant_id, terrain_id, reservation_id, montant, commission_prelevee, statut)
-          VALUES (?, ?, ?, ?, ?, 'effectue')`, [terrain.gerant_id, terrain.terrain_id, reservationId, montantReverse, montantCommission]);
-        reversementInfo = {
-          telephone: terrain.gerant_whatsapp || terrain.gerant_tel,
-          nom: terrain.gerant_nom,
-          montant_avance: montantAvance,
-          montant_commission: montantCommission,
-          montant_reverse: montantReverse,
-          reservationId,
-          solde_disponible: queryOne(db, 'SELECT solde_disponible FROM portefeuille_gerant WHERE gerant_id = ? AND terrain_id = ?', [terrain.gerant_id, terrain.terrain_id])?.solde_disponible || montantReverse,
-        };
-      }
-      action = 'confirm';
-    } else if (creneau?.statut === 'reserve' && currentReservation.statut === 'en_attente') {
-      action = 'refund';
-    }
-  });
-
-  return { action, reversementInfo };
-}
-
-async function confirmerPaiementEtNotifier(reservationId, refCommand) {
-  const db = await getDb();
-  const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-  if (!reservation) return { action: 'missing' };
-
-  const { action, reversementInfo } = await traiterConfirmationPaytech(db, reservationId, refCommand);
-  if (action === 'confirm') {
-    await notificationService.envoyerConfirmation(reservationId).catch((error) => {
-      logger.error('index.js', 'Notification confirmation', error);
-    });
-    if (reversementInfo) {
-      await notificationService.envoyerReversement(reversementInfo).catch((error) => {
-        logger.error('index.js', 'Notification reversement', error);
-      });
-    }
-  } else if (action === 'refund') {
-    await paytechService.rembourser(refCommand);
-    transaction(db, () => {
-      db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservationId]);
-      db.run(`INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
-        VALUES (?, ?, 'paytech', 'rembourse', ?, ?)`, [reservationId, reservation.acompte, refCommand, refCommand]);
-    });
-    await notificationService.envoyerRemboursement(reservationId).catch((error) => {
-      logger.error('index.js', 'Notification remboursement', error);
-    });
-  }
-  return { action };
-}
-
-app.post('/webhook/paytech', async (req, res) => {
-  const refCommand = req.body.ref_command || req.body.refCommand;
-  const receivedHash = req.headers['x-paytech-signature'] || req.headers['x-paytech-hash'] || req.headers.hash;
-  if (!paytechService.verifierHash(refCommand, receivedHash)) {
-    return res.status(400).json({ error: 'Signature PayTech invalide' });
-  }
-
-  try {
-    const custom = typeof req.body.custom_field === 'string' ? JSON.parse(req.body.custom_field) : (req.body.custom_field || {});
-    const reservationId = Number(custom.reservation_id || req.body.reservation_id || reservationIdDepuisReference(refCommand));
-    await confirmerPaiementEtNotifier(reservationId, refCommand);
-    return res.status(200).json({ received: true });
-  } catch (error) {
-    logger.error('index.js', 'Webhook PayTech', error);
-    return res.status(200).json({ received: true, processing_error: true });
-  }
-});
-
-async function simulerPaytech(req, res) {
-  if (!paytechService.estModeMock()) return res.status(404).json({ error: 'Simulation PayTech desactivee' });
-  try {
-    const refCommand = String(req.body.ref_command || req.body.ref || '');
-    const reservationId = Number(req.body.reservation_id || reservationIdDepuisReference(refCommand));
-    const action = req.body.action || 'success';
-    if (!reservationId || !refCommand.startsWith(`TF-${reservationId}-`) || !['success', 'cancel', 'failed'].includes(action)) {
-      return res.status(400).json({ error: 'Paiement simule invalide' });
-    }
-
-    const db = await getDb();
-    const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-    if (!reservation) return res.status(404).json({ error: 'Reservation non trouvee' });
-    const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
-
-    if (action !== 'success') {
-      transaction(db, () => {
-        db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
-        db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'", [reservation.creneau_id]);
-      });
-      return res.json({ redirect_url: `${domain}/reservation/annule?terrain_id=${reservation.terrain_id}` });
-    }
-
-    await confirmerPaiementEtNotifier(reservationId, refCommand);
-    const confirmed = queryOne(db, 'SELECT statut FROM reservations WHERE id = ?', [reservationId]);
-    if (confirmed?.statut !== 'confirme') throw new Error('La confirmation simulee a echoue');
-    return res.json({ redirect_url: `${domain}/reservation/succes?id=${reservationId}` });
-  } catch (error) {
-    logger.error('index.js', 'Simulation PayTech', error);
-    return res.status(500).json({ error: 'Le paiement n a pas pu etre confirme. Veuillez reessayer.' });
-  }
-}
-
-app.post('/webhook/paytech/simulate', simulerPaytech);
-app.post('/api/webhook/paytech/simulate', simulerPaytech);
-
-async function marquerReservationJouee({ db, reservation, gerantId, methode }) {
-  const solde = Number(reservation.reste_a_payer || 0);
-  transaction(db, () => {
-    db.run("UPDATE reservations SET statut = 'joue', reste_a_payer = 0, qr_code_scanne_at = COALESCE(qr_code_scanne_at, CURRENT_TIMESTAMP) WHERE id = ? AND statut = 'confirme'", [reservation.id]);
-    db.run(`INSERT INTO matchs (reservation_id, terrain_id, gerant_id, montant_total, acompte_paye, solde_paye, methode_solde)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`, [reservation.id, reservation.terrain_id, gerantId, reservation.prix_total || reservation.montant, reservation.acompte || 0, solde, methode]);
-    if (solde > 0) {
-      db.run(`INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe)
-        VALUES (?, ?, ?, 'paye', ?)`, [reservation.id, solde, methode, `SOLDE-${reservation.id}-${Date.now()}`]);
-    }
-  });
-}
-
-function assertFenetreScanQr(creneau) {
-  const maintenant = Date.now();
-  const heureMatch = new Date(`${creneau.date}T${creneau.heure_debut}`).getTime();
-  const heureFinMatch = new Date(`${creneau.date}T${creneau.heure_fin}`).getTime();
-  const debutFenetre = heureMatch - 60 * 60 * 1000;
-  const finFenetre = heureFinMatch + 2 * 60 * 60 * 1000;
-
-  if (maintenant < debutFenetre) {
-    const error = new Error("Ce QR code n'est scannable qu'à partir d'1h avant le match et jusqu'à 2h après sa fin.");
-    error.statusCode = 400;
-    error.code = 'QR_SCAN_TOO_EARLY';
-    error.scannable_at = new Date(debutFenetre).toISOString();
-    error.minutes_remaining = Math.ceil((debutFenetre - maintenant) / (60 * 1000));
-    error.match_date = creneau.date;
-    error.match_time = creneau.heure_debut;
-    throw error;
-  }
-  if (maintenant > finFenetre) {
-    const error = new Error("Ce QR code n'est scannable qu'à partir d'1h avant le match et jusqu'à 2h après sa fin.");
-    error.statusCode = 400;
-    error.code = 'QR_SCAN_EXPIRED';
-    error.match_date = creneau.date;
-    error.match_time = creneau.heure_debut;
-    throw error;
-  }
-}
-
-app.put('/api/reservations/:id/jouer', authMiddleware, requireRole('gerant'), async (req, res) => {
-  try {
-    const db = await getDb();
-    const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?', [Number(req.params.id), req.user.terrain_id]);
-    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée pour ce terrain' });
-    if (reservation.statut !== 'confirme') return res.status(400).json({ error: 'Seule une réservation confirmée peut passer à jouée' });
-    const methode = ['especes', 'wave', 'orange_money'].includes(req.body.methode) ? req.body.methode : 'especes';
-
-    await marquerReservationJouee({ db, reservation, gerantId: req.user.id, methode });
-    const match = queryOne(db, 'SELECT * FROM matchs WHERE reservation_id = ?', [reservation.id]);
-    res.json({ message: 'Match marqué comme joué et revenu comptabilisé', match });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message || 'Erreur serveur' });
-  }
-});
-
-app.patch('/api/gerant/reservations/:id/scanner', authMiddleware, requireRole('gerant'), async (req, res) => {
-  try {
-    const db = await getDb();
-    const reservation = queryOne(db, `
-      SELECT r.*, t.nom AS terrain_nom, c.date AS creneau_date, c.heure_debut AS creneau_heure_debut, c.heure_fin AS creneau_heure_fin
-      FROM reservations r
-      JOIN terrains t ON t.id = r.terrain_id
-      LEFT JOIN creneaux c ON c.id = r.creneau_id
-      WHERE r.id = ? AND r.terrain_id = ?
-    `, [Number(req.params.id), req.user.terrain_id]);
-    if (!reservation) return res.status(404).json({ error: 'Reservation non trouvee pour ce terrain' });
-    if (reservation.qr_code_scanne_at) {
-      return res.status(403).json({ error: `Ce code QR a deja ete scanne le ${reservation.qr_code_scanne_at}` });
-    }
-    if (reservation.statut !== 'confirme') return res.status(400).json({ error: 'Seule une reservation confirmee peut etre scannee' });
-
-    assertFenetreScanQr({
-      date: reservation.creneau_date || reservation.date,
-      heure_debut: reservation.creneau_heure_debut || reservation.heure_debut,
-      heure_fin: reservation.creneau_heure_fin || reservation.heure_fin,
-    });
-
-    const methode = ['especes', 'wave', 'orange_money'].includes(req.body.methode) ? req.body.methode : 'especes';
-    await marquerReservationJouee({ db, reservation, gerantId: req.user.id, methode });
-    await logActivite({
-      gerant_id: req.user.id,
-      terrain_id: reservation.terrain_id,
-      action: 'qr_scanne',
-      reservation_id: reservation.id,
-      details: { methode },
-    }).catch((error) => logger.error('index.js', 'Log activite qr_scanne', error));
-    await scoreService.recalculerScore(req.user.id, reservation.terrain_id).catch((error) => logger.error('index.js', 'Recalcul score scan QR', error));
-    const match = queryOne(db, 'SELECT * FROM matchs WHERE reservation_id = ?', [reservation.id]);
-    res.json({
-      message: 'QR code scanne et match valide',
-      match,
-      reservation: {
-        id: reservation.id,
-        joueur_nom: reservation.joueur_nom,
-        terrain_nom: reservation.terrain_nom,
-        date: reservation.date,
-        heure_debut: reservation.heure_debut,
-        heure_fin: reservation.heure_fin,
-        code_reservation: reservation.code_reservation,
-      },
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(err.statusCode || 500).json({
-      error: err.message || 'Erreur serveur',
-      code: err.code,
-      scannable_at: err.scannable_at,
-      minutes_remaining: err.minutes_remaining,
-      match_date: err.match_date,
-      match_time: err.match_time,
-    });
-  }
-});
-
-app.post('/api/paytech/mock/complete', async (req, res) => {
-  if (!paytechService.estModeMock()) return res.status(404).json({ error: 'Mode PayTech mock désactivé' });
-  try {
-    const reservationId = Number(req.body.reservation_id);
-    const refCommand = String(req.body.ref_command || '');
-    const action = req.body.action;
-    if (!reservationId || !refCommand.startsWith(`TF-${reservationId}-`) || !['success', 'cancel'].includes(action)) {
-      return res.status(400).json({ error: 'Paiement simulé invalide' });
-    }
-
-    const db = await getDb();
-    const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
-    const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
-
-    if (action === 'cancel') {
-      transaction(db, () => {
-        db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
-        db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'", [reservation.creneau_id]);
-      });
-      return res.json({ redirect_url: `${domain}/reservation/annule?terrain_id=${reservation.terrain_id}` });
-    }
-
-    const webhookResponse = await fetch(`http://127.0.0.1:${PORT}/webhook/paytech`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-PayTech-Signature': paytechService.signerReference(refCommand) },
-      body: JSON.stringify({ ref_command: refCommand, custom_field: JSON.stringify({ reservation_id: reservationId }) }),
-    });
-    if (!webhookResponse.ok) throw new Error('Le webhook simulé a été rejeté');
-    const confirmed = queryOne(db, 'SELECT statut FROM reservations WHERE id = ?', [reservationId]);
-    if (confirmed?.statut !== 'confirme') throw new Error('La confirmation simulée a échoué');
-    return res.json({ redirect_url: `${domain}/reservation/succes?id=${reservationId}` });
-  } catch (error) {
-    logger.error('index.js', 'PayTech mock legacy', error);
-    return res.status(500).json({ error: error.message || 'Erreur du paiement simulé' });
-  }
-});
-
-app.post('/api/paiements', async (req, res) => {
-  res.status(410).json({ error: 'Le paiement direct est désactivé. Utilisez le lien PayTech de la réservation.' });
-});
-
-// ============================================================
 // PROPRIETAIRE
 // ============================================================
 app.get('/api/proprietaire/stats', authMiddleware, requireRole('proprietaire'), async (req, res) => {
@@ -1943,7 +1985,7 @@ app.get('/api/proprietaire/terrains', authMiddleware, requireRole('proprietaire'
       FROM terrains t LEFT JOIN avis a ON a.terrain_id = t.id
       WHERE t.proprietaire_id = ? GROUP BY t.id
     `, [req.user.id]);
-    res.json(terrains);
+    res.json(terrains.map(serializeTerrain));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -2033,10 +2075,15 @@ app.get('/api/gerant/dashboard', authMiddleware, requireRole('gerant'), async (r
     const terrainId = req.user.terrain_id;
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
     
+    // Fenêtre large pour calendrier / anti-conflit UI (pas LIMIT 20 qui masquait des résas)
     const reservations = queryAll(db, `
       SELECT r.*, COALESCE(r.joueur_nom, u.nom) as joueur_nom, COALESCE(r.joueur_telephone, u.telephone) as joueur_telephone
       FROM reservations r LEFT JOIN users u ON u.id = r.joueur_id
-      WHERE r.terrain_id = ? ORDER BY r.date DESC, r.heure_debut ASC LIMIT 20
+      WHERE r.terrain_id = ?
+        AND r.date >= date('now', '-7 days')
+        AND r.date <= date('now', '+60 days')
+        AND r.statut IN ('en_attente', 'confirme', 'acceptee', 'joue', 'match_joue')
+      ORDER BY r.date ASC, r.heure_debut ASC
     `, [terrainId]);
 
     const horaires = queryAll(db, "SELECT * FROM horaires WHERE terrain_id = ? ORDER BY CASE jour WHEN 'lundi' THEN 1 WHEN 'mardi' THEN 2 WHEN 'mercredi' THEN 3 WHEN 'jeudi' THEN 4 WHEN 'vendredi' THEN 5 WHEN 'samedi' THEN 6 WHEN 'dimanche' THEN 7 END", [terrainId]);
@@ -2055,15 +2102,53 @@ app.put('/api/gerant/horaires', authMiddleware, requireRole('gerant'), async (re
   try {
     const db = await getDb();
     const { horaires } = req.body;
+    if (!Array.isArray(horaires) || !horaires.length) {
+      return res.status(400).json({ error: 'Liste d\'horaires requise' });
+    }
     const terrainId = req.user.terrain_id;
-    for (const h of horaires) {
+    for (const raw of horaires) {
+      const h = validateHorairePayload(raw);
       runSql(db, 'UPDATE horaires SET heure_debut = ?, heure_fin = ?, est_ouvert = ? WHERE terrain_id = ? AND jour = ?',
         [h.heure_debut, h.heure_fin, h.est_ouvert ? 1 : 0, terrainId, h.jour]);
+    }
+    res.json({
+      message: 'Horaires mis à jour',
+      note_minuit: 'Fin à 00:00 = ouvert jusqu\'à minuit (créneau « … minuit » = 00:00 du lendemain).',
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+// Propriétaire : mêmes plages horaires configurables
+app.put('/api/terrains/:id/horaires', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ? AND proprietaire_id = ?', [
+      Number(req.params.id),
+      req.user.id,
+    ]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
+    const { horaires } = req.body;
+    if (!Array.isArray(horaires) || !horaires.length) {
+      return res.status(400).json({ error: 'Liste d\'horaires requise' });
+    }
+    for (const raw of horaires) {
+      const h = validateHorairePayload(raw);
+      const existing = queryOne(db, 'SELECT id FROM horaires WHERE terrain_id = ? AND jour = ?', [terrain.id, h.jour]);
+      if (existing) {
+        runSql(db, 'UPDATE horaires SET heure_debut = ?, heure_fin = ?, est_ouvert = ? WHERE terrain_id = ? AND jour = ?',
+          [h.heure_debut, h.heure_fin, h.est_ouvert ? 1 : 0, terrain.id, h.jour]);
+      } else {
+        runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, ?)',
+          [terrain.id, h.jour, h.heure_debut, h.heure_fin, h.est_ouvert ? 1 : 0]);
+      }
     }
     res.json({ message: 'Horaires mis à jour' });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Erreur serveur' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -2071,8 +2156,45 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
   try {
     const db = await getDb();
     const { date, heure_debut, heure_fin, motif } = req.body;
+    if (!date || !heure_debut || !heure_fin) {
+      return res.status(400).json({ error: 'date, heure_debut et heure_fin requis' });
+    }
+    if (String(heure_fin) <= String(heure_debut)) {
+      return res.status(400).json({ error: 'L\'heure de fin doit être après l\'heure de début' });
+    }
+
+    const terrainId = req.user.terrain_id;
+    const chevauchementResa = queryAll(
+      db,
+      `SELECT id, joueur_nom, heure_debut, heure_fin FROM reservations
+        WHERE terrain_id = ? AND date = ?
+          AND statut IN ('en_attente', 'confirme', 'acceptee')
+          AND heure_debut < ? AND heure_fin > ?`,
+      [terrainId, date, heure_fin, heure_debut],
+    );
+    if (chevauchementResa.length) {
+      return res.status(409).json({
+        error: 'Impossible de bloquer : une réservation existe déjà sur ce créneau',
+        code: 'CRENEAU_CONFLIT',
+      });
+    }
+
+    const chevauchementBlocage = queryAll(
+      db,
+      `SELECT id FROM blocages_creneaux
+        WHERE terrain_id = ? AND date = ?
+          AND heure_debut < ? AND heure_fin > ?`,
+      [terrainId, date, heure_fin, heure_debut],
+    );
+    if (chevauchementBlocage.length) {
+      return res.status(409).json({
+        error: 'Ce créneau est déjà bloqué',
+        code: 'CRENEAU_CONFLIT',
+      });
+    }
+
     const result = runSql(db, 'INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.user.terrain_id, req.user.id, date, heure_debut, heure_fin, motif]);
+      [terrainId, req.user.id, date, heure_debut, heure_fin, motif]);
     const blocage = queryOne(db, 'SELECT * FROM blocages_creneaux WHERE id = ?', [result.lastInsertRowid]);
     res.status(201).json(blocage);
   } catch (err) {
@@ -2146,6 +2268,61 @@ app.put('/api/notifications/:id/lire', authMiddleware, async (req, res) => {
     res.json({ message: 'Notification lue' });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ============================================================
+// WEB PUSH
+// ============================================================
+app.get('/api/push/vapid-public-key', (req, res) => {
+  const publicKey = pushService.getPublicKey();
+  if (!publicKey) {
+    return res.status(503).json({ error: 'Web Push non configuré sur ce serveur' });
+  }
+  res.json({ publicKey });
+});
+
+app.get('/api/push/preferences', authMiddleware, requireRole('joueur'), async (req, res) => {
+  try {
+    const prefs = await pushService.getPreferences(req.user.id);
+    res.json(prefs);
+  } catch (err) {
+    logger.error('index.js', 'GET push preferences', err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.put('/api/push/preferences', authMiddleware, requireRole('joueur'), async (req, res) => {
+  try {
+    const prefs = await pushService.updatePreferences(req.user.id, req.body || {});
+    res.json(prefs);
+  } catch (err) {
+    logger.error('index.js', 'PUT push preferences', err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.post('/api/push/subscribe', authMiddleware, requireRole('joueur'), async (req, res) => {
+  try {
+    const { subscription } = req.body || {};
+    if (!subscription) return res.status(400).json({ error: 'Subscription manquante' });
+    await pushService.upsertSubscription(req.user.id, subscription, req.headers['user-agent'] || '');
+    res.json({ message: 'Abonnement push enregistré' });
+  } catch (err) {
+    logger.error('index.js', 'POST push subscribe', err);
+    res.status(400).json({ error: err.message || 'Erreur abonnement push' });
+  }
+});
+
+app.delete('/api/push/unsubscribe', authMiddleware, requireRole('joueur'), async (req, res) => {
+  try {
+    const { endpoint } = req.body || {};
+    if (!endpoint) return res.status(400).json({ error: 'Endpoint manquant' });
+    await pushService.removeSubscription(req.user.id, endpoint);
+    res.json({ message: 'Désabonnement effectué' });
+  } catch (err) {
+    logger.error('index.js', 'DELETE push unsubscribe', err);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -2462,7 +2639,17 @@ app.patch('/api/profil/admin', authMiddleware, requireRole('super_admin'), async
 // SERVE STATIC (production)
 // ============================================================
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '..', 'dist')));
+  app.use(express.static(path.join(__dirname, '..', 'dist'), {
+    maxAge: '1y',
+    immutable: true,
+    setHeaders(res, filePath) {
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache');
+      } else if (/\.(js|css|png|jpg|webp|avif|svg|woff2|ico)$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));
   });
@@ -2501,7 +2688,12 @@ function programmerResumeHebdomadaire() {
 
       for (const row of rows) {
         await notificationService.envoyerMessage(row.telephone,
-          `Resume semaine ${row.terrain_nom}. Reservations : ${Number(row.reservations || 0)}. Avances encaissees : ${Number(row.acomptes || 0).toLocaleString()} FCFA. Commission plateforme : ${Number(row.commissions || 0).toLocaleString()} FCFA. Reverse cette semaine : ${Number(row.reverse_semaine || 0).toLocaleString()} FCFA. Solde total disponible : ${Number(row.solde_disponible || 0).toLocaleString()} FCFA.`);
+          `\uD83D\uDCCA *Resume semaine* — ${row.terrain_nom}\n\n` +
+          `Reservations : ${Number(row.reservations || 0)}\n` +
+          `Avances encaissees : ${Number(row.acomptes || 0).toLocaleString('fr-FR')} FCFA\n` +
+          `Commission plateforme : ${Number(row.commissions || 0).toLocaleString('fr-FR')} FCFA\n` +
+          `Reverse cette semaine : ${Number(row.reverse_semaine || 0).toLocaleString('fr-FR')} FCFA\n` +
+          `Solde disponible : ${Number(row.solde_disponible || 0).toLocaleString('fr-FR')} FCFA`);
       }
     } catch (error) {
       logger.error('index.js', 'Resume hebdomadaire WhatsApp', error);
@@ -2535,10 +2727,38 @@ async function appliquerSuspensionsAbonnements() {
   });
 }
 
+function programmerRappelsReservations() {
+  if (!cron) {
+    logger.warn('index.js', 'node-cron non installe: rappels push inactifs');
+    return;
+  }
+
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const result = await pushService.envoyerRappelsReservations();
+      if (result.processed > 0) {
+        logger.info('index.js', `Rappels push envoyes: ${result.processed}`);
+      }
+    } catch (error) {
+      logger.error('index.js', 'Rappels push reservations', error);
+    }
+  });
+}
+
+async function ensureSeedData(db) {
+  const count = queryOne(db, 'SELECT COUNT(*) AS total FROM terrains');
+  if (Number(count?.total || 0) > 0) return;
+  logger.info('index.js', 'Base vide — chargement des donnees de demo...');
+  const { seed } = require('./seed');
+  await seed();
+}
+
 async function start() {
-  await getDb(); // Initialize DB
+  const db = await getDb(); // Initialize DB + migrations
+  await ensureSeedData(db);
   programmerResumeHebdomadaire();
   programmerSurveillanceConfiance();
+  programmerRappelsReservations();
   await appliquerSuspensionsAbonnements().catch((error) => {
     logger.error('index.js', 'Suspension abonnements au demarrage', error);
   });
@@ -2551,13 +2771,15 @@ async function start() {
   }
   setInterval(async () => {
     try {
-      const db = await getDb();
-      transaction(db, () => {
-        const expired = queryAll(db, `SELECT id, creneau_id FROM reservations
+      const dbInterval = await getDb();
+      transaction(dbInterval, () => {
+        const expired = queryAll(dbInterval, `SELECT id, creneau_id, terrain_id, date, heure_debut, heure_fin FROM reservations
           WHERE statut = 'en_attente' AND verrou_expire_at IS NOT NULL AND verrou_expire_at < ?`, [Date.now()]);
         for (const reservation of expired) {
-          db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'", [reservation.creneau_id]);
-          db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservation.id]);
+          dbInterval.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservation.id]);
+          if (rowsModified(dbInterval) === 1) {
+            libererCreneauxReservation(dbInterval, reservation, ['en_attente_paiement']);
+          }
         }
       });
     } catch (error) {
@@ -2566,6 +2788,12 @@ async function start() {
   }, 5 * 60 * 1000);
   app.listen(PORT, () => {
     logger.info('index.js', `TerrainSN API demarree sur http://localhost:${PORT}`);
+  }).on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      logger.error('index.js', `Port ${PORT} deja utilise. Arretez l'autre process ou changez PORT.`);
+      process.exit(1);
+    }
+    throw error;
   });
 }
 

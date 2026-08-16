@@ -3,12 +3,15 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Check, Download } from "lucide-react";
 import { reservationsApi } from "@/lib/api";
 
+const API_URL = import.meta.env.VITE_API_URL || "/api";
+
 const ReservationSuccess = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [reservation, setReservation] = useState<any>(null);
   const [error, setError] = useState("");
   const [showAnim, setShowAnim] = useState(true);
+  const [qrFetched, setQrFetched] = useState<string | null>(null);
 
   useEffect(() => {
     const id = params.get("id") || localStorage.getItem("terrainsn_last_reservation_id");
@@ -20,6 +23,32 @@ const ReservationSuccess = () => {
     const t = setTimeout(() => setShowAnim(false), 1500);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    const loadQr = async () => {
+      if (!reservation?.id || !reservation?.code_reservation) {
+        setQrFetched(null);
+        return;
+      }
+      try {
+        const token = localStorage.getItem("terrainsn_token");
+        const res = await fetch(`${API_URL}/reservations/${reservation.id}/qr.png`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) throw new Error("QR indisponible");
+        const blob = await res.blob();
+        objectUrl = URL.createObjectURL(blob);
+        setQrFetched(objectUrl);
+      } catch {
+        setQrFetched(null);
+      }
+    };
+    loadQr();
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [reservation?.id, reservation?.code_reservation]);
 
   if (error) {
     return (
@@ -53,7 +82,7 @@ const ReservationSuccess = () => {
 
   const avance = Number(reservation.montant_avance || reservation.acompte || 0);
   const reste = Number(reservation.montant_restant || reservation.reste_a_payer || 0);
-  const qrUrl = reservation.qr_code_url;
+  const qrUrl = qrFetched || reservation.qr_code_url;
 
   return (
     <div className="page-container flex items-center justify-center p-5 page-enter">

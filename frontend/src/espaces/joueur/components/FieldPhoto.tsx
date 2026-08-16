@@ -1,13 +1,16 @@
-import field1 from "@/assets/field-1.jpg";
-import field2 from "@/assets/field-2.jpg";
-import field3 from "@/assets/field-3.jpg";
-import field4 from "@/assets/field-4.jpg";
+import { useState } from "react";
+import { getImageSources } from "@/lib/imageOptimizer";
 
-const FIELD_IMAGES = [field1, field2, field3, field4];
+const FALLBACK_IMAGES = [
+  "/fields/field-1.jpg",
+  "/fields/field-2.jpg",
+  "/fields/field-3.jpg",
+  "/fields/field-4.jpg",
+];
 
 export function fieldImageForId(id?: number | string) {
   const n = Number(id) || 1;
-  return FIELD_IMAGES[(Math.max(1, n) - 1) % FIELD_IMAGES.length];
+  return FALLBACK_IMAGES[(Math.max(1, n) - 1) % FALLBACK_IMAGES.length];
 }
 
 export function resolveTerrainPhoto(terrain: { id?: number | string; photos?: unknown }) {
@@ -52,7 +55,7 @@ type FieldPhotoProps = {
   src?: string | null;
 };
 
-/** Photo terrain : URL fournie, sinon photo par défaut selon l’id. */
+/** Photo terrain optimisée WebP/AVIF avec lazy loading. */
 export default function FieldPhoto({
   id = 1,
   alt,
@@ -61,16 +64,49 @@ export default function FieldPhoto({
   src,
 }: FieldPhotoProps) {
   const photo = src || fieldImageForId(id);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
+  const displaySrc = error ? fieldImageForId(id) : photo;
+  const sources = getImageSources(displaySrc, 640);
+  const isRemote = displaySrc.startsWith("http");
 
   return (
     <div className={`relative w-full overflow-hidden bg-[var(--color-surface-2)] ${heightClass} ${className}`}>
-      <img
-        src={photo}
-        alt={alt}
-        className="absolute inset-0 w-full h-full object-cover"
-        loading="lazy"
-        decoding="async"
-      />
+      {!loaded && (
+        <div className="absolute inset-0 animate-pulse bg-[var(--color-surface-2)]" aria-hidden />
+      )}
+      {isRemote && sources.webp ? (
+        <picture>
+          {sources.avif && <source srcSet={sources.avif} type="image/avif" />}
+          <source srcSet={sources.webp} type="image/webp" />
+          <img
+            src={sources.fallback}
+            alt={alt}
+            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`}
+            loading="lazy"
+            decoding="async"
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+            onLoad={() => setLoaded(true)}
+            onError={() => {
+              setError(true);
+              setLoaded(true);
+            }}
+          />
+        </picture>
+      ) : (
+        <img
+          src={displaySrc}
+          alt={alt}
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          onError={() => {
+            setError(true);
+            setLoaded(true);
+          }}
+        />
+      )}
       <div className="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent pointer-events-none" />
     </div>
   );

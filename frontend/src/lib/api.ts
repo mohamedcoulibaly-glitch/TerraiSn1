@@ -1,3 +1,14 @@
+import {
+  cacheReservations,
+  getCachedReservations,
+  queuePendingReservation,
+  cacheTerrainsList,
+  getCachedTerrainsList,
+  isOnline,
+  type CachedReservation,
+} from './offlineStore';
+import type { OperationalStage } from './kanbanRules';
+
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 // Récupérer le token depuis le localStorage
@@ -28,11 +39,13 @@ function removeUser() {
   localStorage.removeItem('terrainsn_user');
 }
 
-const TECHNICAL_ERROR_RE = /syntaxerror|sql\b|stack|paytech|whatsapp|<html|exception|traceback|econnrefused|errno/i;
+const TECHNICAL_ERROR_RE = /syntaxerror|sql\b|stack|paytech|<html|exception|traceback|econnrefused|errno/i;
+const WHATSAPP_USER_ERROR_RE = /whatsapp non connect|numero whatsapp|envoi whatsapp|lien whatsapp/i;
 
 function isTechnicalMessage(message: string): boolean {
   if (!message) return true;
   if (message.length > 180) return true;
+  if (WHATSAPP_USER_ERROR_RE.test(message)) return false;
   return TECHNICAL_ERROR_RE.test(message);
 }
 
@@ -57,21 +70,28 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
     path.includes('paytech') ||
     path.includes('/webhook/paytech') ||
     path.includes('simulate');
-  const isQrScan = path.includes('/scanner');
-  const isReservation = path.includes('/reservation');
+  const isQrScan = path.includes('/scanner') || path.includes('/scan-qr');
+  const isGerantRoute = path.includes('/gerant/') || path.includes('/renvoyer-lien') || path.includes('/reservations/gerant');
+  const isReservation = path.includes('/reservation') && !isQrScan && !isGerantRoute;
 
   if (isPayment) {
     return "Le paiement n'a pas pu être confirmé. Veuillez réessayer.";
   }
-  if (isQrScan && raw && !isTechnicalMessage(raw)) {
+  if ((isQrScan || isGerantRoute) && raw && !isTechnicalMessage(raw)) {
+    return raw;
+  }
+  if (WHATSAPP_USER_ERROR_RE.test(raw)) {
     return raw;
   }
   if (isAuth) {
     return 'Identifiants incorrects ou session expirée.';
   }
   if (isReservation) {
+    if (status === 409 && raw && !isTechnicalMessage(raw)) return raw;
     return 'Impossible de finaliser la réservation. Veuillez réessayer.';
   }
+
+  if (status === 409 && raw && !isTechnicalMessage(raw)) return raw;
 
   if (!raw || isTechnicalMessage(raw)) {
     return 'Une erreur est survenue. Veuillez réessayer.';
@@ -142,8 +162,11 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
       headers,
       credentials: 'include',
     });
-  } catch {
-    throw new Error('Connexion au serveur impossible. Vérifiez votre connexion.');
+  } catch (err) {
+    if (options.method === 'GET' || !options.method) {
+      throw new Error('Connexion au serveur impossible. Vérifiez votre connexion.');
+    }
+    throw err;
   }
 
   if (res.status === 401) {
@@ -178,9 +201,19 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
       code?: string;
       telephone?: string;
       status?: number;
+      scannable_at?: string;
+      minutes_remaining?: number;
+      match_date?: string;
+      match_time?: string;
+      qr_code_scanne_at?: string;
     };
     if (typeof data.code === 'string') err.code = data.code;
     if (typeof data.telephone === 'string') err.telephone = data.telephone;
+    if (typeof data.scannable_at === 'string') err.scannable_at = data.scannable_at;
+    if (typeof data.minutes_remaining === 'number') err.minutes_remaining = data.minutes_remaining;
+    if (typeof data.match_date === 'string') err.match_date = data.match_date;
+    if (typeof data.match_time === 'string') err.match_time = data.match_time;
+    if (typeof data.qr_code_scanne_at === 'string') err.qr_code_scanne_at = data.qr_code_scanne_at;
     err.status = res.status;
     throw err;
   }
@@ -323,7 +356,18 @@ export const terrainsApi = {
       });
     }
     const query = params.toString();
-    return await request(`/terrains${query ? '?' + query : ''}`);
+    const cacheKey = `terrains-list:${query || 'all'}`;
+
+    try {
+      const data = await request(`/terrains${query ? '?' + query : ''}`);
+      const list = Array.isArray(data) ? data : [];
+      await cacheTerrainsList(cacheKey, list);
+      return list;
+    } catch (err) {
+      const cached = await getCachedTerrainsList(cacheKey);
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async get(id: number | string) {
@@ -334,12 +378,29 @@ export const terrainsApi = {
     return await request(`/terrains/${id}/creneaux?date=${date}`);
   },
 
+  async getDevis(
+    id: number | string,
+    params: { date: string; heure_debut: string; heure_fin: string; format?: 'moitie' | 'entier' },
+  ) {
+    const q = new URLSearchParams({
+      date: params.date,
+      heure_debut: params.heure_debut,
+      heure_fin: params.heure_fin,
+      format: params.format || 'entier',
+    });
+    return await request(`/terrains/${id}/devis?${q.toString()}`);
+  },
+
   async create(data: any) {
     return await request('/terrains', { method: 'POST', body: JSON.stringify(data) });
   },
 
   async update(id: number | string, data: any) {
     return await request(`/terrains/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  },
+
+  async updateHoraires(id: number | string, horaires: any[]) {
+    return await request(`/terrains/${id}/horaires`, { method: 'PUT', body: JSON.stringify({ horaires }) });
   },
 
   async remove(id: number | string) {
@@ -368,11 +429,35 @@ export const terrainsApi = {
 // ============================================================
 export const reservationsApi = {
   async create(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: 'moitie' | 'entier' }) {
-    return await request('/reservations', { method: 'POST', body: JSON.stringify(data) });
+    try {
+      return await request('/reservations', { method: 'POST', body: JSON.stringify(data) });
+    } catch (err) {
+      if (!isOnline()) {
+        const pendingId = await queuePendingReservation(data, getToken());
+        await registerBackgroundSync();
+        const offlineErr = new Error(
+          'Réservation enregistrée hors-ligne. Elle sera envoyée dès que la connexion reviendra.',
+        ) as Error & { offline?: boolean; pendingId?: string };
+        offlineErr.offline = true;
+        offlineErr.pendingId = pendingId;
+        throw offlineErr;
+      }
+      throw err;
+    }
   },
 
   async mes() {
-    return await request('/reservations/mes');
+    try {
+      const data = await request('/reservations/mes');
+      if (Array.isArray(data) && data.length > 0) {
+        await cacheReservations(data as CachedReservation[]);
+      }
+      return data;
+    } catch (err) {
+      const cached = await getCachedReservations();
+      if (cached.length > 0) return cached;
+      throw err;
+    }
   },
 
   async changePassword(password: string) {
@@ -385,6 +470,14 @@ export const reservationsApi = {
 
   async createGerant(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: 'moitie' | 'entier' }) {
     return await request('/reservations/gerant', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async renvoyerLienWhatsApp(id: number | string) {
+    return await request(`/reservations/${id}/renvoyer-lien`, { method: 'POST' });
+  },
+
+  async renvoyerConfirmationWhatsApp(id: number | string) {
+    return await request(`/reservations/${id}/renvoyer-confirmation`, { method: 'POST' });
   },
 
   async annuler(id: number | string) {
@@ -479,6 +572,95 @@ export const gerantApi = {
     return await request('/gerant/dashboard');
   },
 
+  async reservationsToday(date?: string) {
+    const q = date ? `?date=${encodeURIComponent(date)}` : '';
+    return await request(`/gerant/reservations/today${q}`);
+  },
+
+  async reservationDetail(id: number | string) {
+    return await request(`/gerant/reservations/${id}`);
+  },
+
+  async patchReservationStage(
+    id: number | string,
+    body: { stage: OperationalStage; waiverEncaissement?: boolean; encaisserRestant?: boolean; methode?: 'especes' | 'wave' | 'orange_money' },
+  ) {
+    return await request(`/gerant/reservations/${id}/stage`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async joueurs(params?: { q?: string; filter?: string }) {
+    const sp = new URLSearchParams();
+    if (params?.q) sp.set('q', params.q);
+    if (params?.filter) sp.set('filter', params.filter);
+    const q = sp.toString();
+    return await request(`/gerant/joueurs${q ? `?${q}` : ''}`);
+  },
+
+  async joueurDetail(id: number | string) {
+    return await request(`/gerant/joueurs/${id}`);
+  },
+
+  async patchJoueur(
+    id: number | string,
+    body: { is_banned?: boolean; banned_reason?: string; notes_internes?: string },
+  ) {
+    return await request(`/gerant/joueurs/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async createJoueur(body: { nom: string; telephone?: string }) {
+    return await request('/gerant/joueurs', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async lierJoueurReservation(
+    reservationId: number | string,
+    body: { joueur_id?: number; nom?: string; telephone?: string },
+  ) {
+    return await request(`/gerant/reservations/${reservationId}/lier-joueur`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async scanQr(
+    id: number | string,
+    methode: 'especes' | 'wave' | 'orange_money' = 'especes',
+    qr_data?: string,
+  ) {
+    return await request(`/reservations/${id}/scan-qr`, {
+      method: 'POST',
+      body: JSON.stringify({ methode, qr_data }),
+    });
+  },
+
+  async portefeuille() {
+    return await request('/gerant/portefeuille');
+  },
+
+  async whatsappStatus() {
+    return await request('/gerant/whatsapp/status');
+  },
+
+  async whatsappConnect() {
+    return await request('/gerant/whatsapp/connect', { method: 'POST' });
+  },
+
+  async whatsappQr() {
+    return await request('/gerant/whatsapp/qr');
+  },
+
+  async whatsappDisconnect() {
+    return await request('/gerant/whatsapp/disconnect', { method: 'POST' });
+  },
+
   async updateHoraires(horaires: any[]) {
     return await request('/gerant/horaires', { method: 'PUT', body: JSON.stringify({ horaires }) });
   },
@@ -489,6 +671,33 @@ export const gerantApi = {
 
   async removeBlocage(id: number | string) {
     return await request(`/gerant/blocages/${id}`, { method: 'DELETE' });
+  },
+
+  async getTarifs() {
+    return await request('/gerant/tarifs');
+  },
+
+  async getDevis(params: {
+    date: string;
+    heure_debut: string;
+    heure_fin: string;
+    format?: 'moitie' | 'entier';
+  }) {
+    const q = new URLSearchParams({
+      date: params.date,
+      heure_debut: params.heure_debut,
+      heure_fin: params.heure_fin,
+      format: params.format || 'entier',
+    });
+    return await request(`/gerant/devis?${q.toString()}`);
+  },
+
+  async saveTarifs(data: {
+    prix_entier_base: number;
+    prix_moitie_base: number;
+    cellules: Array<{ jour: string; heure: number; prix_entier: number; prix_moitie: number }>;
+  }) {
+    return await request('/gerant/tarifs', { method: 'PUT', body: JSON.stringify(data) });
   },
 };
 
@@ -515,6 +724,31 @@ export const notificationsApi = {
 
   async marquerLue(id: number | string) {
     return await request(`/notifications/${id}/lire`, { method: 'PUT' });
+  },
+};
+
+// ============================================================
+// WEB PUSH
+// ============================================================
+export const pushApi = {
+  async getVapidPublicKey() {
+    return await request('/push/vapid-public-key');
+  },
+
+  async getPreferences() {
+    return await request('/push/preferences');
+  },
+
+  async updatePreferences(prefs: Record<string, boolean>) {
+    return await request('/push/preferences', { method: 'PUT', body: JSON.stringify(prefs) });
+  },
+
+  async subscribe(subscription: PushSubscriptionJSON) {
+    return await request('/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription }) });
+  },
+
+  async unsubscribe(endpoint: string) {
+    return await request('/push/unsubscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) });
   },
 };
 

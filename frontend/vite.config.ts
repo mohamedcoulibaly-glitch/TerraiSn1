@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
+import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
@@ -20,6 +21,10 @@ export default defineConfig(({ mode }) => ({
         target: process.env.VITE_API_URL || 'http://localhost:3001',
         changeOrigin: true,
       },
+      '/webhook': {
+        target: process.env.VITE_API_URL || 'http://localhost:3001',
+        changeOrigin: true,
+      },
     },
   },
   build: {
@@ -35,13 +40,78 @@ export default defineConfig(({ mode }) => ({
       output: {
         manualChunks: {
           'vendor': ['react', 'react-dom', 'react-router-dom'],
+          'query': ['@tanstack/react-query'],
           'ui': ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-popover'],
+          'charts': ['recharts'],
         },
       },
     },
     chunkSizeWarningLimit: 600,
   },
-  plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      includeAssets: [
+        'favicon.png',
+        'apple-touch-icon.png',
+        'icons/*.png',
+        'placeholder.svg',
+      ],
+      manifest: {
+        name: 'TerrainSN — Réservation de terrains',
+        short_name: 'TerrainSN',
+        description: 'Trouvez et réservez des terrains de football au Sénégal. Paiement Wave et Orange Money.',
+        theme_color: '#0A5C36',
+        background_color: '#F4F6F9',
+        display: 'standalone',
+        orientation: 'portrait-primary',
+        scope: '/',
+        start_url: '/?source=pwa',
+        lang: 'fr',
+        dir: 'ltr',
+        categories: ['sports', 'lifestyle'],
+        icons: [
+          { src: '/icons/icon-72.png', sizes: '72x72', type: 'image/png' },
+          { src: '/icons/icon-96.png', sizes: '96x96', type: 'image/png' },
+          { src: '/icons/icon-128.png', sizes: '128x128', type: 'image/png' },
+          { src: '/icons/icon-144.png', sizes: '144x144', type: 'image/png' },
+          { src: '/icons/icon-152.png', sizes: '152x152', type: 'image/png' },
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-384.png', sizes: '384x384', type: 'image/png' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+        shortcuts: [
+          {
+            name: 'Explorer les terrains',
+            short_name: 'Explorer',
+            url: '/explorer?source=shortcut',
+            icons: [{ src: '/icons/icon-96.png', sizes: '96x96' }],
+          },
+          {
+            name: 'Mes réservations',
+            short_name: 'Réservations',
+            url: '/reservations?source=shortcut',
+            icons: [{ src: '/icons/icon-96.png', sizes: '96x96' }],
+          },
+        ],
+      },
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff2,json}'],
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+      },
+      // Ne pas activer le SW en dev : il met en cache des modules Vite
+      // et provoque souvent une page blanche après HMR / Ctrl+Shift+R.
+      devOptions: {
+        enabled: false,
+      },
+    }),
+    mode === "development" && componentTagger(),
+  ].filter(Boolean),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

@@ -1,9 +1,10 @@
 import { Moon, Sun } from 'lucide-react';
 import { useTheme } from '@/contexts/ThemeContext';
 
-export const ThemeToggle = ({ className = '' }) => {
+export const ThemeToggle = ({ className = '', variant = 'default' }) => {
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === 'dark';
+  const inverse = variant === 'inverse';
 
   return (
     <button
@@ -14,9 +15,11 @@ export const ThemeToggle = ({ className = '' }) => {
       className={`
         relative inline-flex h-7 w-14 shrink-0 items-center rounded-full border p-0.5
         transition-colors duration-300
-        ${isDark
-          ? 'bg-[var(--primary)] border-[var(--primary)]'
-          : 'bg-[var(--surface-2)] border-[var(--border-strong)]'
+        ${inverse
+          ? 'bg-white/20 border-white/40'
+          : isDark
+            ? 'bg-[var(--primary)] border-[var(--primary)]'
+            : 'bg-[var(--surface-2)] border-[var(--border-strong)]'
         }
         ${className}
       `}

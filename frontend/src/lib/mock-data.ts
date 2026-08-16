@@ -1,7 +1,7 @@
-import field1 from "@/assets/field-1.jpg";
-import field2 from "@/assets/field-2.jpg";
-import field3 from "@/assets/field-3.jpg";
-import field4 from "@/assets/field-4.jpg";
+const field1 = "/fields/field-1.jpg";
+const field2 = "/fields/field-2.jpg";
+const field3 = "/fields/field-3.jpg";
+const field4 = "/fields/field-4.jpg";
 
 export interface Terrain {
   id: string;

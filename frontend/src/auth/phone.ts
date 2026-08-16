@@ -8,9 +8,10 @@ export function digitsOnly(value: string): string {
 export function toLocal9(value: string): string {
   let d = digitsOnly(value);
   if (d.startsWith("00")) d = d.slice(2);
-  if (d.startsWith("221") && d.length >= 12) d = d.slice(3);
-  if (d.length > 9) d = d.slice(-9);
-  return d;
+  // Indicatif déjà affiché à côté du champ (+221) : le retirer dès qu'il est saisi / collé.
+  if (d.startsWith("221")) d = d.slice(3);
+  if (d.startsWith("0")) d = d.slice(1);
+  return d.slice(0, 9);
 }
 
 export function isValidSenegalMobile(value: string): boolean {

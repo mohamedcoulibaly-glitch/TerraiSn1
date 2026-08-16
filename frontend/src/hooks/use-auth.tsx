@@ -21,7 +21,7 @@ interface AuthContextType {
   login: (identifier: string, password: string) => Promise<User>;
   setSession: (user: User, token?: string) => void;
   register: (data: { nom: string; email: string; password: string; telephone: string }) => Promise<void>;
-  logout: () => Promise<void>;
+  logout: (options?: { redirect?: boolean }) => Promise<void>;
   refreshUser: () => Promise<void>;
   rafraichirToken: () => Promise<string | null>;
   requeteAvecAuth: (url: string, options?: RequestInit) => Promise<Response>;
@@ -229,8 +229,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const logout = async () => {
-    await deconnecter(true);
+  const logout = async (options?: { redirect?: boolean }) => {
+    await deconnecter(options?.redirect !== false);
   };
 
   return (

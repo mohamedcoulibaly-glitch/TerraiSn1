@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="96" fill="#0A5C36"/>
+  <rect x="32" y="32" width="448" height="448" rx="80" fill="#063D24" opacity="0.3"/>
+  <!-- Lignes terrain -->
+  <rect x="64" y="96" width="384" height="320" rx="8" fill="#1A7A4A" stroke="#C9A84C" stroke-width="6"/>
+  <line x1="256" y1="96" x2="256" y2="416" stroke="#C9A84C" stroke-width="4" opacity="0.7"/>
+  <circle cx="256" cy="256" r="48" stroke="#C9A84C" stroke-width="4" fill="none" opacity="0.7"/>
+  <!-- Ballon -->
+  <circle cx="380" cy="140" r="36" fill="#FFFFFF"/>
+  <path d="M380 104 L392 128 L368 128 Z" fill="#0A5C36" opacity="0.6"/>
+  <path d="M368 140 L356 164 L380 152 Z" fill="#0A5C36" opacity="0.4"/>
+  <path d="M392 140 L404 164 L380 152 Z" fill="#0A5C36" opacity="0.4"/>
+  <!-- Texte SN -->
+  <text x="256" y="468" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="48" fill="#C9A84C">SN</text>
+</svg>

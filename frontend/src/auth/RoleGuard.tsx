@@ -29,11 +29,10 @@ export default function RoleGuard({ roles, children, requireAuth = true }: RoleG
 
   const role = normalizeRole(user);
   if (!role || !roles.includes(role)) {
-    // Joueur ou session invalide → page login admin (pas l'accueil joueur)
-    if (role === "joueur" || !isAuthenticated) {
-      return <Navigate to="/backoffice/login" replace state={{ from: location }} />;
-    }
-    return <Navigate to={homeForUser(user)} replace />;
+    // Joueur / non connecté / mauvais rôle staff → login admin
+    // (évite de renvoyer un superadmin vers /backoffice/admin quand
+    // on vise proprio/gérant : la page login propose de changer de compte)
+    return <Navigate to="/backoffice/login" replace state={{ from: location }} />;
   }
 
   return <>{children}</>;

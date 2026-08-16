@@ -3,8 +3,11 @@ import { ArrowLeft, ShieldCheck, MessageCircle, Check } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { terrainsApi, reservationsApi } from "@/lib/api";
+import { hapticSuccess, hapticError } from "@/lib/haptics";
+import { registerBackgroundSync } from "@/lib/pwaRegister";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
+import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
 import { fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
 
 import omIcon from "@/assets/images.png";
@@ -37,7 +40,7 @@ const Payment = () => {
     if (!isAuthenticated || !user) return;
     setName((prev) => prev || [user.prenom, user.nom].filter(Boolean).join(" ") || user.nom || "");
     if (user.telephone) {
-      setPhone((prev) => prev || String(user.telephone).replace(/^\+221\s?/, ""));
+      setPhone((prev) => prev || formatPhoneDisplay(String(user.telephone)));
     }
   }, [isAuthenticated, user]);
 
@@ -68,8 +71,9 @@ const Payment = () => {
 
   const handlePay = async () => {
     if (processing || !selected) return;
-    if (!name || !phone) {
-      toast.error("Veuillez saisir votre nom et numéro de téléphone");
+    const phoneErr = phoneError(phone);
+    if (!name.trim() || phoneErr) {
+      toast.error(phoneErr || "Veuillez saisir votre nom et numéro de téléphone");
       return;
     }
     setProcessing(true);
@@ -80,15 +84,25 @@ const Payment = () => {
         heure_debut: slot,
         heure_fin: endTime,
         joueur_nom: name,
-        joueur_telephone: phone,
+        joueur_telephone: toLocal9(phone),
         format_terrain: fieldFormat,
       });
 
       localStorage.setItem("terrainsn_last_reservation_id", String(reservation.id));
+      hapticSuccess();
       if (!reservation.redirect_url) throw new Error("Lien PayTech indisponible");
       window.location.assign(reservation.redirect_url);
-    } catch (err: any) {
-      toast.error(err.message || "Erreur lors du paiement");
+    } catch (err: unknown) {
+      const error = err as Error & { offline?: boolean };
+      if (error.offline) {
+        hapticSuccess();
+        await registerBackgroundSync();
+        toast.success(error.message);
+        navigate("/reservations");
+        return;
+      }
+      hapticError();
+      toast.error(error.message || "Erreur lors du paiement");
     } finally {
       setProcessing(false);
     }
@@ -243,13 +257,18 @@ const Payment = () => {
           <div>
             <label className="text-[12px] text-[var(--color-text-muted)]">Téléphone</label>
             <div className="mt-1 flex items-center gap-2 h-12 px-4 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--surface)]">
-              <span className="text-sm text-[var(--color-text-muted)]">+221</span>
+              <span className="text-sm text-[var(--color-text-muted)] shrink-0 select-none">+221</span>
               <input
                 type="tel"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                enterKeyHint="done"
+                placeholder="77 000 00 00"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="flex-1 bg-transparent outline-none text-sm"
+                onChange={(e) => setPhone(formatPhoneDisplay(e.target.value))}
+                className="flex-1 min-w-[8rem] bg-transparent outline-none text-sm min-h-[48px]"
                 id="payment-phone"
+                aria-label="Numéro Wave ou Orange Money"
               />
             </div>
           </div>

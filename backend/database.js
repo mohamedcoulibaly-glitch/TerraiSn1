@@ -5,30 +5,65 @@ const path = require('path');
 const dbPath = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.resolve(__dirname, 'terrainsn.db');
 
 let db = null;
+let loadedMtime = 0;
+let opening = null;
 
-async function getDb() {
-  if (db) return db;
+function fileMtime() {
+  try {
+    return fs.existsSync(dbPath) ? fs.statSync(dbPath).mtimeMs : 0;
+  } catch {
+    return 0;
+  }
+}
 
+async function openDatabase() {
   const SQL = await initSqlJs();
-  
-  // Charger la DB depuis le fichier si elle existe
+  const currentMtime = fileMtime();
+  let instance;
   if (fs.existsSync(dbPath)) {
     const buffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(buffer);
+    instance = new SQL.Database(buffer);
   } else {
-    db = new SQL.Database();
+    instance = new SQL.Database();
   }
+  loadedMtime = currentMtime;
+  initDb(instance);
+  // Persister sans invalider l'instance courante
+  const data = instance.export();
+  fs.writeFileSync(dbPath, Buffer.from(data));
+  loadedMtime = fileMtime();
+  db = instance;
+  return instance;
+}
 
-  initDb(db);
-  saveDb();
-  return db;
+async function getDb() {
+  const currentMtime = fileMtime();
+  if (db && currentMtime === loadedMtime) return db;
+
+  // Éviter les ouvertures concurrentes (nodemon / seed)
+  if (opening) return opening;
+
+  opening = openDatabase()
+    .catch((err) => {
+      db = null;
+      loadedMtime = 0;
+      throw err;
+    })
+    .finally(() => {
+      opening = null;
+    });
+  return opening;
 }
 
 function saveDb() {
   if (!db) return;
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
+  try {
+    const data = db.export();
+    fs.writeFileSync(dbPath, Buffer.from(data));
+    loadedMtime = fileMtime();
+  } catch (err) {
+    console.error('⚠️ saveDb échoué:', err.message);
+  }
 }
 
 function initDb(database) {
@@ -182,6 +217,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'reservations', 'verrou_expire_at', 'INTEGER');
   addColumnIfMissing(database, 'reservations', 'cree_par', "TEXT DEFAULT 'joueur'");
   addColumnIfMissing(database, 'reservations', 'lien_paiement', 'TEXT');
+  addColumnIfMissing(database, 'reservations', 'reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'reservations', 'format_terrain', "TEXT DEFAULT 'entier'");
   addColumnIfMissing(database, 'reservations', 'prix_total', 'DECIMAL(10, 2)');
   addColumnIfMissing(database, 'reservations', 'acompte', 'DECIMAL(10, 2) DEFAULT 5000');
@@ -190,6 +226,11 @@ function initDb(database) {
   addColumnIfMissing(database, 'reservations', 'montant_restant', 'INTEGER');
   addColumnIfMissing(database, 'reservations', 'qr_code_scanne_at', 'DATETIME');
   addColumnIfMissing(database, 'reservations', 'qr_code_url', 'TEXT');
+  addColumnIfMissing(database, 'reservations', 'qr_code_payload', 'TEXT');
+  addColumnIfMissing(database, 'reservations', 'operational_stage', "TEXT DEFAULT 'reserved'");
+  addColumnIfMissing(database, 'reservations', 'checked_in_at', 'DATETIME');
+  addColumnIfMissing(database, 'reservations', 'checkout_at', 'DATETIME');
+  addColumnIfMissing(database, 'creneaux', 'fenetre_retard', 'INTEGER DEFAULT 30');
   addColumnIfMissing(database, 'paiements', 'reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'paiements', 'montant_acompte', 'INTEGER');
   addColumnIfMissing(database, 'paiements', 'montant_commission', 'INTEGER');
@@ -232,6 +273,10 @@ function initDb(database) {
   addColumnIfMissing(database, 'users', 'date_naissance', 'DATE');
   addColumnIfMissing(database, 'users', 'bio', 'TEXT');
   addColumnIfMissing(database, 'users', 'photo_url', 'TEXT');
+  addColumnIfMissing(database, 'users', 'is_banned', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'users', 'banned_at', 'DATETIME');
+  addColumnIfMissing(database, 'users', 'banned_reason', 'TEXT');
+  addColumnIfMissing(database, 'users', 'notes_internes', 'TEXT');
   addColumnIfMissing(database, 'proprietaires', 'must_change_password', 'INTEGER DEFAULT 0');
   addColumnIfMissing(database, 'proprietaires', 'prenom', 'VARCHAR(255)');
   addColumnIfMissing(database, 'proprietaires', 'quartier', 'VARCHAR(255)');
@@ -244,6 +289,8 @@ function initDb(database) {
   addColumnIfMissing(database, 'employes', 'date_naissance', 'DATE');
   addColumnIfMissing(database, 'employes', 'bio', 'TEXT');
   addColumnIfMissing(database, 'employes', 'photo_url', 'TEXT');
+  addColumnIfMissing(database, 'employes', 'whatsapp_wid', 'VARCHAR(50)');
+  addColumnIfMissing(database, 'employes', 'whatsapp_connected_at', 'DATETIME');
 
   database.run(`CREATE TABLE IF NOT EXISTS auth_otps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -278,6 +325,27 @@ function initDb(database) {
   database.run('CREATE INDEX IF NOT EXISTS idx_creneaux_statut ON creneaux(statut)');
   database.run('CREATE INDEX IF NOT EXISTS idx_paiements_reservation ON paiements(reservation_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_paiements_reference_paytech ON paiements(reference_paytech)');
+  // Idempotence paiement : une même référence PayTech ne peut créditer qu'une fois
+  try {
+    database.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_paiements_ref_paytech_unique
+      ON paiements(reference_paytech) WHERE reference_paytech IS NOT NULL AND reference_paytech != ''`);
+  } catch (err) {
+    console.warn('Index idempotence paiements non créé:', err.message);
+  }
+
+  database.run(`CREATE TABLE IF NOT EXISTS tarifs_dynamiques (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    jour TEXT NOT NULL,
+    heure INTEGER NOT NULL,
+    prix_entier DECIMAL(10, 2) NOT NULL,
+    prix_moitie DECIMAL(10, 2) NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (terrain_id, jour, heure),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_tarifs_dynamiques_terrain ON tarifs_dynamiques(terrain_id)');
 
   database.run(`CREATE TABLE IF NOT EXISTS portefeuille_gerant (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -342,6 +410,7 @@ function initDb(database) {
       'reservation_creee',
       'reservation_annulee',
       'qr_scanne',
+      'kanban_stage',
       'creneau_cree',
       'creneau_supprime'
     )),
@@ -393,6 +462,35 @@ function initDb(database) {
     contenu TEXT,
     lu INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // 10b. Web Push subscriptions
+  database.run(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS push_preferences (
+    user_id INTEGER PRIMARY KEY,
+    reservation_confirmation INTEGER DEFAULT 1,
+    rappel_reservation INTEGER DEFAULT 1,
+    promotion INTEGER DEFAULT 0,
+    nouveau_message INTEGER DEFAULT 1,
+    avis_reponse INTEGER DEFAULT 1,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS reservation_reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id INTEGER NOT NULL UNIQUE,
+    sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id)
   )`);
 
   // 11. audit_logs

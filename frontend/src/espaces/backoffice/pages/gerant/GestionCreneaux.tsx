@@ -12,6 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { hoursRangeFromHoraires, labelHeureSenegal, formatHour } from "@/lib/scheduleSn";
+import { localYmd } from "@/lib/localDate";
 
 const statusConfig: Record<string, { label: string; className: string }> = {
   en_attente: {
@@ -23,7 +25,11 @@ const statusConfig: Record<string, { label: string; className: string }> = {
     className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   joue: {
-    label: "Joué",
+    label: "Match joué",
+    className: "bg-[var(--color-primary)] text-white",
+  },
+  match_joue: {
+    label: "Match joué",
     className: "bg-[var(--color-primary)] text-white",
   },
   acceptee: {
@@ -47,6 +53,7 @@ const ManagerCalendar = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [reservations, setReservations] = useState<any[]>([]);
   const [blocages, setBlocages] = useState<any[]>([]);
+  const [horaires, setHoraires] = useState<any[]>([]);
   const [selectedReservation, setSelectedReservation] = useState<any>(null);
   const [selectedBlocage, setSelectedBlocage] = useState<any>(null);
   const [processing, setProcessing] = useState(false);
@@ -69,6 +76,7 @@ const ManagerCalendar = () => {
       const data = await gerantApi.dashboard();
       setReservations(data.reservations || []);
       setBlocages(data.blocages || []);
+      setHoraires(data.horaires || []);
     } catch (err: any) {
       toast.error(err.message || "Erreur lors du chargement");
     } finally {
@@ -91,12 +99,13 @@ const ManagerCalendar = () => {
     weekDays.push(d);
   }
 
-  const timeSlots: string[] = [];
-  for (let h = 8; h <= 22; h++) {
-    timeSlots.push(`${h.toString().padStart(2, "0")}:00`);
-  }
+  const timeSlots = (() => {
+    const slots = hoursRangeFromHoraires(horaires, { min: 6, max: 24 });
+    if (slots.length) return slots;
+    return Array.from({ length: 18 }, (_, i) => formatHour(i + 6));
+  })();
 
-  const formatDate = (date: Date) => date.toISOString().split("T")[0];
+  const formatDate = (date: Date) => localYmd(date);
 
   const formatDay = (date: Date) => {
     const days = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
@@ -120,7 +129,11 @@ const ManagerCalendar = () => {
     if (blocage) return { status: "blocked" as const, data: blocage };
 
     const reservation = reservations.find(
-      (r) => r.date === dateStr && time >= r.heure_debut && time < r.heure_fin
+      (r) =>
+        r.date === dateStr &&
+        time >= r.heure_debut &&
+        time < r.heure_fin &&
+        ["en_attente", "confirme", "acceptee", "joue", "match_joue"].includes(r.statut)
     );
     if (reservation) return { status: "reserved" as const, data: reservation };
 
@@ -161,21 +174,9 @@ const ManagerCalendar = () => {
     }
   };
 
-  const handleMatchJoue = async (id: number) => {
-    if (!window.confirm("Le match est-il joué et le solde encaissé en espèces ?")) return;
-    setProcessing(true);
-    try {
-      await reservationsApi.marquerJoue(id, "especes");
-      setReservations((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, statut: "joue", reste_a_payer: 0 } : r))
-      );
-      setSelectedReservation(null);
-      toast.success("Match joué et revenu comptabilisé");
-    } catch (err: any) {
-      toast.error(err.message);
-    } finally {
-      setProcessing(false);
-    }
+  const handleOpenFiche = (id: number) => {
+    setSelectedReservation(null);
+    navigate(`/backoffice/gerant/reservations/${id}`);
   };
 
   const getBlocageLabel = (motif: string) => {
@@ -281,6 +282,9 @@ const ManagerCalendar = () => {
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-[var(--color-danger)]" /> Bloqué
         </span>
+        <span className="text-[var(--color-text-muted)]">
+          00:00 = minuit de la veille (ex. Ven 00h → Jeudi minuit)
+        </span>
       </div>
 
       {/* Liste du jour */}
@@ -299,10 +303,10 @@ const ManagerCalendar = () => {
               }`}
             >
               <p
-                className="text-xl font-semibold w-16 shrink-0 text-[var(--color-text-primary)]"
+                className="text-sm sm:text-xl font-semibold w-[4.5rem] sm:w-20 shrink-0 text-[var(--color-text-primary)] leading-tight"
                 style={{ fontFamily: "var(--font-display)" }}
               >
-                {time}
+                {labelHeureSenegal(formatDate(activeDay), time)}
               </p>
               <div className="flex-1 min-w-0">
                 {status === "free" && (
@@ -412,10 +416,9 @@ const ManagerCalendar = () => {
                   <button
                     type="button"
                     className="w-full min-h-[52px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium"
-                    onClick={() => handleMatchJoue(selectedReservation.id)}
-                    disabled={processing}
+                    onClick={() => handleOpenFiche(selectedReservation.id)}
                   >
-                    {processing ? "Traitement..." : "Match joué · encaisser le solde"}
+                    Ouvrir la fiche et scanner le QR
                   </button>
                 </DialogFooter>
               )}
