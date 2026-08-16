@@ -34,6 +34,15 @@ function calculerMontantAvance(prixChoisi, pourcentageAvance) {
   return Math.min(montant, Math.round((montant * taux) / 100));
 }
 
+/** Montant réellement envoyé à PayTech : avance > 0, sinon acompte legacy. */
+function montantLienPaiement(reservation = {}) {
+  const avance = Number(reservation.montant_avance);
+  if (Number.isFinite(avance) && avance > 0) return avance;
+  const acompte = Number(reservation.acompte ?? reservation.montant_acompte);
+  if (Number.isFinite(acompte) && acompte > 0) return acompte;
+  return 0;
+}
+
 /**
  * Crée un paiement PayTech (ou simulation) avec avance recalculée
  * depuis terrains.pourcentage_avance × prixChoisi.
@@ -229,6 +238,7 @@ module.exports = {
   creerPaiement,
   creerLienPaiement,
   calculerMontantAvance,
+  montantLienPaiement,
   verifierHash,
   verifierIpnPaytech,
   decoderCustomField,

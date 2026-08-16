@@ -1,5 +1,5 @@
 /**
- * Fenêtre de check-in — règle métier workflow QR.
+ * Fenêtre de check-in — règle métier workflow QR / file d'attente gérant.
  * debut = heure_debut - 1h
  * fin   = heure_fin + fenetre_retard + 2h
  */
@@ -49,4 +49,53 @@ export function estDansLaFenetreCheckIn(
 ): boolean {
   const { debutFenetre, finFenetre } = calculerFenetreCheckIn(creneau);
   return maintenant >= debutFenetre && maintenant <= finFenetre;
+}
+
+/** heure_debut - now <= 30 min ET > 0 */
+export function estImminente(creneau: CreneauFenetre, maintenant: number = Date.now()): boolean {
+  const { heureDebutMs } = calculerFenetreCheckIn(creneau);
+  const delta = heureDebutMs - maintenant;
+  return delta <= 30 * 60 * 1000 && delta > 0;
+}
+
+/** now >= heure_debut - 1h ET now <= heure_fin + retard + 2h */
+export function estDansFenetre(creneau: CreneauFenetre, maintenant: number = Date.now()): boolean {
+  return estDansLaFenetreCheckIn(creneau, maintenant);
+}
+
+/** now >= heure_debut ET now <= heure_fin + fenetre_retard */
+export function estEnCours(creneau: CreneauFenetre, maintenant: number = Date.now()): boolean {
+  const { heureDebutMs, heureFinMs, retardMin } = calculerFenetreCheckIn(creneau);
+  return maintenant >= heureDebutMs && maintenant <= heureFinMs + retardMin * 60 * 1000;
+}
+
+/** now > heure_fin + fenetre_retard ET statut === match_joue */
+export function estTerminee(
+  creneau: CreneauFenetre,
+  statut: string,
+  maintenant: number = Date.now(),
+): boolean {
+  const { heureFinMs, retardMin } = calculerFenetreCheckIn(creneau);
+  const pastEnd = maintenant > heureFinMs + retardMin * 60 * 1000;
+  return pastEnd && ["match_joue", "joue"].includes(String(statut || ""));
+}
+
+export type LiveMatchFlags = {
+  estImminente: boolean;
+  estDansFenetre: boolean;
+  estEnCours: boolean;
+  estTerminee: boolean;
+};
+
+export function calculerFlagsMatch(
+  creneau: CreneauFenetre,
+  statut: string,
+  maintenant: number = Date.now(),
+): LiveMatchFlags {
+  return {
+    estImminente: estImminente(creneau, maintenant),
+    estDansFenetre: estDansFenetre(creneau, maintenant),
+    estEnCours: estEnCours(creneau, maintenant),
+    estTerminee: estTerminee(creneau, statut, maintenant),
+  };
 }

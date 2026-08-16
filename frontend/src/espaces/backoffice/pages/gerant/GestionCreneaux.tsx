@@ -17,23 +17,23 @@ import { localYmd } from "@/lib/localDate";
 
 const statusConfig: Record<string, { label: string; className: string }> = {
   en_attente: {
-    label: "En attente",
+    label: "En attente de paiement",
     className: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
   },
   confirme: {
-    label: "Confirmée",
+    label: "Réservé ✓",
     className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   joue: {
-    label: "Match joué",
+    label: "Terminé ✓",
     className: "bg-[var(--color-primary)] text-white",
   },
   match_joue: {
-    label: "Match joué",
+    label: "Terminé ✓",
     className: "bg-[var(--color-primary)] text-white",
   },
   acceptee: {
-    label: "Acceptée",
+    label: "Réservé ✓",
     className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   refusee: {
@@ -207,7 +207,7 @@ const ManagerCalendar = () => {
             className="text-xl font-semibold text-[var(--color-text-primary)]"
             style={{ fontFamily: "var(--font-display)" }}
           >
-            Créneaux
+            Heures de match
           </h1>
           <p className="text-sm text-[var(--color-text-secondary)] mt-1">
             Semaine du {startOfWeek.getDate()} au {weekDays[6].getDate()}{" "}

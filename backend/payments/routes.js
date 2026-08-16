@@ -101,8 +101,8 @@ function mountPaymentRoutes(app) {
         body: JSON.stringify({
           type_event: 'sale_complete',
           ref_command: refCommand,
-          item_price: Number(reservation.montant_avance || reservation.acompte || 0),
-          final_item_price: Number(reservation.montant_avance || reservation.acompte || 0),
+          item_price: paytechService.montantLienPaiement(reservation),
+          final_item_price: paytechService.montantLienPaiement(reservation),
           custom_field: Buffer.from(JSON.stringify({ reservation_id: reservationId }), 'utf8').toString('base64'),
           api_key_sha256: crypto.createHash('sha256').update(process.env.PAYTECH_API_KEY || 'mock').digest('hex'),
           api_secret_sha256: crypto.createHash('sha256').update(process.env.PAYTECH_API_SECRET || 'mock').digest('hex'),

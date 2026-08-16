@@ -124,7 +124,16 @@ async function traiterScanQrReservation(req, res) {
       LEFT JOIN creneaux c ON c.id = r.creneau_id
       WHERE r.id = ? AND r.terrain_id = ?
     `, [reservationId, terrainId]);
-    if (!reservation) return res.status(404).json({ error: 'Reservation non trouvee' });
+    if (!reservation) {
+      const elsewhere = queryOne(db, 'SELECT id, terrain_id FROM reservations WHERE id = ?', [reservationId]);
+      if (elsewhere) {
+        return res.status(403).json({
+          error: 'Ce QR code ne correspond pas à ton terrain',
+          code: 'QR_WRONG_TERRAIN',
+        });
+      }
+      return res.status(404).json({ error: 'Reservation non trouvee', code: 'QR_NOT_FOUND' });
+    }
 
     if (reservation.qr_code_scanne_at) {
       return res.status(403).json({
@@ -165,6 +174,9 @@ async function traiterScanQrReservation(req, res) {
     });
 
     const methode = ['especes', 'wave', 'orange_money'].includes(req.body?.methode) ? req.body.methode : 'especes';
+    const montantRestantAvant = Number(
+      reservation.reste_a_payer ?? reservation.montant_restant ?? 0,
+    );
     await marquerReservationJouee({ db, reservation, gerantId: req.user.id, methode });
     await logActivite({
       gerant_id: req.user.id,
@@ -198,6 +210,8 @@ async function traiterScanQrReservation(req, res) {
         code_reservation: updated.code_reservation,
         statut: updated.statut,
         qr_code_scanne_at: updated.qr_code_scanne_at,
+        // Solde dû avant encaissement scan (pour UX « Encaisse X FCFA sur place »)
+        montant_restant: montantRestantAvant,
       },
     });
   } catch (err) {
@@ -209,6 +223,7 @@ async function traiterScanQrReservation(req, res) {
       minutes_remaining: err.minutes_remaining,
       match_date: err.match_date,
       match_time: err.match_time,
+      qr_code_scanne_at: err.qr_code_scanne_at,
     });
   }
 }
@@ -223,6 +238,39 @@ function mountGerantCheckinRoutes(app) {
 
   app.post('/api/reservations/:id(\\d+)/scan-qr', authMiddleware, requireRole('gerant'), traiterScanQrReservation);
   app.patch('/api/gerant/reservations/:id/scanner', authMiddleware, requireRole('gerant'), traiterScanQrReservation);
+
+  /** Mode A : résolution d'un code TF-… vers un id (terrain du gérant). */
+  app.get('/api/gerant/reservations/by-code/:code', authMiddleware, requireRole('gerant'), async (req, res) => {
+    try {
+      const db = await getDb();
+      const code = String(req.params.code || '').trim().toUpperCase();
+      if (!code) return res.status(400).json({ error: 'Code requis', code: 'QR_INVALID' });
+      const row = queryOne(db, `
+        SELECT id, code_reservation, statut, terrain_id
+        FROM reservations
+        WHERE UPPER(code_reservation) = ? AND terrain_id = ?
+      `, [code, req.user.terrain_id]);
+      if (!row) {
+        const elsewhere = queryOne(db, `
+          SELECT id FROM reservations WHERE UPPER(code_reservation) = ?
+        `, [code]);
+        if (elsewhere) {
+          return res.status(403).json({
+            error: 'Ce QR code ne correspond pas à ton terrain',
+            code: 'QR_WRONG_TERRAIN',
+          });
+        }
+        return res.status(404).json({
+          error: 'QR code non reconnu',
+          code: 'QR_INVALID',
+        });
+      }
+      return res.json({ id: row.id, code_reservation: row.code_reservation, statut: row.statut });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: err.message || 'Erreur serveur' });
+    }
+  });
 
   app.patch('/api/gerant/reservations/:id(\\d+)/stage', authMiddleware, requireRole('gerant'), async (req, res) => {
     try {
@@ -379,6 +427,62 @@ function mountGerantCheckinRoutes(app) {
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  /** Encaisser le reste sur place sans passer par le Kanban multi-étapes. */
+  app.post('/api/gerant/reservations/:id(\\d+)/encaisser', authMiddleware, requireRole('gerant'), async (req, res) => {
+    try {
+      const db = await getDb();
+      const terrainId = req.user.terrain_id;
+      const reservationId = Number(req.params.id);
+      const methode = ['especes', 'wave', 'orange_money'].includes(req.body?.methode)
+        ? req.body.methode
+        : 'especes';
+
+      const row = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?', [
+        reservationId,
+        terrainId,
+      ]);
+      if (!row) return res.status(404).json({ error: 'Reservation non trouvee' });
+      if (!['confirme', 'acceptee', 'match_joue', 'joue'].includes(row.statut)) {
+        return res.status(400).json({ error: 'Encaissement impossible pour ce statut' });
+      }
+      const restant = Number(row.montant_restant ?? row.reste_a_payer ?? 0);
+      if (!(restant > 0)) {
+        return res.status(400).json({ error: 'Aucun reste à encaisser' });
+      }
+
+      const result = transaction(db, () => encaisserSoldeSurPlace(db, row, req.user.id, methode));
+      await logActivite({
+        gerant_id: req.user.id,
+        terrain_id: terrainId,
+        action: 'encaissement_sur_place',
+        reservation_id: reservationId,
+        details: { methode, montant: restant },
+      }).catch((error) => logger.error('gerantCheckin.js', 'Log encaissement', error));
+
+      const updated = queryOne(db, `
+        SELECT r.*, t.nom AS terrain_nom, t.ville AS terrain_ville,
+               COALESCE(r.joueur_nom, u.nom) AS joueur_nom,
+               COALESCE(r.joueur_telephone, u.telephone) AS joueur_telephone,
+               COALESCE(u.is_banned, 0) AS is_banned,
+               COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
+        FROM reservations r
+        JOIN terrains t ON t.id = r.terrain_id
+        LEFT JOIN users u ON u.id = r.joueur_id
+        LEFT JOIN creneaux c ON c.id = r.creneau_id
+        WHERE r.id = ? AND r.terrain_id = ?
+      `, [reservationId, terrainId]);
+
+      res.json({
+        ok: true,
+        ...result,
+        reservation: mapReservationGerantRow(updated),
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
     }
   });
 }

@@ -167,6 +167,44 @@ router.put('/gerant/tarifs', authMiddleware, requireRole('gerant'), async (req, 
   }
 });
 
+/** Fenêtre de retard check-in (appliquée à tous les créneaux du terrain). */
+router.get('/gerant/fenetre-retard', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const row = queryOne(
+      db,
+      `SELECT fenetre_retard FROM creneaux WHERE terrain_id = ? AND fenetre_retard IS NOT NULL
+       ORDER BY id DESC LIMIT 1`,
+      [req.user.terrain_id],
+    );
+    res.json({ fenetre_retard: Number(row?.fenetre_retard ?? 30) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+router.put('/gerant/fenetre-retard', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const value = Number(req.body?.fenetre_retard);
+    if (![0, 15, 30, 45, 60].includes(value)) {
+      return res.status(400).json({ error: 'fenetre_retard invalide (0, 15, 30, 45 ou 60)' });
+    }
+    runSql(db, 'UPDATE creneaux SET fenetre_retard = ? WHERE terrain_id = ?', [value, req.user.terrain_id]);
+    await logActivite({
+      gerant_id: req.user.id,
+      terrain_id: req.user.terrain_id,
+      action: 'fenetre_retard_maj',
+      details: { fenetre_retard: value },
+    }).catch(() => {});
+    res.json({ fenetre_retard: value });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 async function persistGerantWhatsapp(db, gerantId, phoneDigits) {
   if (!gerantId || !phoneDigits) return;
   let stored = String(phoneDigits);
@@ -205,18 +243,54 @@ router.get('/gerant/whatsapp/status', authMiddleware, requireRole('gerant'), asy
 
 router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), async (req, res) => {
   const key = gerantWaKey(req);
-  const started = await whatsappClient.ensureStarted(key);
+  if (!key) {
+    return res.status(400).json({ error: 'Session gérant invalide' });
+  }
+  const force = Boolean(req.body?.force || req.query?.force);
+  const db = await getDb();
+  const employe = queryOne(
+    db,
+    'SELECT whatsapp_number, telephone FROM employes WHERE id = ?',
+    [req.user.id],
+  );
+  const phoneNumber =
+    whatsappClient.toWaIntlDigits?.(employe?.whatsapp_number) ||
+    whatsappClient.toWaIntlDigits?.(employe?.telephone) ||
+    whatsappClient.toWaIntlDigits?.(req.body?.telephone) ||
+    null;
+
+  const started = await whatsappClient.ensureStarted(key, { force, phoneNumber });
   const qr = whatsappClient.getQrPayload(key);
+  if (started.mock || qr.mock) {
+    return res.status(503).json({
+      error:
+        'WhatsApp est en mode mock (WHATSAPP_MOCK=true). Passez WHATSAPP_MOCK=false dans backend/.env puis redémarrez l’API pour générer un QR.',
+      mock: true,
+      session: key,
+    });
+  }
   if (started.ready && started.phone) {
-    const db = await getDb();
     await persistGerantWhatsapp(db, req.user.id, started.phone);
+  }
+  if (!started.ready && !qr.dataUrl && !qr.pairingCode) {
+    return res.status(503).json({
+      error:
+        qr.error ||
+        'QR / code WhatsApp indisponible pour le moment. Réessayez (Nouveau QR).',
+      ...started,
+      ...qr,
+      session: key,
+    });
   }
   res.json({ ...started, ...qr, session: key });
 });
 
 router.get('/gerant/whatsapp/qr', authMiddleware, requireRole('gerant'), async (req, res) => {
   const key = gerantWaKey(req);
-  if (!whatsappClient.getStatus(key).connected && !whatsappClient.getStatus(key).initializing) {
+  const status = whatsappClient.getStatus(key);
+  // Ne démarrer une session que s'il n'y a ni QR ni init en cours
+  // (sinon on détruit le navigateur pendant que l'utilisateur scanne).
+  if (!status.connected && !status.initializing && !status.hasQr) {
     await whatsappClient.ensureStarted(key);
   }
   res.json(whatsappClient.getQrPayload(key));

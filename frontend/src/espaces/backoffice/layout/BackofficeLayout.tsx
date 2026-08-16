@@ -14,7 +14,7 @@ import {
 import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { normalizeRole, profileForUser, AppRole } from "@/auth/roles";
-import GerantChrome from "@/espaces/backoffice/layout/GerantChrome";
+import GerantLayout from "@/espaces/backoffice/layout/GerantLayout";
 import ProprietaireChrome from "@/espaces/backoffice/layout/ProprietaireChrome";
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean };
@@ -42,15 +42,18 @@ const NAV_BY_ROLE: Record<Exclude<AppRole, "joueur">, NavItem[]> = {
 const CRUMB_LABELS: Record<string, string> = {
   backoffice: "Backoffice",
   admin: "Administration",
-  gerant: "Gerant",
+  gerant: "Espace gérant",
   proprietaire: "Proprietaire",
   terrains: "Terrains",
   utilisateurs: "Utilisateurs",
   revenus: "Revenus",
   abonnements: "Abonnements",
   profil: "Profil",
-  creneaux: "Creneaux",
+  creneaux: "Heures de match",
   reservations: "Reservations",
+  finances: "Mes gains",
+  parametres: "Parametres",
+  joueurs: "Joueurs",
   terrain: "Terrain",
 };
 
@@ -96,7 +99,7 @@ export default function BackofficeLayout() {
       }));
   }, [location.pathname]);
 
-  if (role === "gerant") return <GerantChrome />;
+  if (role === "gerant") return <GerantLayout />;
   if (role === "proprietaire") return <ProprietaireChrome />;
 
   const links = role && role !== "joueur" ? NAV_BY_ROLE[role] : [];

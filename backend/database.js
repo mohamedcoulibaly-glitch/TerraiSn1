@@ -540,9 +540,9 @@ function queryOne(database, sql, params = []) {
 function runSql(database, sql, params = []) {
   try {
     database.run(sql, params);
-    saveDb();
-    // Obtenir le dernier ID inséré
+    // Lire last_insert_rowid AVANT saveDb() (un reload efface le curseur sql.js)
     const result = queryOne(database, 'SELECT last_insert_rowid() as id');
+    saveDb();
     return { lastInsertRowid: result ? result.id : 0 };
   } catch (err) {
     console.error('SQL Error:', err.message, '\nQuery:', sql);

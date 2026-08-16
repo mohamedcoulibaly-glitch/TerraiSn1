@@ -8,27 +8,27 @@ import { localYmd } from "@/lib/localDate";
 
 const statusMeta: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
-    label: "En attente",
+    label: "En attente de paiement",
     border: "border-l-[var(--color-warning)]",
     badge: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
   },
   confirme: {
-    label: "Confirmée",
+    label: "Réservé ✓",
     border: "border-l-[var(--color-success)]",
     badge: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   acceptee: {
-    label: "Acceptée",
+    label: "Réservé ✓",
     border: "border-l-[var(--color-success)]",
     badge: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   joue: {
-    label: "Match joué",
+    label: "Terminé ✓",
     border: "border-l-[var(--color-primary)]",
     badge: "bg-[var(--color-primary)] text-white",
   },
   match_joue: {
-    label: "Match joué",
+    label: "Terminé ✓",
     border: "border-l-[var(--color-primary)]",
     badge: "bg-[var(--color-primary)] text-white",
   },

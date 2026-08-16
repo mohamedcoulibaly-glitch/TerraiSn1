@@ -44,7 +44,7 @@ export default function ProfilGerant() {
   if (error || !data) return <ProfileError message={error || "Profil gerant introuvable"} />;
 
   return (
-    <ProfileShell account={data.account} roleLabel="Gerant" subtitle={data.terrain?.nom || "Terrain non assigne"}>
+    <ProfileShell account={data.account} roleLabel="Espace gérant" subtitle={data.terrain?.nom || "Terrain non assigne"}>
       <section className="mt-8 flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
         <div>
           <p className="text-sm font-medium text-[var(--color-text-primary)]">Apparence</p>
@@ -66,11 +66,11 @@ export default function ProfilGerant() {
       </div>
       <button
         type="button"
-        onClick={() => navigate("/backoffice/gerant/portefeuille")}
+        onClick={() => navigate("/backoffice/gerant/finances")}
         className="mt-6 w-full min-h-[48px] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white text-sm font-medium inline-flex items-center justify-center gap-2"
       >
         <Wallet className="w-4 h-4 text-[var(--color-primary)]" />
-        Voir mon portefeuille
+        Voir mes gains
       </button>
       <PasswordBlock />
       <StatGrid stats={[

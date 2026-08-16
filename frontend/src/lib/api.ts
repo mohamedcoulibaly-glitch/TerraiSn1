@@ -468,7 +468,18 @@ export const reservationsApi = {
     return await request(`/reservations/${id}`);
   },
 
-  async createGerant(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: 'moitie' | 'entier' }) {
+  async createGerant(data: {
+    terrain_id: number;
+    date: string;
+    heure_debut: string;
+    heure_fin: string;
+    joueur_nom: string;
+    joueur_telephone?: string;
+    format_terrain?: 'moitie' | 'entier';
+    joueur_id?: number;
+    mode?: 'paiement' | 'bloquer';
+    anonyme?: boolean;
+  }) {
     return await request('/reservations/gerant', { method: 'POST', body: JSON.stringify(data) });
   },
 
@@ -482,6 +493,10 @@ export const reservationsApi = {
 
   async annuler(id: number | string) {
     return await request(`/reservations/${id}/annuler`, { method: 'PUT' });
+  },
+
+  async annulerGerant(id: number | string) {
+    return await request(`/gerant/reservations/${id}/annuler`, { method: 'PATCH' });
   },
 
   async traiter(id: number | string, action: 'acceptee' | 'refusee') {
@@ -641,6 +656,21 @@ export const gerantApi = {
     });
   },
 
+  async reservationByCode(code: string) {
+    const safe = encodeURIComponent(String(code || '').trim().toUpperCase());
+    return await request(`/gerant/reservations/by-code/${safe}`);
+  },
+
+  async encaisserRestant(
+    id: number | string,
+    methode: 'especes' | 'wave' | 'orange_money' = 'especes',
+  ) {
+    return await request(`/gerant/reservations/${id}/encaisser`, {
+      method: 'POST',
+      body: JSON.stringify({ methode }),
+    });
+  },
+
   async portefeuille() {
     return await request('/gerant/portefeuille');
   },
@@ -649,8 +679,11 @@ export const gerantApi = {
     return await request('/gerant/whatsapp/status');
   },
 
-  async whatsappConnect() {
-    return await request('/gerant/whatsapp/connect', { method: 'POST' });
+  async whatsappConnect(opts?: { force?: boolean }) {
+    return await request('/gerant/whatsapp/connect', {
+      method: 'POST',
+      body: JSON.stringify({ force: Boolean(opts?.force) }),
+    });
   },
 
   async whatsappQr() {
@@ -667,6 +700,14 @@ export const gerantApi = {
 
   async addBlocage(data: any) {
     return await request('/gerant/blocages', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async addBlocagesBatch(data: {
+    date: string;
+    motif?: string | null;
+    creneaux: Array<{ heure_debut: string; heure_fin: string }>;
+  }) {
+    return await request('/gerant/blocages/batch', { method: 'POST', body: JSON.stringify(data) });
   },
 
   async removeBlocage(id: number | string) {
@@ -695,9 +736,20 @@ export const gerantApi = {
   async saveTarifs(data: {
     prix_entier_base: number;
     prix_moitie_base: number;
-    cellules: Array<{ jour: string; heure: number; prix_entier: number; prix_moitie: number }>;
+    cellules?: Array<{ jour: string; heure: number; prix_entier: number; prix_moitie: number }>;
   }) {
     return await request('/gerant/tarifs', { method: 'PUT', body: JSON.stringify(data) });
+  },
+
+  async getFenetreRetard() {
+    return await request('/gerant/fenetre-retard');
+  },
+
+  async saveFenetreRetard(fenetre_retard: number) {
+    return await request('/gerant/fenetre-retard', {
+      method: 'PUT',
+      body: JSON.stringify({ fenetre_retard }),
+    });
   },
 };
 

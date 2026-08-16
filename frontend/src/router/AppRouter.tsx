@@ -46,13 +46,10 @@ const GestionUtilisateurs = lazy(() => import("@/espaces/backoffice/pages/supera
 const RevenusAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Revenus"));
 const AbonnementsAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Abonnements"));
 const GerantDashboard = lazy(() => import("@/espaces/backoffice/pages/gerant/Dashboard"));
-const GerantFlux = lazy(() => import("@/espaces/backoffice/modules/flux/ui/FluxPage"));
-const GerantJoueurs = lazy(() => import("@/espaces/backoffice/modules/crm/ui/JoueursPage"));
-const GestionCreneaux = lazy(() => import("@/espaces/backoffice/pages/gerant/GestionCreneaux"));
-const TarifsDynamiques = lazy(() => import("@/espaces/backoffice/pages/gerant/TarifsDynamiques"));
-const ReservationsManuelles = lazy(() => import("@/espaces/backoffice/pages/gerant/ReservationsManuelles"));
+const GerantJoueurs = lazy(() => import("@/espaces/backoffice/pages/gerant/JoueursReservations"));
 const DetailReservationGerant = lazy(() => import("@/espaces/backoffice/pages/gerant/DetailReservation"));
-const PortefeuilleGerant = lazy(() => import("@/espaces/backoffice/pages/gerant/Portefeuille"));
+const FinancesGerant = lazy(() => import("@/espaces/backoffice/pages/gerant/Finances"));
+const ParametresGerant = lazy(() => import("@/espaces/backoffice/pages/gerant/Parametres"));
 const ProprietaireDashboard = lazy(() => import("@/espaces/backoffice/pages/proprietaire/Dashboard"));
 const MesRevenus = lazy(() => import("@/espaces/backoffice/pages/proprietaire/MesRevenus"));
 const TerrainDetail = lazy(() => import("@/espaces/backoffice/pages/proprietaire/TerrainDetail"));
@@ -119,14 +116,16 @@ export default function AppRouter() {
         <Route path="admin/abonnements" element={<RoleGuard roles={["super_admin"]}>{withSuspense(AbonnementsAdmin)}</RoleGuard>} />
         <Route path="admin/profil" element={<Navigate to="/profil" replace />} />
         <Route path="gerant" element={<RoleGuard roles={["gerant"]}>{withSuspense(GerantDashboard)}</RoleGuard>} />
-        <Route path="gerant/flux" element={<RoleGuard roles={["gerant"]}>{withSuspense(GerantFlux)}</RoleGuard>} />
         <Route path="gerant/joueurs" element={<RoleGuard roles={["gerant"]}>{withSuspense(GerantJoueurs)}</RoleGuard>} />
         <Route path="gerant/joueurs/:id" element={<RoleGuard roles={["gerant"]}>{withSuspense(GerantJoueurs)}</RoleGuard>} />
-        <Route path="gerant/creneaux" element={<RoleGuard roles={["gerant"]}>{withSuspense(GestionCreneaux)}</RoleGuard>} />
-        <Route path="gerant/tarifs" element={<RoleGuard roles={["gerant"]}>{withSuspense(TarifsDynamiques)}</RoleGuard>} />
-        <Route path="gerant/reservations" element={<RoleGuard roles={["gerant"]}>{withSuspense(ReservationsManuelles)}</RoleGuard>} />
+        <Route path="gerant/finances" element={<RoleGuard roles={["gerant"]}>{withSuspense(FinancesGerant)}</RoleGuard>} />
+        <Route path="gerant/parametres" element={<RoleGuard roles={["gerant"]}>{withSuspense(ParametresGerant)}</RoleGuard>} />
         <Route path="gerant/reservations/:id" element={<RoleGuard roles={["gerant"]}>{withSuspense(DetailReservationGerant)}</RoleGuard>} />
-        <Route path="gerant/portefeuille" element={<RoleGuard roles={["gerant"]}>{withSuspense(PortefeuilleGerant)}</RoleGuard>} />
+        <Route path="gerant/flux" element={<Navigate to="/backoffice/gerant" replace />} />
+        <Route path="gerant/creneaux" element={<Navigate to="/backoffice/gerant/parametres" replace />} />
+        <Route path="gerant/tarifs" element={<Navigate to="/backoffice/gerant/finances" replace />} />
+        <Route path="gerant/reservations" element={<Navigate to="/backoffice/gerant/joueurs" replace />} />
+        <Route path="gerant/portefeuille" element={<Navigate to="/backoffice/gerant/finances" replace />} />
         <Route path="gerant/scanner" element={<Navigate to="/backoffice/gerant" replace />} />
         <Route path="proprietaire" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(ProprietaireDashboard)}</RoleGuard>} />
         <Route path="proprietaire/revenus" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(MesRevenus)}</RoleGuard>} />

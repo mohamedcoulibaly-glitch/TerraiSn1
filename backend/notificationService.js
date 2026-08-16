@@ -4,6 +4,8 @@ const QRCode = require('qrcode');
 const client = require('./whatsappClient');
 const { getDb, queryOne, runSql } = require('./database');
 const { UPLOAD_ROOT } = require('./terrainPhotoService');
+const { serializeQrPayload } = require('./services/qrPayload');
+const { calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
 
 function digitsPhone(telephone) {
   let numero = String(telephone || '').replace(/\D/g, '');
@@ -47,29 +49,33 @@ function formaterMontant(montant) {
   return Number(montant || 0).toLocaleString('fr-SN') + ' FCFA';
 }
 
-async function envoyerMessage(telephone, message) {
+async function envoyerMessage(telephone, message, sessionKey = 'platform') {
   if (!telephone) return;
+  const key = sessionKey || 'platform';
   if (String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true') {
-    console.log(`[WHATSAPP MOCK] Message vers ${telephone} : ${message}`);
+    console.log(`[WHATSAPP MOCK][${key}] Message vers ${telephone} : ${message}`);
     return;
   }
-  if (!client.isReady) throw new Error("Le client WhatsApp n'est pas encore connecte");
-  await client.sendMessage(formatNumero(telephone), message);
+  await client.sendMessageForSession(key, formatNumero(telephone), message);
 }
 
 /** Alias CDC */
 const envoyerWhatsApp = envoyerMessage;
 
-async function envoyerImageWhatsApp(telephone, mediaUrl, caption) {
+async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = 'platform') {
   if (!telephone || !mediaUrl) return;
+  const key = sessionKey || 'platform';
   if (String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true') {
-    console.log(`[WHATSAPP MOCK] Image vers ${telephone} : ${mediaUrl} (${caption || ''})`);
+    console.log(`[WHATSAPP MOCK][${key}] Image vers ${telephone} : ${mediaUrl} (${caption || ''})`);
     return;
   }
-  if (!client.isReady) throw new Error("Le client WhatsApp n'est pas encore connecte");
   const { MessageMedia } = require('whatsapp-web.js');
   const media = await MessageMedia.fromUrl(mediaUrl, { unsafeMime: true });
-  await client.sendMessage(formatNumero(telephone), media, { caption: caption || '' });
+  await client.sendMessageForSession(key, formatNumero(telephone), null, { media, sendOptions: { caption: caption || '' } });
+}
+
+function sessionKeyFromReservation(reservation = {}) {
+  return client.gerantSessionKey(reservation.gerant_id) || 'platform';
 }
 
 async function details(reservationId) {
@@ -77,7 +83,7 @@ async function details(reservationId) {
   return queryOne(
     db,
     `SELECT r.*, t.nom AS terrain_nom, t.adresse, t.ville, t.latitude, t.longitude,
-      e.nom AS gerant_nom, e.telephone AS gerant_telephone, e.whatsapp_number AS gerant_whatsapp,
+      e.id AS gerant_id, e.nom AS gerant_nom, e.telephone AS gerant_telephone, e.whatsapp_number AS gerant_whatsapp,
       u.prenom AS joueur_prenom, u.telephone AS joueur_tel_user
      FROM reservations r
      JOIN terrains t ON t.id = r.terrain_id
@@ -99,32 +105,55 @@ function prenomJoueur(data) {
 
 /**
  * Génère (si besoin) le QR PNG de la réservation et persiste qr_code_url.
- * Contenu encodé = code_reservation (usage unique côté scan gérant).
+ * Contenu encodé = JSON métier (reservation_id + code) pour le scan gérant.
  */
 async function assurerQrCodeUrl(reservationId) {
   const db = await getDb();
   const row = queryOne(
     db,
-    'SELECT id, code_reservation, qr_code_url FROM reservations WHERE id = ?',
+    `SELECT r.id, r.code_reservation, r.qr_code_url, r.qr_code_payload, r.creneau_id, r.terrain_id,
+            r.date, r.heure_debut, r.heure_fin,
+            COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
+     FROM reservations r
+     LEFT JOIN creneaux c ON c.id = r.creneau_id
+     WHERE r.id = ?`,
     [reservationId]
   );
   if (!row) return null;
   if (row.qr_code_url) return row.qr_code_url;
   if (!row.code_reservation) return null;
 
+  const fenetre = calculerFenetreCheckIn({
+    date: row.date,
+    heure_debut: row.heure_debut,
+    heure_fin: row.heure_fin,
+    fenetre_retard: row.fenetre_retard,
+  });
+  const payload = row.qr_code_payload || serializeQrPayload({
+    reservation_id: row.id,
+    code: row.code_reservation,
+    creneau_id: row.creneau_id,
+    terrain_id: row.terrain_id,
+    expire_at: Math.floor(fenetre.finFenetre / 1000),
+  });
+
   const dir = path.join(UPLOAD_ROOT, 'qr');
   fs.mkdirSync(dir, { recursive: true });
   const safeCode = String(row.code_reservation).replace(/[^a-zA-Z0-9_-]/g, '_');
   const filename = `${safeCode}.png`;
   const absolute = path.join(dir, filename);
-  await QRCode.toFile(absolute, String(row.code_reservation), {
+  await QRCode.toFile(absolute, payload, {
     type: 'png',
     width: 480,
     margin: 2,
     errorCorrectionLevel: 'M',
   });
   const publicUrl = `/uploads/qr/${filename}`;
-  runSql(db, 'UPDATE reservations SET qr_code_url = ? WHERE id = ?', [publicUrl, reservationId]);
+  runSql(db, 'UPDATE reservations SET qr_code_url = ?, qr_code_payload = COALESCE(qr_code_payload, ?) WHERE id = ?', [
+    publicUrl,
+    payload,
+    reservationId,
+  ]);
   return publicUrl;
 }
 
@@ -145,6 +174,7 @@ async function envoyerLienPaiement(reservationId) {
   const prenom = prenomJoueur(data);
   const tel = telephoneJoueur(data);
   const lien = data.lien_paiement || data.lien_paytech;
+  const waKey = sessionKeyFromReservation(data);
   await envoyerWhatsApp(
     tel,
     `👋 Salut ${prenom} !\n\n` +
@@ -156,7 +186,8 @@ async function envoyerLienPaiement(reservationId) {
       `👉 ${lien}\n\n` +
       `Le reste (*${formaterMontant(data.montant_restant || data.reste_a_payer)}*) ` +
       `tu l'amènes le jour du match, pas de stress 😊\n\n` +
-      `⚠️ Ce lien est valable *2 heures*. Après ça, la place repart.`
+      `⚠️ Ce lien est valable *2 heures*. Après ça, la place repart.`,
+    waKey
   );
 }
 
@@ -188,7 +219,8 @@ async function envoyerConfirmation(reservationId) {
     `c'est lui qui ouvre les portes 😄\n` +
     `⚠️ Ce QR code est à usage unique — ne le partage pas.`;
 
-  await envoyerWhatsApp(tel, message);
+  const waKey = sessionKeyFromReservation(data);
+  await envoyerWhatsApp(tel, message, waKey);
 
   if (data.qr_code_url) {
     const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
@@ -197,22 +229,22 @@ async function envoyerConfirmation(reservationId) {
     const caption = `QR Code — ${data.code_reservation}`;
 
     if (fs.existsSync(absolutePath) && String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
-      if (!client.isReady) throw new Error("Le client WhatsApp n'est pas encore connecte");
       const { MessageMedia } = require('whatsapp-web.js');
       const media = MessageMedia.fromFilePath(absolutePath);
-      await client.sendMessage(formatNumero(tel), media, { caption });
+      await client.sendMessageForSession(waKey, formatNumero(tel), null, { media, sendOptions: { caption } });
     } else {
       const imageUrl = data.qr_code_url.startsWith('http')
         ? data.qr_code_url
         : `${domain}${data.qr_code_url}`;
-      await envoyerImageWhatsApp(tel, imageUrl, caption);
+      await envoyerImageWhatsApp(tel, imageUrl, caption, waKey);
     }
   }
 
   if (data.gerant_whatsapp || data.gerant_telephone) {
     await envoyerWhatsApp(
       data.gerant_whatsapp || data.gerant_telephone,
-      `Paiement reçu. Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}.`
+      `Paiement reçu. Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}.`,
+      waKey
     );
   }
 }
@@ -232,7 +264,8 @@ async function envoyerRemboursement(reservationId) {
       `dernière seconde. Ton paiement sera remboursé sous 24h, promis.\n\n` +
       `Mais t'inquiète, voilà ce qui est encore dispo :\n` +
       `👉 ${lienDispo}\n\n` +
-      `On t'en trouve un autre 💪`
+      `On t'en trouve un autre 💪`,
+    sessionKeyFromReservation(data)
   );
 }
 
@@ -296,4 +329,5 @@ module.exports = {
   envoyerReversement,
   envoyerReversementGerant,
   envoyerAlerteSilencieuse,
+  sessionKeyFromReservation,
 };

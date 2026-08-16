@@ -13,11 +13,13 @@ export default function OfflineBanner() {
 
     window.addEventListener('offline', goOffline);
     window.addEventListener('online', goOnline);
-    window.addEventListener('pwa-need-refresh', () => setNeedsRefresh(true));
+    const onNeedRefresh = () => setNeedsRefresh(true);
+    window.addEventListener('pwa-need-refresh', onNeedRefresh);
 
     return () => {
       window.removeEventListener('offline', goOffline);
       window.removeEventListener('online', goOnline);
+      window.removeEventListener('pwa-need-refresh', onNeedRefresh);
     };
   }, []);
 

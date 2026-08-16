@@ -44,7 +44,7 @@ function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
     `SELECT id FROM creneaux
       WHERE terrain_id = ? AND date = ?
         AND statut != 'libre'
-        AND heure_debut < ? AND heure_fin > ?`,
+        AND substr(heure_debut,1,5) < ? AND substr(heure_fin,1,5) > ?`,
     [terrainId, date, heureFin, heureDebut],
   );
   if (chevauchementCreneau.length) throw conflictError();
@@ -53,7 +53,7 @@ function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
     database,
     `SELECT id FROM blocages_creneaux
       WHERE terrain_id = ? AND date = ?
-        AND heure_debut < ? AND heure_fin > ?`,
+        AND substr(heure_debut,1,5) < ? AND substr(heure_fin,1,5) > ?`,
     [terrainId, date, heureFin, heureDebut],
   );
   if (blocages.length) {

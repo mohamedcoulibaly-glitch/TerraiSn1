@@ -13,6 +13,7 @@ const otpService = require('./otpService');
 const adminRoutes = require('./routes/admin');
 const roleRoutes = require('./routes/roles');
 const { mountPaymentRoutes } = require('./payments/routes');
+const { genererCodeReservation } = require('./payments/flow');
 const { mountGerantCheckinRoutes } = require('./gerantCheckin');
 const { mountGerantCrmRoutes } = require('./gerantCrm');
 const {
@@ -658,47 +659,50 @@ app.post('/api/backoffice/auth/login', authRateLimit, async (req, res) => {
       return rowDigits === phoneDigits;
     };
     const matchEmail = (row) => row.email && String(row.email).toLowerCase() === identifier.toLowerCase();
-    const findIn = (rows) =>
-      rows.find((row) => (isEmail ? matchEmail(row) : matchPhone(row))) || null;
+    const matchesIdentifier = (row) => (isEmail ? matchEmail(row) : matchPhone(row));
 
-    let account = null;
-    let role = '';
-    let resolvedType = null;
+    // Un même numéro peut exister sur plusieurs tables (proprio + gérant + joueur).
+    // On collecte tous les candidats, puis on garde ceux dont le mot de passe matche.
+    const candidates = [
+      ...queryAll(db, 'SELECT * FROM employes').map((row) => ({
+        account: row,
+        resolvedType: 'employe',
+        role: 'gerant',
+        priority: 1,
+      })),
+      ...queryAll(db, 'SELECT * FROM proprietaires').map((row) => ({
+        account: row,
+        resolvedType: 'proprietaire',
+        role: 'proprietaire',
+        priority: 2,
+      })),
+      ...queryAll(db, 'SELECT * FROM users').map((row) => {
+        let role = row.role === 'superadmin' ? 'super_admin' : (row.role || 'joueur');
+        if (role === 'superadmin') role = 'super_admin';
+        return {
+          account: row,
+          resolvedType: 'user',
+          role,
+          priority: role === 'super_admin' ? 3 : 9,
+        };
+      }),
+    ].filter((c) => matchesIdentifier(c.account));
 
-    const asProprio = findIn(queryAll(db, 'SELECT * FROM proprietaires'));
-    if (asProprio) {
-      account = asProprio;
-      resolvedType = 'proprietaire';
-      role = 'proprietaire';
-    } else {
-      const asEmploye = findIn(queryAll(db, 'SELECT * FROM employes'));
-      if (asEmploye) {
-        account = asEmploye;
-        resolvedType = 'employe';
-        role = 'gerant';
-      } else {
-        const asUser = findIn(queryAll(db, 'SELECT * FROM users'));
-        if (asUser) {
-          account = asUser;
-          resolvedType = 'user';
-          role = asUser.role === 'superadmin' ? 'super_admin' : (asUser.role || 'joueur');
-          if (role === 'superadmin') role = 'super_admin';
-        }
-      }
-    }
+    const authenticated = candidates
+      .filter((c) => bcrypt.compareSync(password, c.account.password_hash))
+      .filter((c) => c.role !== 'joueur' && c.role !== 'user')
+      .sort((a, b) => a.priority - b.priority);
 
-    if (!account) return res.status(401).json({ error: 'Identifiants incorrects' });
-    if (!bcrypt.compareSync(password, account.password_hash)) {
+    if (candidates.length === 0 || authenticated.length === 0) {
       return res.status(401).json({ error: 'Identifiants incorrects' });
     }
+
+    const { account, resolvedType, role } = authenticated[0];
+
     if (isAccountBlocked(account, resolvedType)) {
       return res.status(403).json({
         error: 'Ton compte a été suspendu. Contacte le support.',
       });
-    }
-
-    if (role === 'joueur' || role === 'user') {
-      return res.status(403).json({ error: 'Accès non autorisé' });
     }
 
     const tokenPayload = {
@@ -1189,31 +1193,55 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
       const slotDate = slotPlan.date;
 
       const isReserved = reservationsExistantes.some(
-        (r) => r.date === slotDate && slot >= r.heure_debut && slot < r.heure_fin,
+        (r) =>
+          String(r.date).slice(0, 10) === String(slotDate).slice(0, 10) &&
+          slot >= String(r.heure_debut).slice(0, 5) &&
+          slot < String(r.heure_fin).slice(0, 5),
       );
       const isBlocked = blocages.some(
-        (b) => b.date === slotDate && slot >= b.heure_debut && slot < b.heure_fin,
+        (b) =>
+          String(b.date).slice(0, 10) === String(slotDate).slice(0, 10) &&
+          slot >= String(b.heure_debut).slice(0, 5) &&
+          slot < String(b.heure_fin).slice(0, 5),
       );
 
-      let creneau = queryOne(
+      // Déduplique les lignes creneaux (anciens doublons libre+bloque)
+      const twins = queryAll(
         db,
-        'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
+        'SELECT id, statut FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ? ORDER BY id ASC',
         [terrain.id, slotDate, slot, slotEnd],
       );
+      let creneau = twins.length
+        ? queryOne(db, 'SELECT * FROM creneaux WHERE id = ?', [twins[twins.length - 1].id])
+        : null;
+      if (twins.length > 1) {
+        const keepId = twins[twins.length - 1].id;
+        twins.slice(0, -1).forEach((t) => {
+          runSql(db, 'DELETE FROM creneaux WHERE id = ?', [t.id]);
+        });
+        creneau = queryOne(db, 'SELECT * FROM creneaux WHERE id = ?', [keepId]);
+      }
       if (!creneau) {
         runSql(
           db,
           'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
-          [terrain.id, slotDate, slot, slotEnd, isReserved ? 'reserve' : 'libre'],
+          [terrain.id, slotDate, slot, slotEnd, isReserved ? 'reserve' : isBlocked ? 'bloque' : 'libre'],
         );
         creneau = queryOne(
           db,
-          'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
+          'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ? ORDER BY id DESC',
           [terrain.id, slotDate, slot, slotEnd],
         );
       }
 
-      const disponible = creneau.statut === 'libre' && !isReserved && !isBlocked;
+      // Resync statut avec occupations réelles (évite faux « libre »)
+      const effectiveStatut = isBlocked ? 'bloque' : isReserved ? 'reserve' : 'libre';
+      if (creneau && creneau.statut !== effectiveStatut) {
+        runSql(db, 'UPDATE creneaux SET statut = ? WHERE id = ?', [effectiveStatut, creneau.id]);
+        creneau = { ...creneau, statut: effectiveStatut };
+      }
+
+      const disponible = !isReserved && !isBlocked;
       const prixEntier = prixHoraireEffectif(
         db,
         terrain,
@@ -1240,7 +1268,7 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
         label: slotPlan.label || labelHeureSenegal(slotDate, slot),
         label_court: slotPlan.label_court || courtLabelHeureSenegal(slotDate, slot),
         est_minuit_culturel: Boolean(slotPlan.est_minuit_culturel),
-        statut: creneau.statut,
+        statut: effectiveStatut,
         disponible,
         bloque: isBlocked,
         prix_entier: prixEntier,
@@ -1412,17 +1440,41 @@ app.delete('/api/terrains/:id', authMiddleware, requireRole('proprietaire'), asy
 async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, terrainIdForce = null) {
   try {
     const db = await getDb();
-    const { terrain_id, date, heure_debut, heure_fin, joueur_nom, joueur_telephone, format_terrain = 'entier' } = req.body;
+    const {
+      terrain_id,
+      date,
+      heure_debut,
+      heure_fin,
+      joueur_nom,
+      joueur_telephone,
+      format_terrain = 'entier',
+      joueur_id: joueurIdBody,
+      mode: modeBody,
+      anonyme: anonymeBody,
+    } = req.body;
+    /** 'paiement' = lien PayTech + WA | 'bloquer' = hold sur place sans lien */
+    const mode = modeBody === 'bloquer' ? 'bloquer' : 'paiement';
+    const anonyme = Boolean(anonymeBody);
     const terrainId = terrainIdForce || Number(terrain_id);
-    if (!joueur_nom || !joueur_telephone) {
+    if (!joueur_nom || (!anonyme && !joueur_telephone)) {
       return res.status(400).json({ error: 'Nom et téléphone du joueur requis' });
     }
+    if (mode === 'paiement' && anonyme) {
+      return res.status(400).json({ error: 'Impossible d’envoyer un lien de paiement à un joueur anonyme' });
+    }
+    if (mode === 'paiement' && !joueur_telephone) {
+      return res.status(400).json({ error: 'Téléphone requis pour envoyer le lien de paiement' });
+    }
 
-    let telephoneNorm;
-    try {
-      telephoneNorm = notificationService.normalizeTelephoneStore(joueur_telephone);
-    } catch (phoneErr) {
-      return res.status(400).json({ error: phoneErr.message || 'Numéro WhatsApp invalide' });
+    let telephoneNorm = null;
+    if (joueur_telephone) {
+      try {
+        telephoneNorm = notificationService.normalizeTelephoneStore(joueur_telephone);
+      } catch (phoneErr) {
+        return res.status(400).json({ error: phoneErr.message || 'Numéro WhatsApp invalide' });
+      }
+    } else if (anonyme) {
+      telephoneNorm = '000000000';
     }
 
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
@@ -1437,17 +1489,80 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
     if (duree <= 0) return res.status(400).json({ error: 'Créneau invalide' });
     if (!['moitie', 'entier'].includes(format_terrain)) return res.status(400).json({ error: 'Format de terrain invalide' });
     const montant = calculerPrixReservation(db, terrain, date, heureDebutNorm, heureFinNorm, format_terrain);
-    const montantAvance = calculerMontantAvance(terrain, montant);
+    // Bloquer sur place : tout encaissé au match (avance 0). Paiement lien : avance calculée.
+    const montantAvance = mode === 'bloquer' ? 0 : calculerMontantAvance(terrain, montant);
     const montantRestant = Math.max(0, montant - montantAvance);
-    const verrouExpireAt = Date.now() + lockDurationMs;
+    const verrouExpireAt = mode === 'bloquer' ? null : Date.now() + lockDurationMs;
+    // Bloquer = confirmé (scan possible). Paiement = en_attente jusqu'au PayTech.
+    const statutInitial = mode === 'bloquer' ? 'confirme' : 'en_attente';
+
+    // Lier au compte joueur pour que la résa apparaisse dans Mes réservations + push.
+    let resolvedJoueurId = null;
+    if (creePar === 'joueur' && req.user?.id) {
+      resolvedJoueurId = Number(req.user.id);
+    } else if (joueurIdBody) {
+      const explicit = queryOne(
+        db,
+        `SELECT id FROM users WHERE id = ? AND COALESCE(role, 'joueur') = 'joueur'`,
+        [Number(joueurIdBody)],
+      );
+      if (explicit) resolvedJoueurId = explicit.id;
+    }
+    if (!resolvedJoueurId && telephoneNorm && telephoneNorm !== '000000000') {
+      const digits = String(telephoneNorm || '').replace(/\D/g, '');
+      const local9 = digits.length >= 9 ? digits.slice(-9) : digits;
+      if (local9.length === 9) {
+        const byPhone = queryOne(
+          db,
+          `SELECT id FROM users
+            WHERE COALESCE(role, 'joueur') = 'joueur'
+              AND REPLACE(REPLACE(REPLACE(telephone, ' ', ''), '+', ''), '-', '') LIKE ?
+            ORDER BY id DESC LIMIT 1`,
+          [`%${local9}`],
+        );
+        if (byPhone) resolvedJoueurId = byPhone.id;
+      }
+    }
+    if (!resolvedJoueurId && creePar === 'gerant' && !anonyme && telephoneNorm && telephoneNorm !== '000000000') {
+      const digits = String(telephoneNorm || '').replace(/\D/g, '');
+      const email = `walkin.${digits || 'x'}.${Date.now()}@joueur.terrainsn.local`;
+      runSql(
+        db,
+        `INSERT INTO users (nom, email, telephone, role, is_active, telephone_verified)
+         VALUES (?, ?, ?, 'joueur', 1, 0)`,
+        [String(joueur_nom).trim(), email, telephoneNorm],
+      );
+      const created = queryOne(db, 'SELECT id FROM users WHERE email = ?', [email]);
+      resolvedJoueurId = created?.id || null;
+    }
 
     // Transaction ACID : verrou IMMEDIATE + UPDATE conditionnel sur chaque heure (anti double-booking)
     const reservationId = transaction(db, () => {
       const creneauId = lockCreneauxAtomique(db, terrainId, date, heureDebutNorm, heureFinNorm);
       db.run(`INSERT INTO reservations
-        (terrain_id, creneau_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain, statut, expire_at, verrou_expire_at, cree_par)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)`,
-        [terrainId, creneauId, joueur_nom, telephoneNorm, date, heureDebutNorm, heureFinNorm, montant, montant, montantAvance, montantRestant, montantAvance, montantRestant, format_terrain, new Date(verrouExpireAt).toISOString(), verrouExpireAt, creePar]);
+        (terrain_id, creneau_id, joueur_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain, statut, expire_at, verrou_expire_at, cree_par)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          terrainId,
+          creneauId,
+          resolvedJoueurId,
+          joueur_nom,
+          telephoneNorm,
+          date,
+          heureDebutNorm,
+          heureFinNorm,
+          montant,
+          montant,
+          montantAvance,
+          montantRestant,
+          montantAvance,
+          montantRestant,
+          format_terrain,
+          statutInitial,
+          verrouExpireAt ? new Date(verrouExpireAt).toISOString() : null,
+          verrouExpireAt,
+          creePar,
+        ]);
       return queryOne(db, 'SELECT last_insert_rowid() AS id').id;
     });
 
@@ -1456,32 +1571,86 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
       FROM reservations r JOIN terrains t ON t.id = r.terrain_id WHERE r.id = ?
     `, [reservationId]);
 
-    try {
-      const payment = await paytechService.creerLienPaiement(reservation);
-      runSql(db, 'UPDATE reservations SET lien_paiement = ?, reference_paytech = ? WHERE id = ?', [
-        payment.redirectUrl,
-        payment.reference,
+    // Code + payload QR dès la création (scan / validation manuelle / WhatsApp)
+    if (!reservation.code_reservation) {
+      const code = genererCodeReservation(db);
+      const fenetre = calculerFenetreCheckIn({
+        date: reservation.date,
+        heure_debut: reservation.heure_debut,
+        heure_fin: reservation.heure_fin,
+        fenetre_retard: DEFAULT_FENETRE_RETARD_MIN,
+      });
+      const qrPayload = serializeQrPayload({
+        reservation_id: reservation.id,
+        code,
+        creneau_id: reservation.creneau_id,
+        terrain_id: reservation.terrain_id,
+        expire_at: fenetre.finFenetre,
+      });
+      runSql(db, 'UPDATE reservations SET code_reservation = ?, qr_code_payload = ? WHERE id = ?', [
+        code,
+        qrPayload,
         reservation.id,
       ]);
-      reservation = {
-        ...reservation,
-        lien_paiement: payment.redirectUrl,
-        reference_paytech: payment.reference,
-        redirect_url: payment.redirectUrl,
-      };
-    } catch (error) {
-      transaction(db, () => {
-        libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
-        db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservation.id]);
-      });
-      throw error;
+      reservation = { ...reservation, code_reservation: code, qr_code_payload: qrPayload };
+    }
+
+    if (mode === 'paiement') {
+      try {
+        const payment = await paytechService.creerLienPaiement(reservation);
+        runSql(db, 'UPDATE reservations SET lien_paiement = ?, reference_paytech = ? WHERE id = ?', [
+          payment.redirectUrl,
+          payment.reference,
+          reservation.id,
+        ]);
+        reservation = {
+          ...reservation,
+          lien_paiement: payment.redirectUrl,
+          reference_paytech: payment.reference,
+          redirect_url: payment.redirectUrl,
+        };
+      } catch (error) {
+        transaction(db, () => {
+          libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
+          db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservation.id]);
+        });
+        throw error;
+      }
+    }
+
+    // Notif in-app / push joueur (lien paiement en attente)
+    if (resolvedJoueurId && mode === 'paiement') {
+      try {
+        runSql(
+          db,
+          `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
+           VALUES ('user', ?, 'paiement', 'app', ?, 0)`,
+          [
+            resolvedJoueurId,
+            `Nouvelle réservation au ${reservation.terrain_nom} le ${date} à ${heureDebutNorm} — avance à payer : ${montantAvance} FCFA`,
+          ],
+        );
+        await pushService.sendToUser(
+          resolvedJoueurId,
+          {
+            title: 'Réservation créée — paiement',
+            body: `${reservation.terrain_nom} le ${date} à ${heureDebutNorm}. Ouvre Mes réservations pour payer.`,
+            url: '/reservations',
+            tag: `resa-pending-${reservation.id}`,
+            type: 'reservation_pending',
+          },
+          'reservation_confirmation',
+        );
+      } catch (pushErr) {
+        logger.error('index.js', 'Push / notif joueur réservation', pushErr);
+      }
     }
 
     if (creePar === 'gerant') {
       await logActivite({
         gerant_id: req.user.id,
         terrain_id: terrainId,
-        action: 'reservation_creee',
+        action: mode === 'bloquer' ? 'reservation_bloquee' : 'reservation_creee',
         reservation_id: reservation.id,
         details: {
           date,
@@ -1489,30 +1658,41 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
           heure_fin: heureFinNorm,
           format_terrain,
           montant,
+          mode,
+          anonyme,
+          joueur_id: resolvedJoueurId,
         },
       }).catch((error) => logger.error('index.js', 'Log activite reservation_creee', error));
 
       let whatsapp_sent = false;
       let whatsapp_error = null;
-      try {
-        await notificationService.envoyerLienPaiement(reservation.id);
-        whatsapp_sent = true;
-      } catch (error) {
-        whatsapp_error = error.message || 'Envoi WhatsApp impossible';
-        logger.error('index.js', 'Envoi lien paiement WhatsApp impossible', error);
+      if (mode === 'paiement' && !anonyme) {
+        try {
+          await notificationService.envoyerLienPaiement(reservation.id);
+          whatsapp_sent = true;
+        } catch (error) {
+          whatsapp_error = error.message || 'Envoi WhatsApp impossible';
+          logger.error('index.js', 'Envoi lien paiement WhatsApp impossible', error);
+        }
       }
 
       return res.status(201).json({
         success: true,
+        mode,
         reservation_id: reservation.id,
+        joueur_id: resolvedJoueurId,
         montant,
         montant_avance: montantAvance,
         montant_restant: montantRestant,
         heure_debut: heureDebutNorm,
         heure_fin: heureFinNorm,
         joueur_telephone: telephoneNorm,
+        joueur_nom: joueur_nom,
+        code_reservation: reservation.code_reservation || null,
+        statut: statutInitial,
         whatsapp_sent,
         whatsapp_error,
+        lien_paiement: reservation.lien_paiement || null,
       });
     }
 
@@ -2108,8 +2288,23 @@ app.put('/api/gerant/horaires', authMiddleware, requireRole('gerant'), async (re
     const terrainId = req.user.terrain_id;
     for (const raw of horaires) {
       const h = validateHorairePayload(raw);
-      runSql(db, 'UPDATE horaires SET heure_debut = ?, heure_fin = ?, est_ouvert = ? WHERE terrain_id = ? AND jour = ?',
-        [h.heure_debut, h.heure_fin, h.est_ouvert ? 1 : 0, terrainId, h.jour]);
+      const existing = queryOne(db, 'SELECT id FROM horaires WHERE terrain_id = ? AND jour = ?', [
+        terrainId,
+        h.jour,
+      ]);
+      if (existing) {
+        runSql(
+          db,
+          'UPDATE horaires SET heure_debut = ?, heure_fin = ?, est_ouvert = ? WHERE terrain_id = ? AND jour = ?',
+          [h.heure_debut, h.heure_fin, h.est_ouvert ? 1 : 0, terrainId, h.jour],
+        );
+      } else {
+        runSql(
+          db,
+          'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, ?)',
+          [terrainId, h.jour, h.heure_debut, h.heure_fin, h.est_ouvert ? 1 : 0],
+        );
+      }
     }
     res.json({
       message: 'Horaires mis à jour',
@@ -2194,9 +2389,122 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
     }
 
     const result = runSql(db, 'INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)',
-      [terrainId, req.user.id, date, heure_debut, heure_fin, motif]);
+      [terrainId, req.user.id, date, heure_debut, heure_fin, motif || null]);
+    // Aligne la table creneaux pour l’app joueur / file gérant
+    runSql(
+      db,
+      `UPDATE creneaux SET statut = 'bloque'
+        WHERE terrain_id = ? AND date = ?
+          AND heure_debut >= ? AND heure_debut < ?`,
+      [terrainId, date, heure_debut, heure_fin],
+    );
     const blocage = queryOne(db, 'SELECT * FROM blocages_creneaux WHERE id = ?', [result.lastInsertRowid]);
     res.status(201).json(blocage);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+/** Blocage multi-créneaux (Workflow 6) */
+app.post('/api/gerant/blocages/batch', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = req.user.terrain_id;
+    const date = String(req.body?.date || '').slice(0, 10);
+    const motif = req.body?.motif ? String(req.body.motif) : null;
+    const slots = Array.isArray(req.body?.creneaux) ? req.body.creneaux : [];
+    if (!date || slots.length === 0) {
+      return res.status(400).json({ error: 'date et creneaux requis' });
+    }
+
+    const created = [];
+    const errors = [];
+
+    for (const raw of slots) {
+      const heure_debut = String(raw?.heure_debut || '').slice(0, 5);
+      const heure_fin = String(raw?.heure_fin || '').slice(0, 5);
+      if (!heure_debut || !heure_fin || heure_fin <= heure_debut) {
+        errors.push({ heure_debut, error: 'Créneau invalide' });
+        continue;
+      }
+
+      const chevauchementResa = queryAll(
+        db,
+        `SELECT id FROM reservations
+          WHERE terrain_id = ? AND date = ?
+            AND statut IN ('en_attente', 'confirme', 'acceptee')
+            AND heure_debut < ? AND heure_fin > ?`,
+        [terrainId, date, heure_fin, heure_debut],
+      );
+      if (chevauchementResa.length) {
+        errors.push({ heure_debut, error: 'Réservation existante' });
+        continue;
+      }
+
+      const chevauchementBlocage = queryAll(
+        db,
+        `SELECT id FROM blocages_creneaux
+          WHERE terrain_id = ? AND date = ?
+            AND heure_debut < ? AND heure_fin > ?`,
+        [terrainId, date, heure_fin, heure_debut],
+      );
+      if (chevauchementBlocage.length) {
+        errors.push({ heure_debut, error: 'Déjà bloqué' });
+        continue;
+      }
+
+      const result = runSql(
+        db,
+        'INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)',
+        [terrainId, req.user.id, date, heure_debut, heure_fin, motif],
+      );
+      runSql(
+        db,
+        `UPDATE creneaux SET statut = 'bloque'
+          WHERE terrain_id = ? AND date = ?
+            AND heure_debut >= ? AND heure_debut < ?`,
+        [terrainId, date, heure_debut, heure_fin],
+      );
+      // Si aucune ligne creneaux, en créer une bloquée
+      const existing = queryOne(
+        db,
+        'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ? ORDER BY id DESC',
+        [terrainId, date, heure_debut, heure_fin],
+      );
+      if (!existing) {
+        runSql(
+          db,
+          'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
+          [terrainId, date, heure_debut, heure_fin, 'bloque'],
+        );
+      }
+      const blocage =
+        queryOne(db, 'SELECT * FROM blocages_creneaux WHERE id = ?', [result.lastInsertRowid]) ||
+        queryOne(
+          db,
+          `SELECT * FROM blocages_creneaux
+            WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?
+            ORDER BY id DESC`,
+          [terrainId, date, heure_debut, heure_fin],
+        );
+      if (blocage) created.push(blocage);
+    }
+
+    if (created.length === 0) {
+      return res.status(409).json({
+        error: errors[0]?.error || 'Aucun créneau bloqué',
+        code: 'CRENEAU_CONFLIT',
+        errors,
+      });
+    }
+
+    res.status(201).json({
+      count: created.length,
+      blocages: created,
+      errors,
+      message: `${created.length} créneau(x) bloqué(s) ✓`,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -2206,8 +2514,26 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
 app.delete('/api/gerant/blocages/:id', authMiddleware, requireRole('gerant'), async (req, res) => {
   try {
     const db = await getDb();
-    runSql(db, 'DELETE FROM blocages_creneaux WHERE id = ? AND terrain_id = ?', [Number(req.params.id), req.user.terrain_id]);
-    res.json({ message: 'Blocage supprimé' });
+    const terrainId = req.user.terrain_id;
+    const blocage = queryOne(db, 'SELECT * FROM blocages_creneaux WHERE id = ? AND terrain_id = ?', [
+      Number(req.params.id),
+      terrainId,
+    ]);
+    if (!blocage) return res.status(404).json({ error: 'Blocage introuvable' });
+
+    runSql(db, 'DELETE FROM blocages_creneaux WHERE id = ? AND terrain_id = ?', [
+      Number(req.params.id),
+      terrainId,
+    ]);
+    runSql(
+      db,
+      `UPDATE creneaux SET statut = 'libre'
+        WHERE terrain_id = ? AND date = ?
+          AND heure_debut >= ? AND heure_debut < ?
+          AND statut = 'bloque'`,
+      [terrainId, blocage.date, blocage.heure_debut, blocage.heure_fin],
+    );
+    res.json({ message: 'Créneau débloqué' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });

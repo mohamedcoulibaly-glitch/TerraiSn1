@@ -591,6 +591,64 @@
   color: var(--text-primary);
 }
 
+/* ── Espace gérant — tokens dédiés (n'écrase pas joueur / super admin) ── */
+.gerant-app {
+  /* Mode clair par défaut pour le backoffice gérant
+     (utilisé en plein jour au bord du terrain) */
+  --g-bg:             #F0F4F8;
+  --g-surface:        #FFFFFF;
+  --g-surface-2:      #E8EDF3;
+  --g-border:         #D4DBE6;
+  --g-text:           #0D1B2A;
+  --g-text-2:         #3D5166;
+  --g-muted:          #7A8FA6;
+  --g-primary:        #059669;
+  --g-primary-glow:   rgba(5,150,105,0.12);
+  --g-accent:         #F59E0B;
+  --g-danger:         #DC2626;
+  --g-warning:        #EA580C;
+  --g-info:           #2563EB;
+
+  /* Statuts matchs */
+  --g-libre:          #059669;
+  --g-libre-bg:       rgba(5,150,105,0.10);
+  --g-reserve:        #2563EB;
+  --g-reserve-bg:     rgba(37,99,235,0.10);
+  --g-en-cours:       #D97706;
+  --g-en-cours-bg:    rgba(217,119,6,0.10);
+  --g-termine:        #6B7280;
+  --g-termine-bg:     rgba(107,114,128,0.10);
+  --g-bloque:         #DC2626;
+  --g-bloque-bg:      rgba(220,38,38,0.10);
+
+  /* Navigation */
+  --g-nav-bg:         rgba(255,255,255,0.95);
+  --g-nav-border:     rgba(212,219,230,0.8);
+  --g-nav-active:     #059669;
+
+  /* Cards */
+  --g-shadow:         0 2px 12px -2px rgba(13,27,42,0.08);
+  --g-shadow-md:      0 4px 20px -4px rgba(13,27,42,0.12);
+
+  font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  color: var(--g-text);
+}
+
+/* Adapt dark mode si l'OS / thème app est en sombre */
+.dark .gerant-app {
+  --g-bg:             #070D14;
+  --g-surface:        #0F1923;
+  --g-surface-2:      #162233;
+  --g-border:         #1F2D3D;
+  --g-text:           #F0F6FF;
+  --g-text-2:         #8BAFC8;
+  --g-muted:          #4A6278;
+  --g-nav-bg:         rgba(7,13,20,0.95);
+  --g-nav-border:     rgba(31,45,61,0.8);
+  --g-shadow:         0 2px 12px -2px rgba(0,0,0,0.30);
+  --g-shadow-md:      0 4px 20px -4px rgba(0,0,0,0.45);
+}
+
 /* ============================================
    CLASSES UTILITAIRES THÈME
    ============================================ */

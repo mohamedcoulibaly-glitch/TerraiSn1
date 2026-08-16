@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock3, FlipHorizontal, Keyboard, X, XCircle } from "lucide-react";
+import { CheckCircle2, Clock3, FlipHorizontal, Info, Keyboard, X, XCircle } from "lucide-react";
 import jsQR from "jsqr";
 import { Button } from "@/components/ui/button";
 import { gerantApi } from "@/lib/api";
@@ -7,7 +7,15 @@ import { parseQrPayload } from "@/lib/qrPayload";
 
 export { parseQrPayload } from "@/lib/qrPayload";
 
-type ScanState = "scan" | "too_early" | "expired" | "success" | "invalid" | "already_scanned";
+type ScanState =
+  | "scan"
+  | "too_early"
+  | "expired"
+  | "success"
+  | "invalid"
+  | "already_scanned"
+  | "wrong_terrain"
+  | "mismatch";
 
 type ReservationRecap = {
   id?: number;
@@ -19,21 +27,27 @@ type ReservationRecap = {
   code_reservation?: string;
   statut?: string;
   qr_code_scanne_at?: string;
+  montant_restant?: number;
 };
 
 type ScanResult = {
   state: ScanState;
   title?: string;
   text?: string;
+  minutesRemaining?: number;
+  scannableAt?: string;
   reservation?: ReservationRecap;
 };
 
 type ScannerModalProps = {
   open: boolean;
   onClose: () => void;
-  expectedReservationId: number | string;
+  /** Mode B : réservation pré-sélectionnée. Mode A : null/undefined (identifie via QR). */
+  expectedReservationId?: number | string | null;
   expectedCodeReservation?: string | null;
   onSuccess?: (reservation: ReservationRecap) => void;
+  /** Workflow 4 : après QR invalide → recherche manuelle */
+  onManualValidation?: () => void;
 };
 
 type CameraFacing = "environment" | "user";
@@ -66,6 +80,11 @@ function formatDateTime(value?: string) {
   });
 }
 
+function formatMoney(value?: number) {
+  const n = Number(value || 0);
+  return n.toLocaleString("fr-FR");
+}
+
 function isRearCameraLabel(label: string): boolean {
   return /back|rear|environment|arri[eè]re|world|facing\s*back|camera2\s*0/i.test(label);
 }
@@ -75,7 +94,6 @@ function isFrontCameraLabel(label: string): boolean {
 }
 
 async function unlockCameraLabels(): Promise<void> {
-  // Les labels restent vides tant qu'aucune permission caméra n'a été accordée.
   const warm = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
   warm.getTracks().forEach((t) => t.stop());
 }
@@ -91,7 +109,6 @@ async function pickPreferredDeviceId(facing: CameraFacing): Promise<string | und
     if (facing === "environment") {
       if (isRearCameraLabel(label)) score = 100;
       else if (isFrontCameraLabel(label)) score = 0;
-      // Labels génériques : souvent la dernière = arrière (surtout mobile).
       else if (cams.length > 1 && index === cams.length - 1) score = 70;
     } else {
       if (isFrontCameraLabel(label)) score = 100;
@@ -125,7 +142,7 @@ async function openCameraStream(facing: CameraFacing = "environment"): Promise<M
         },
       });
     } catch {
-      // fallback ci-dessous
+      // fallback
     }
   }
 
@@ -149,9 +166,21 @@ async function openCameraStream(facing: CameraFacing = "environment"): Promise<M
         },
       });
     } catch {
-      // PC avec une seule webcam : souvent frontale uniquement
       return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
+  }
+}
+
+function cardTone(state: ScanState): { border: string; iconBg: string } {
+  switch (state) {
+    case "success":
+      return { border: "var(--color-success)", iconBg: "color-mix(in srgb, var(--color-success) 14%, white)" };
+    case "too_early":
+      return { border: "var(--color-warning)", iconBg: "color-mix(in srgb, var(--color-warning) 14%, white)" };
+    case "already_scanned":
+      return { border: "var(--color-info)", iconBg: "color-mix(in srgb, var(--color-info) 14%, white)" };
+    default:
+      return { border: "var(--color-danger)", iconBg: "color-mix(in srgb, var(--color-danger) 12%, white)" };
   }
 }
 
@@ -161,6 +190,7 @@ export default function ScannerModal({
   expectedReservationId,
   expectedCodeReservation,
   onSuccess,
+  onManualValidation,
 }: ScannerModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -173,6 +203,8 @@ export default function ScannerModal({
   const [showManual, setShowManual] = useState(false);
   const [hint, setHint] = useState("Place le QR bien en face, bien éclairé");
   const [facing, setFacing] = useState<CameraFacing>("environment");
+
+  const isModeB = expectedReservationId != null && String(expectedReservationId) !== "";
 
   const stopCamera = useCallback(() => {
     if (rafRef.current != null) {
@@ -191,6 +223,7 @@ export default function ScannerModal({
 
   const matchesExpected = useCallback(
     (parsed: { id: string; code: string }) => {
+      if (!isModeB) return true;
       const expectedId = String(expectedReservationId);
       const expectedCode = String(expectedCodeReservation || "")
         .trim()
@@ -199,7 +232,7 @@ export default function ScannerModal({
       if (parsed.code && expectedCode && parsed.code === expectedCode) return true;
       return false;
     },
-    [expectedReservationId, expectedCodeReservation],
+    [expectedReservationId, expectedCodeReservation, isModeB],
   );
 
   const submitScan = useCallback(
@@ -208,21 +241,58 @@ export default function ScannerModal({
       stopCamera();
 
       const parsed = parseQrPayload(rawValue);
-      if (!matchesExpected(parsed)) {
+
+      if (isModeB && !matchesExpected(parsed)) {
+        triggerFlash("red");
+        setResult({
+          state: "mismatch",
+          title: "❌ Mauvais QR",
+          text: "Ce QR code ne correspond pas à ce match. Demande au joueur de montrer le bon code.",
+        });
+        return;
+      }
+
+      let reservationId: string | number | null | undefined = isModeB
+        ? expectedReservationId
+        : parsed.id || null;
+
+      try {
+        if (!reservationId && parsed.code) {
+          const found = (await gerantApi.reservationByCode(parsed.code)) as { id: number };
+          reservationId = found.id;
+        }
+      } catch (err) {
+        const error = err as Error & { code?: string };
+        triggerFlash("red");
+        if (error.code === "QR_WRONG_TERRAIN") {
+          setResult({
+            state: "wrong_terrain",
+            title: "❌ Ce QR code ne correspond pas à ton terrain",
+            text: error.message,
+          });
+          return;
+        }
+        setResult({
+          state: "invalid",
+          title: "❌ QR code non reconnu",
+          text: "Demande au joueur de montrer le QR reçu par WhatsApp. Si le problème persiste, utilise la validation manuelle.",
+        });
+        return;
+      }
+
+      if (!reservationId) {
         triggerFlash("red");
         setResult({
           state: "invalid",
-          title: "QR code non reconnu",
-          text: `Ce code ne correspond pas à cette réservation${
-            expectedCodeReservation ? ` (attendu : ${expectedCodeReservation})` : ""
-          }.`,
+          title: "❌ QR code non reconnu",
+          text: "Demande au joueur de montrer le QR reçu par WhatsApp. Si le problème persiste, utilise la validation manuelle.",
         });
         return;
       }
 
       try {
         const payload = (await gerantApi.scanQr(
-          expectedReservationId,
+          reservationId,
           "especes",
           parsed.raw || rawValue,
         )) as {
@@ -231,7 +301,7 @@ export default function ScannerModal({
         triggerFlash("green");
         setResult({
           state: "success",
-          title: "Match validé",
+          title: "✅ Entrée validée !",
           reservation: payload.reservation,
         });
         if (payload.reservation) onSuccess?.(payload.reservation);
@@ -249,29 +319,37 @@ export default function ScannerModal({
         if (error.code === "QR_SCAN_TOO_EARLY") {
           setResult({
             state: "too_early",
-            title: "C'est un peu tôt",
+            title: "⏰ C'est un peu tôt",
             text: error.scannable_at
-              ? `Tu pourras scanner ce QR code à partir de ${new Date(error.scannable_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}. Reviens dans ${error.minutes_remaining || 1} minutes.`
+              ? `Tu pourras scanner à partir de ${new Date(error.scannable_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}.`
               : error.message,
+            minutesRemaining: error.minutes_remaining,
+            scannableAt: error.scannable_at,
           });
           return;
         }
         if (error.code === "QR_SCAN_EXPIRED") {
           setResult({
             state: "expired",
-            title: "Ce QR code a expiré",
-            text: `Ce match était prévu le ${formatDate(error.match_date)} à ${formatTime(error.match_time)}. Le délai de validation est dépassé.`,
+            title: "⌛ Fenêtre dépassée",
+            text: `Ce match était prévu à ${formatTime(error.match_time)}. Le délai de validation est dépassé.`,
           });
           return;
         }
         if (error.status === 403 || error.code === "QR_ALREADY_SCANNED") {
-          triggerFlash("red");
           setResult({
             state: "already_scanned",
-            title: "QR déjà scanné",
-            text:
-              error.message ||
-              `Erreur : Ce code QR a déjà été scanné le ${formatDateTime(error.qr_code_scanne_at)}`,
+            title: "ℹ️ Ce joueur est déjà entré",
+            text: `QR validé le ${formatDateTime(error.qr_code_scanne_at)}`,
+          });
+          return;
+        }
+        if (error.code === "QR_WRONG_TERRAIN") {
+          triggerFlash("red");
+          setResult({
+            state: "wrong_terrain",
+            title: "❌ Ce QR code ne correspond pas à ton terrain",
+            text: error.message || "Ce QR appartient à un autre terrain.",
           });
           return;
         }
@@ -279,96 +357,105 @@ export default function ScannerModal({
         triggerFlash("red");
         setResult({
           state: "invalid",
-          title: "Scan refusé",
-          text: error.message || "Ce code ne correspond à aucune réservation valide.",
+          title: "❌ QR code non reconnu",
+          text: "Demande au joueur de montrer le QR reçu par WhatsApp. Si le problème persiste, utilise la validation manuelle.",
         });
       }
     },
-    [expectedCodeReservation, expectedReservationId, matchesExpected, onSuccess, stopCamera, triggerFlash],
+    [
+      expectedReservationId,
+      isModeB,
+      matchesExpected,
+      onSuccess,
+      stopCamera,
+      triggerFlash,
+    ],
   );
 
-  const startCamera = useCallback(async (nextFacing: CameraFacing = facingRef.current) => {
-    stopCamera();
-    setResult({ state: "scan" });
-    setHint("Place le QR bien en face, bien éclairé");
-    setShowManual(false);
-    facingRef.current = nextFacing;
-    setFacing(nextFacing);
+  const startCamera = useCallback(
+    async (nextFacing: CameraFacing = facingRef.current) => {
+      stopCamera();
+      setResult({ state: "scan" });
+      setHint("Place le QR bien en face, bien éclairé");
+      setShowManual(false);
+      facingRef.current = nextFacing;
+      setFacing(nextFacing);
 
-    const stream = await openCameraStream(nextFacing);
-    streamRef.current = stream;
+      const stream = await openCameraStream(nextFacing);
+      streamRef.current = stream;
 
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.setAttribute("playsinline", "true");
-      // Miroir seulement pour selfie (caméra avant)
-      videoRef.current.style.transform = nextFacing === "user" ? "scaleX(-1)" : "none";
-      await videoRef.current.play();
-    }
-    scanningRef.current = true;
-
-    const BarcodeDetectorCtor = (
-      window as unknown as {
-        BarcodeDetector?: new (opts: { formats: string[] }) => {
-          detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
-        };
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute("playsinline", "true");
+        videoRef.current.style.transform = nextFacing === "user" ? "scaleX(-1)" : "none";
+        await videoRef.current.play();
       }
-    ).BarcodeDetector;
+      scanningRef.current = true;
 
-    const detector = BarcodeDetectorCtor
-      ? new BarcodeDetectorCtor({ formats: ["qr_code"] })
-      : null;
+      const BarcodeDetectorCtor = (
+        window as unknown as {
+          BarcodeDetector?: new (opts: { formats: string[] }) => {
+            detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
+          };
+        }
+      ).BarcodeDetector;
 
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    let frames = 0;
+      const detector = BarcodeDetectorCtor
+        ? new BarcodeDetectorCtor({ formats: ["qr_code"] })
+        : null;
 
-    const scanLoop = async () => {
-      if (!scanningRef.current || !videoRef.current) return;
-      const video = videoRef.current;
-      frames += 1;
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      let frames = 0;
 
-      if (frames === 90) {
-        setHint("Toujours rien ? Approach le QR ou saisis le code manuellement");
-        setShowManual(true);
-      }
+      const scanLoop = async () => {
+        if (!scanningRef.current || !videoRef.current) return;
+        const video = videoRef.current;
+        frames += 1;
 
-      try {
-        if (detector) {
-          const codes = await detector.detect(video);
-          const raw = codes?.[0]?.rawValue;
-          if (raw) {
-            await submitScan(raw);
-            return;
-          }
+        if (frames === 90) {
+          setHint("Toujours rien ? Approche le QR ou saisis le code manuellement");
+          setShowManual(true);
         }
 
-        if (ctx && video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: "attemptBoth",
-          });
-          if (code?.data) {
-            await submitScan(code.data);
-            return;
+        try {
+          if (detector) {
+            const codes = await detector.detect(video);
+            const raw = codes?.[0]?.rawValue;
+            if (raw) {
+              await submitScan(raw);
+              return;
+            }
           }
+
+          if (ctx && video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+              inversionAttempts: "attemptBoth",
+            });
+            if (code?.data) {
+              await submitScan(code.data);
+              return;
+            }
+          }
+        } catch {
+          // frame pas prête
         }
-      } catch {
-        // frame pas prête
-      }
+
+        rafRef.current = window.requestAnimationFrame(() => {
+          void scanLoop();
+        });
+      };
 
       rafRef.current = window.requestAnimationFrame(() => {
         void scanLoop();
       });
-    };
-
-    rafRef.current = window.requestAnimationFrame(() => {
-      void scanLoop();
-    });
-  }, [stopCamera, submitScan]);
+    },
+    [stopCamera, submitScan],
+  );
 
   useEffect(() => {
     if (!open) {
@@ -385,10 +472,10 @@ export default function ScannerModal({
       setShowManual(true);
       setResult({
         state: "invalid",
-        title: "Caméra indisponible",
+        title: "❌ Caméra indisponible",
         text:
           err instanceof Error
-            ? `${err.message}. Tu peux saisir le code manuellement.`
+            ? `${err.message}. Tu peux saisir le code manuellement ou utiliser la validation manuelle.`
             : "Impossible d'activer la caméra. Vérifie les permissions puis réessaie.",
       });
     });
@@ -413,7 +500,7 @@ export default function ScannerModal({
       setShowManual(true);
       setResult({
         state: "invalid",
-        title: "Caméra indisponible",
+        title: "❌ Caméra indisponible",
         text: "Impossible de basculer la caméra.",
       });
     });
@@ -425,7 +512,7 @@ export default function ScannerModal({
       setShowManual(true);
       setResult({
         state: "invalid",
-        title: "Caméra indisponible",
+        title: "❌ Caméra indisponible",
         text: "Impossible d'activer la caméra. Vérifie les permissions puis réessaie.",
       });
     });
@@ -440,14 +527,15 @@ export default function ScannerModal({
 
   if (!open) return null;
 
-  const canRetry = result.state === "invalid" || result.state === "too_early";
+  const tone = cardTone(result.state);
+  const reste = Number(result.reservation?.montant_restant ?? 0);
 
   return (
     <div
       className="fixed inset-0 z-[80] bg-black text-white overflow-hidden"
       role="dialog"
       aria-modal="true"
-      aria-label="Scanner QR"
+      aria-label="Scanner le joueur"
     >
       <style>{`
         @keyframes scan-line { 0% { transform: translateY(-8px); } 100% { transform: translateY(226px); } }
@@ -512,11 +600,13 @@ export default function ScannerModal({
             />
           </div>
           <p className="mt-5 text-sm text-white/80 text-center max-w-sm">{hint}</p>
-          {expectedCodeReservation ? (
+          {isModeB && expectedCodeReservation ? (
             <p className="mt-2 text-xs text-white/55 text-center">
               Code attendu : <span className="font-semibold text-white">{expectedCodeReservation}</span>
             </p>
-          ) : null}
+          ) : (
+            <p className="mt-2 text-xs text-white/55 text-center">Scan libre — identification automatique</p>
+          )}
 
           <div className="mt-4 w-full max-w-sm">
             {!showManual ? (
@@ -530,7 +620,7 @@ export default function ScannerModal({
               </button>
             ) : (
               <div className="rounded-2xl bg-black/55 backdrop-blur p-3 space-y-2 border border-white/15">
-                <label className="text-xs text-white/70">Code (ex. TF-MOH-2H)</label>
+                <label className="text-xs text-white/70">Code (ex. TF-XXXXXX)</label>
                 <input
                   value={manualCode}
                   onChange={(e) => setManualCode(e.target.value.toUpperCase())}
@@ -549,80 +639,139 @@ export default function ScannerModal({
 
       {result.state !== "scan" && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 px-5">
-          <section className="w-full max-w-sm rounded-[var(--radius-lg)] bg-white p-6 text-center text-[var(--color-text-primary)] shadow-xl">
-            {result.state === "too_early" && <Clock3 className="mx-auto h-12 w-12 text-[var(--color-warning)]" />}
-            {(result.state === "expired" || result.state === "already_scanned") && (
-              <AlertTriangle className="mx-auto h-12 w-12 text-[var(--color-danger)]" />
-            )}
-            {result.state === "invalid" && <XCircle className="mx-auto h-12 w-12 text-[var(--color-danger)]" />}
-            {result.state === "success" && (
-              <CheckCircle2
-                className="mx-auto h-14 w-14 text-[var(--color-success)]"
-                style={{ animation: "pop-check .25s ease-out both" }}
-              />
-            )}
+          <section
+            className="w-full max-w-sm rounded-2xl bg-white p-6 text-center text-[var(--color-text-primary)] shadow-xl border-t-4"
+            style={{ borderTopColor: tone.border }}
+          >
+            <div
+              className="mx-auto flex h-14 w-14 items-center justify-center rounded-full"
+              style={{ background: tone.iconBg }}
+            >
+              {result.state === "too_early" && <Clock3 className="h-8 w-8 text-[var(--color-warning)]" />}
+              {(result.state === "expired" ||
+                result.state === "invalid" ||
+                result.state === "wrong_terrain" ||
+                result.state === "mismatch") && (
+                <XCircle className="h-8 w-8 text-[var(--color-danger)]" />
+              )}
+              {result.state === "already_scanned" && <Info className="h-8 w-8 text-[var(--color-info)]" />}
+              {result.state === "success" && (
+                <CheckCircle2
+                  className="h-8 w-8 text-[var(--color-success)]"
+                  style={{ animation: "pop-check .25s ease-out both" }}
+                />
+              )}
+            </div>
 
             <h1 className="mt-4 text-xl font-bold" style={{ fontFamily: "var(--font-display)" }}>
               {result.title}
             </h1>
-            {result.text && <p className="mt-2 text-sm text-[var(--color-text-secondary)]">{result.text}</p>}
 
             {result.state === "success" && result.reservation && (
-              <div className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 text-left text-sm">
-                <p>
-                  <span className="text-[var(--color-text-secondary)]">Joueur</span>
-                  <span className="float-right font-semibold">{result.reservation.joueur_nom || "-"}</span>
+              <div className="mt-4 space-y-2 text-left">
+                <p className="text-base font-bold text-center">{result.reservation.joueur_nom || "Joueur"}</p>
+                <p className="text-sm text-center text-[var(--color-text-secondary)]">
+                  Match à {formatTime(result.reservation.heure_debut)}
+                  {result.reservation.heure_fin ? ` – ${formatTime(result.reservation.heure_fin)}` : ""}
                 </p>
-                <p className="mt-2">
-                  <span className="text-[var(--color-text-secondary)]">Terrain</span>
-                  <span className="float-right font-semibold">{result.reservation.terrain_nom || "-"}</span>
-                </p>
-                <p className="mt-2">
-                  <span className="text-[var(--color-text-secondary)]">Match</span>
-                  <span className="float-right font-semibold">
-                    {formatDate(result.reservation.date)} {formatTime(result.reservation.heure_debut)}
-                  </span>
-                </p>
-                <p className="mt-2">
-                  <span className="text-[var(--color-text-secondary)]">Code</span>
-                  <span className="float-right font-semibold">{result.reservation.code_reservation || "-"}</span>
-                </p>
+                {reste > 0 ? (
+                  <p
+                    className="mt-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-center"
+                    style={{
+                      background: "color-mix(in srgb, var(--color-warning) 16%, white)",
+                      color: "var(--color-warning)",
+                    }}
+                  >
+                    💵 Encaisse {formatMoney(reste)} FCFA sur place
+                  </p>
+                ) : (
+                  <p className="mt-3 text-sm font-medium text-center text-[var(--color-success)]">
+                    ✓ Totalement payé — rien à encaisser
+                  </p>
+                )}
               </div>
             )}
 
-            {/* Fallback manuel aussi après échec caméra */}
-            {result.state === "invalid" && (
-              <div className="mt-4 text-left space-y-2">
-                <label className="text-xs text-[var(--color-text-muted)]">Ou saisis le code</label>
-                <input
-                  value={manualCode}
-                  onChange={(e) => setManualCode(e.target.value.toUpperCase())}
-                  placeholder={expectedCodeReservation || "TF-XXXXXX"}
-                  className="w-full h-11 rounded-xl border border-[var(--color-border)] px-3 text-sm font-semibold"
-                />
-                <Button type="button" variant="outline" className="w-full" onClick={submitManual}>
-                  Valider ce code
-                </Button>
+            {result.state === "too_early" && (
+              <div className="mt-3 space-y-1">
+                <p className="text-sm text-[var(--color-text-secondary)]">{result.text}</p>
+                {result.minutesRemaining != null && (
+                  <p className="text-sm font-semibold text-[var(--color-warning)]">
+                    Encore {result.minutesRemaining} minute{result.minutesRemaining > 1 ? "s" : ""}
+                  </p>
+                )}
               </div>
+            )}
+
+            {result.state !== "success" && result.state !== "too_early" && result.text && (
+              <p className="mt-3 text-sm text-[var(--color-text-secondary)]">{result.text}</p>
             )}
 
             <div className="mt-6 flex flex-col gap-2">
-              {canRetry && (
-                <Button type="button" variant="hero" className="w-full" onClick={retry}>
-                  Réessayer la caméra
+              {result.state === "success" && (
+                <>
+                  <Button type="button" variant="hero" className="w-full" onClick={retry}>
+                    Scanner un autre joueur
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      stopCamera();
+                      onClose();
+                    }}
+                  >
+                    Fermer
+                  </Button>
+                </>
+              )}
+
+              {result.state === "invalid" && (
+                <>
+                  {onManualValidation && (
+                    <Button
+                      type="button"
+                      variant="hero"
+                      className="w-full"
+                      onClick={() => {
+                        stopCamera();
+                        onClose();
+                        onManualValidation();
+                      }}
+                    >
+                      Validation manuelle
+                    </Button>
+                  )}
+                  <Button type="button" variant="outline" className="w-full" onClick={retry}>
+                    Réessayer
+                  </Button>
+                </>
+              )}
+
+              {(result.state === "mismatch" ||
+                result.state === "expired" ||
+                result.state === "too_early" ||
+                result.state === "already_scanned" ||
+                result.state === "wrong_terrain") && (
+                <Button
+                  type="button"
+                  variant="hero"
+                  className="w-full"
+                  onClick={() => {
+                    stopCamera();
+                    onClose();
+                  }}
+                >
+                  Fermer
                 </Button>
               )}
-              <Button
-                type="button"
-                variant={canRetry ? "outline" : "hero"}
-                className="w-full"
-                onClick={() => {
-                  stopCamera();
-                  onClose();
-                }}
-              >
-                Fermer
-              </Button>
+
+              {result.state === "mismatch" && (
+                <Button type="button" variant="outline" className="w-full" onClick={retry}>
+                  Réessayer
+                </Button>
+              )}
             </div>
           </section>
         </div>
