@@ -1,7 +1,7 @@
 import { MapPin } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { terrainsApi } from "@/lib/api";
-import FieldCard from "@/espaces/joueur/components/FieldCard";
+import { PitchCard } from "@/espaces/joueur/components/PitchCard";
 import BannerVideoHeader from "@/espaces/joueur/components/BannerVideoHeader";
 import SkeletonAccueil from "@/components/skeletons/SkeletonAccueil";
 import SkeletonTerrainCard from "@/components/skeletons/SkeletonTerrainCard";
@@ -308,7 +308,7 @@ const Accueil = () => {
 
         {/* Raccourcis date / features */}
         <div
-          className="mt-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0 flex gap-2 overflow-x-auto scrollbar-none"
+          className="mt-4 -mx-4 flex gap-2 overflow-x-auto scrollbar-none pl-4 pr-8 sm:-mx-6 sm:pl-6 sm:pr-10 lg:mx-0 lg:px-0"
           role="tablist"
           aria-label="Filtres rapides"
         >
@@ -321,7 +321,7 @@ const Accueil = () => {
                 role="tab"
                 aria-selected={active}
                 onClick={() => onQuickSelect(f.id)}
-                className={`flex-shrink-0 px-3.5 min-h-[32px] rounded-full text-[13px] font-semibold transition-colors ${
+                className={`min-h-[32px] flex-shrink-0 rounded-full px-3.5 text-[13px] font-semibold transition-colors ${
                   active
                     ? "bg-[var(--primary)] text-white"
                     : "bg-[var(--surface-2)]/80 text-[var(--text-primary)] border border-[var(--border)]"
@@ -331,6 +331,7 @@ const Accueil = () => {
               </button>
             );
           })}
+          <span className="w-2 shrink-0 lg:hidden" aria-hidden />
         </div>
 
         {error ? (
@@ -370,9 +371,9 @@ const Accueil = () => {
             ) : (
               <div className="flex flex-col gap-3 w-[94%] mx-auto max-w-2xl lg:max-w-3xl">
                 {terrainsFiltres.map((t) => (
-                  <FieldCard
+                  <PitchCard
                     key={t.id}
-                    terrain={t}
+                    pitch={t}
                     dateLabel={dateLabel}
                     onFavoriteChange={() => setFavTick((n) => n + 1)}
                   />

@@ -11,7 +11,7 @@ export default function JoueurLayout() {
   return (
     <div className="joueur-app joueur-layout min-h-screen bg-[var(--color-bg)]">
       <DesktopNavbar />
-      <div className="pb-24 md:pb-8 md:pt-16">
+      <div className="pb-[calc(6.25rem+env(safe-area-inset-bottom,0px))] md:pb-8 md:pt-16">
         <Outlet />
       </div>
       <BottomNav />

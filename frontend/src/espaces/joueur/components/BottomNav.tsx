@@ -29,8 +29,11 @@ const BottomNav = () => {
   ];
 
   return (
-    <nav className="bottom-nav md:hidden h-16 bg-[var(--nav-bg)] backdrop-blur-xl border-t border-[var(--nav-border)]">
-      <div className="grid grid-cols-4 items-stretch h-16 max-w-xl mx-auto px-1">
+    <nav
+      className="bottom-nav md:hidden border-t border-[var(--nav-border)] bg-[var(--nav-bg)] pt-2 backdrop-blur-xl pb-[max(1.25rem,env(safe-area-inset-bottom,0px))]"
+      aria-label="Navigation principale"
+    >
+      <div className="mx-auto grid h-[52px] max-w-xl grid-cols-4 items-center px-1">
         {navItems.map((item) => {
           const isActive = item.match(location.pathname);
           return (
@@ -38,27 +41,14 @@ const BottomNav = () => {
               key={item.label}
               type="button"
               onClick={() => navigate(item.path)}
-              className={`relative flex w-full min-h-[44px] flex-col items-center justify-center gap-0.5 px-1 ${
+              className={`flex h-full w-full flex-col items-center justify-center gap-1 px-1 ${
                 isActive ? "text-[var(--primary)]" : "text-[var(--text-muted)]"
               }`}
+              aria-label={item.label}
               aria-current={isActive ? "page" : undefined}
             >
-              <item.icon
-                className="w-[22px] h-[22px] transition-transform duration-200"
-                style={isActive ? { transform: "scale(1.15)" } : undefined}
-              />
-              {isActive && (
-                <span className="absolute bottom-1.5 w-1 h-1 rounded-full bg-[var(--primary)] pulse-dot" />
-              )}
-              <span
-                className={`text-[11px] font-medium leading-none mt-0.5 ${
-                  isActive
-                    ? "opacity-100"
-                    : "opacity-0 sm:opacity-100 h-0 sm:h-auto overflow-hidden sm:overflow-visible"
-                }`}
-              >
-                {item.label}
-              </span>
+              <item.icon className="h-5 w-5 shrink-0" strokeWidth={isActive ? 2.4 : 2} />
+              <span className="text-[10px] font-medium leading-none">{item.label}</span>
             </button>
           );
         })}

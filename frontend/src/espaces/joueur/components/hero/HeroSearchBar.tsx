@@ -19,30 +19,31 @@ export default function HeroSearchBar({
 }: HeroSearchBarProps) {
   return (
     <div
-      className={`bg-white rounded-2xl flex items-center gap-2 border border-black/5 ${className}`}
+      className={`flex h-12 items-center gap-2 rounded-2xl border border-black/5 bg-white ${className}`}
       style={{
         boxShadow:
           "0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05)",
       }}
     >
-      <Search className="w-4 h-4 text-slate-400 ml-4 shrink-0" aria-hidden="true" />
+      <Search className="ml-3.5 h-[18px] w-[18px] shrink-0 text-slate-500" aria-hidden="true" />
       <input
         type="text"
         placeholder="Quartier, terrain, nom..."
         value={searchQuery}
         onChange={(e) => onSearchChange?.(e.target.value)}
-        className="flex-1 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 py-3 px-1 focus:outline-none min-w-0"
+        className="min-w-0 flex-1 bg-transparent px-1 py-0 text-sm text-slate-900 placeholder:text-slate-500 focus:outline-none"
         id={inputId}
+        aria-label="Rechercher un quartier, un terrain ou un nom"
       />
       <button
         type="button"
         onClick={onFilterClick}
-        className="relative mr-2 p-2.5 rounded-xl bg-emerald-500 text-white font-bold active:scale-95 transition-transform shrink-0 flex items-center justify-center shadow-[0_4px_14px_rgba(16,185,129,0.35)]"
+        className="relative mr-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-white shadow-[0_4px_14px_rgba(16,185,129,0.35)] transition-transform active:scale-95"
         aria-label="Filtres"
       >
-        <SlidersHorizontal className="w-4 h-4" />
+        <SlidersHorizontal className="h-[18px] w-[18px]" strokeWidth={2.25} />
         {activeFilterCount > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-white text-emerald-600 text-[10px] font-bold flex items-center justify-center border border-emerald-100">
+          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-emerald-100 bg-white text-[10px] font-bold text-emerald-600">
             {activeFilterCount}
           </span>
         )}

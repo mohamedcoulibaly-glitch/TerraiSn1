@@ -11,7 +11,7 @@ export default function SkeletonTerrainCard() {
         </div>
         <div className="flex items-center justify-between gap-3 mt-0.5">
           <div className="skeleton h-4 w-28 bg-[var(--surface-2)] rounded-lg" />
-          <div className="skeleton h-9 w-24 bg-[var(--surface-2)] rounded-xl" />
+          <div className="skeleton h-9 w-9 bg-[var(--surface-2)] rounded-xl" />
         </div>
       </div>
     </div>

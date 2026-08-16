@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -347,11 +347,11 @@
     left: 0;
     right: 0;
     z-index: 50;
+    height: auto;
     background: var(--nav-bg);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-top: 1px solid var(--nav-border);
-    padding-bottom: env(safe-area-inset-bottom);
   }
 
   .joueur-app .bottom-nav {
@@ -611,6 +611,8 @@
 .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
 
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+.pb-safe { padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px)); }
+.pt-safe { padding-top: max(1.5rem, calc(0.75rem + env(safe-area-inset-top, 0px))); }
 .btn-press:active { transform: scale(0.96); }
 .card-press:active { transform: scale(0.98); }
 

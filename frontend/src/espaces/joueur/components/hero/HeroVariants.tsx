@@ -50,9 +50,9 @@ export function HeroResponsive(props: HeroSharedProps) {
           }}
         />
 
-        <header className="relative z-20 flex md:hidden items-center justify-between px-4 pt-3">
+        <header className="relative z-20 flex md:hidden items-center justify-between px-4 pt-[calc(1.5rem+env(safe-area-inset-top,0px))]">
           <span
-            className="text-lg font-black tracking-tight text-white"
+            className="font-sans text-lg font-extrabold tracking-tight text-white"
             style={{ filter: "drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6))" }}
           >
             TERRAIN<span className="text-emerald-400">.SN</span>
@@ -65,8 +65,8 @@ export function HeroResponsive(props: HeroSharedProps) {
                 if (isAuthenticated) navigate(profileForUser(user));
                 else navigate("/login");
               }}
-              className="w-9 h-9 rounded-full bg-white/10 backdrop-blur-md border border-white/25 flex items-center justify-center font-bold text-white text-xs overflow-hidden"
-              aria-label="Profil"
+              className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-white/25 bg-white/10 font-sans text-xs font-bold text-white backdrop-blur-md"
+              aria-label={isAuthenticated ? "Ouvrir le profil" : "Se connecter"}
             >
               {photo ? (
                 <img src={photo} alt="Profil" className="w-full h-full rounded-full object-cover" />
@@ -77,14 +77,21 @@ export function HeroResponsive(props: HeroSharedProps) {
           </div>
         </header>
 
-        {/* Titre — blanc + accent uniquement sur « match. » */}
-        <div className="absolute inset-0 z-20 flex items-center px-5 md:px-8 lg:px-10 pointer-events-none">
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center px-5 md:px-8 lg:px-10">
           <h1
-            className="text-2xl sm:text-3xl md:text-4xl lg:text-[2.75rem] font-extrabold text-white leading-tight max-w-xl"
-            style={{ filter: "drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6))" }}
+            className="max-w-xl font-sans text-2xl font-extrabold not-italic leading-tight tracking-tight text-white sm:text-3xl md:text-4xl lg:text-[2.75rem]"
+            style={{
+              fontFamily: "'Plus Jakarta Sans', sans-serif",
+              filter: "drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6))",
+            }}
           >
             Trouve ton terrain, réserve ton{" "}
-            <span className="text-emerald-400 font-extrabold">match.</span>
+            <span
+              className="font-extrabold not-italic text-emerald-400"
+              style={{ fontFamily: "inherit" }}
+            >
+              match.
+            </span>
           </h1>
         </div>
       </div>

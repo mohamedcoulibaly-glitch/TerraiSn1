@@ -1,7 +1,7 @@
 import { Search, SlidersHorizontal, LayoutGrid, List, X } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { terrainsApi } from "@/lib/api";
-import FieldCard from "@/espaces/joueur/components/FieldCard";
+import { PitchCard } from "@/espaces/joueur/components/PitchCard";
 import SkeletonTerrainCard from "@/components/skeletons/SkeletonTerrainCard";
 import FiltresTerrain, {
   FILTRES_TERRAIN_DEFAUT,
@@ -191,7 +191,7 @@ const Explorer = () => {
             }
           >
             {filtered.map((t) => (
-              <FieldCard key={t.id} terrain={t} variant={viewMode === "grid" ? "grid" : "list"} />
+              <PitchCard key={t.id} pitch={t} variant={viewMode === "grid" ? "grid" : "list"} />
             ))}
           </div>
         )}
