@@ -5,12 +5,13 @@ import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { localYmd } from "@/lib/localDate";
+import Select2 from "@/components/Select2";
 
 const statusMeta: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
     label: "En attente de paiement",
-    border: "border-l-[var(--color-warning)]",
-    badge: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
+    border: "border-l-[var(--g-en-attente)]",
+    badge: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
   },
   confirme: {
     label: "Réservé ✓",
@@ -471,16 +472,14 @@ export default function ReservationsManuelles() {
             <label className="text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 block">
               Format
             </label>
-            <select
-              className="w-full h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 text-sm bg-white"
+            <Select2
               value={manual.format_terrain}
-              onChange={(e) =>
-                setManual({ ...manual, format_terrain: e.target.value as "moitie" | "entier" })
-              }
-            >
-              <option value="moitie">Moitié du terrain</option>
-              <option value="entier">Terrain entier</option>
-            </select>
+              onChange={(v) => setManual({ ...manual, format_terrain: v as "moitie" | "entier" })}
+              options={[
+                { value: "moitie", label: "Moitié du terrain" },
+                { value: "entier", label: "Terrain entier" },
+              ]}
+            />
           </div>
           <div>
             <label className="text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 block">

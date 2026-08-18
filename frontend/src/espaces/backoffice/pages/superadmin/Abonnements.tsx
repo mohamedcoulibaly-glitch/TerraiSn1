@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { superAdminApi } from "@/services/superAdminApi";
+import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
 
 function statusLabel(item: any) {
   if (item.etat_operationnel === "suspension_due") return "Suspension due";
@@ -17,6 +18,7 @@ function statusClass(item: any) {
 }
 
 export default function Abonnements() {
+  useSaCrumbs([{ label: "Abonnements" }]);
   const [data, setData] = useState<any>();
   const [payingId, setPayingId] = useState<number | null>(null);
 

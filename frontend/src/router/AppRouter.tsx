@@ -42,8 +42,11 @@ const NotFound = lazy(() => import("@/espaces/joueur/pages/NotFound"));
 
 const SuperAdminDashboard = lazy(() => import("@/espaces/backoffice/pages/superadmin/Dashboard"));
 const GestionTerrains = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionTerrains"));
+const TerrainFicheAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/TerrainFiche"));
 const GestionUtilisateurs = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionUtilisateurs"));
 const RevenusAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Revenus"));
+const CaisseAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Caisse"));
+const RapprochementAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Rapprochement"));
 const AbonnementsAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Abonnements"));
 const GerantDashboard = lazy(() => import("@/espaces/backoffice/pages/gerant/Dashboard"));
 const GerantJoueurs = lazy(() => import("@/espaces/backoffice/pages/gerant/JoueursReservations"));
@@ -52,6 +55,7 @@ const FinancesGerant = lazy(() => import("@/espaces/backoffice/pages/gerant/Fina
 const ParametresGerant = lazy(() => import("@/espaces/backoffice/pages/gerant/Parametres"));
 const ProprietaireDashboard = lazy(() => import("@/espaces/backoffice/pages/proprietaire/Dashboard"));
 const MesRevenus = lazy(() => import("@/espaces/backoffice/pages/proprietaire/MesRevenus"));
+const MesTerrains = lazy(() => import("@/espaces/backoffice/pages/proprietaire/MesTerrains"));
 const TerrainDetail = lazy(() => import("@/espaces/backoffice/pages/proprietaire/TerrainDetail"));
 const SanteProprietaire = lazy(() => import("@/espaces/backoffice/pages/proprietaire/Sante"));
 
@@ -109,11 +113,21 @@ export default function AppRouter() {
           </RoleGuard>
         }
       >
-        <Route path="admin" element={<RoleGuard roles={["super_admin"]}>{withSuspense(SuperAdminDashboard)}</RoleGuard>} />
-        <Route path="admin/terrains" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionTerrains)}</RoleGuard>} />
-        <Route path="admin/utilisateurs" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionUtilisateurs)}</RoleGuard>} />
-        <Route path="admin/revenus" element={<RoleGuard roles={["super_admin"]}>{withSuspense(RevenusAdmin)}</RoleGuard>} />
-        <Route path="admin/abonnements" element={<RoleGuard roles={["super_admin"]}>{withSuspense(AbonnementsAdmin)}</RoleGuard>} />
+        <Route path="superadmin" element={<RoleGuard roles={["super_admin"]}>{withSuspense(SuperAdminDashboard)}</RoleGuard>} />
+        <Route path="superadmin/terrains" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionTerrains)}</RoleGuard>} />
+        <Route path="superadmin/terrains/:id" element={<RoleGuard roles={["super_admin"]}>{withSuspense(TerrainFicheAdmin)}</RoleGuard>} />
+        <Route path="superadmin/utilisateurs" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionUtilisateurs)}</RoleGuard>} />
+        <Route path="superadmin/caisse" element={<RoleGuard roles={["super_admin"]}>{withSuspense(CaisseAdmin)}</RoleGuard>} />
+        <Route path="superadmin/rapprochement" element={<RoleGuard roles={["super_admin"]}>{withSuspense(RapprochementAdmin)}</RoleGuard>} />
+        <Route path="superadmin/revenus" element={<RoleGuard roles={["super_admin"]}>{withSuspense(RevenusAdmin)}</RoleGuard>} />
+        <Route path="superadmin/abonnements" element={<RoleGuard roles={["super_admin"]}>{withSuspense(AbonnementsAdmin)}</RoleGuard>} />
+        <Route path="admin" element={<Navigate to="/backoffice/superadmin" replace />} />
+        <Route path="admin/terrains" element={<Navigate to="/backoffice/superadmin/terrains" replace />} />
+        <Route path="admin/utilisateurs" element={<Navigate to="/backoffice/superadmin/utilisateurs" replace />} />
+        <Route path="admin/revenus" element={<Navigate to="/backoffice/superadmin/revenus" replace />} />
+        <Route path="admin/abonnements" element={<Navigate to="/backoffice/superadmin/abonnements" replace />} />
+        <Route path="admin/caisse" element={<Navigate to="/backoffice/superadmin/caisse" replace />} />
+        <Route path="admin/rapprochement" element={<Navigate to="/backoffice/superadmin/rapprochement" replace />} />
         <Route path="admin/profil" element={<Navigate to="/profil" replace />} />
         <Route path="gerant" element={<RoleGuard roles={["gerant"]}>{withSuspense(GerantDashboard)}</RoleGuard>} />
         <Route path="gerant/joueurs" element={<RoleGuard roles={["gerant"]}>{withSuspense(GerantJoueurs)}</RoleGuard>} />
@@ -123,13 +137,14 @@ export default function AppRouter() {
         <Route path="gerant/reservations/:id" element={<RoleGuard roles={["gerant"]}>{withSuspense(DetailReservationGerant)}</RoleGuard>} />
         <Route path="gerant/flux" element={<Navigate to="/backoffice/gerant" replace />} />
         <Route path="gerant/creneaux" element={<Navigate to="/backoffice/gerant/parametres" replace />} />
-        <Route path="gerant/tarifs" element={<Navigate to="/backoffice/gerant/finances" replace />} />
+        <Route path="gerant/tarifs" element={<Navigate to="/backoffice/gerant/parametres" replace />} />
         <Route path="gerant/reservations" element={<Navigate to="/backoffice/gerant/joueurs" replace />} />
         <Route path="gerant/portefeuille" element={<Navigate to="/backoffice/gerant/finances" replace />} />
         <Route path="gerant/scanner" element={<Navigate to="/backoffice/gerant" replace />} />
         <Route path="proprietaire" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(ProprietaireDashboard)}</RoleGuard>} />
         <Route path="proprietaire/revenus" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(MesRevenus)}</RoleGuard>} />
         <Route path="proprietaire/sante" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(SanteProprietaire)}</RoleGuard>} />
+        <Route path="proprietaire/terrains" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(MesTerrains)}</RoleGuard>} />
         <Route path="proprietaire/profil" element={<Navigate to="/profil" replace />} />
         <Route path="proprietaire/terrain/:id" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(TerrainDetail)}</RoleGuard>} />
       </Route>
@@ -139,7 +154,7 @@ export default function AppRouter() {
       <Route path="/proprietaire/terrain/:id" element={<RedirectProprietaireTerrain />} />
       <Route path="/gerant" element={<Navigate to="/backoffice/gerant" replace />} />
       <Route path="/gerant/calendrier" element={<Navigate to="/backoffice/gerant/creneaux" replace />} />
-      <Route path="/admin" element={<Navigate to="/backoffice/admin" replace />} />
+      <Route path="/admin" element={<Navigate to="/backoffice/superadmin" replace />} />
       <Route path="*" element={withSuspense(NotFound)} />
     </Routes>
   );

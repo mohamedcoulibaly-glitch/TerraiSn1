@@ -47,4 +47,44 @@ export const superAdminApi = {
       method: "POST",
       body: JSON.stringify({ montant }),
     }),
+  politiqueAnnulation: (terrainId: number, delai_remboursement_heures: number) =>
+    adminRequest(`/admin/terrains/${terrainId}/politique-annulation`, {
+      method: "PATCH",
+      body: JSON.stringify({ delai_remboursement_heures }),
+    }),
+  updateTarifs: (terrainId: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${terrainId}/tarifs`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  reglesTarifs: (terrainId: number) => adminRequest(`/admin/terrains/${terrainId}/regles-tarifs`),
+  createRegleTarif: (terrainId: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${terrainId}/regles-tarifs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateRegleTarif: (terrainId: number, regleId: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${terrainId}/regles-tarifs/${regleId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  toggleRegleTarif: (terrainId: number, regleId: number, actif: boolean) =>
+    adminRequest(`/admin/terrains/${terrainId}/regles-tarifs/${regleId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ actif }),
+    }),
+  deleteRegleTarif: (terrainId: number, regleId: number) =>
+    adminRequest(`/admin/terrains/${terrainId}/regles-tarifs/${regleId}`, { method: "DELETE" }),
+  saveGrilleTarifs: (terrainId: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${terrainId}/grille-tarifs`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  validerPropositionTarif: (id: number) =>
+    adminRequest(`/admin/propositions-tarifs/${id}/valider`, { method: "POST" }),
+  refuserPropositionTarif: (id: number, commentaire?: string) =>
+    adminRequest(`/admin/propositions-tarifs/${id}/refuser`, {
+      method: "POST",
+      body: JSON.stringify({ commentaire }),
+    }),
 };

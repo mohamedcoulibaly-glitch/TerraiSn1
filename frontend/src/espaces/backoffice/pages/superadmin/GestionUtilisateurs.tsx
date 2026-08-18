@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { superAdminApi } from "@/services/superAdminApi";
+import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
+import Select2 from "@/components/Select2";
 
 const roleBadge: Record<string, string> = {
   gerant: "bg-[color-mix(in_srgb,var(--color-info)_14%,white)] text-[var(--color-info)]",
@@ -11,6 +13,7 @@ const roleBadge: Record<string, string> = {
 };
 
 export default function GestionUtilisateurs() {
+  useSaCrumbs([{ label: "Utilisateurs", to: "/backoffice/superadmin/utilisateurs" }]);
   const [users, setUsers] = useState<any[]>([]);
   const [terrains, setTerrains] = useState<any[]>([]);
   const [show, setShow] = useState(false);
@@ -113,27 +116,25 @@ export default function GestionUtilisateurs() {
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
           />
-          <select
-            className={fieldClass}
+          <Select2
             value={form.role}
-            onChange={(e) => setForm({ ...form, role: e.target.value, terrain_id: "" })}
-          >
-            <option value="gerant">Gérant</option>
-            <option value="proprietaire">Propriétaire</option>
-          </select>
-          <select
-            className={`${fieldClass} sm:col-span-2 ${form.role === "proprietaire" ? "hidden" : ""}`}
-            value={form.terrain_id}
-            onChange={(e) => setForm({ ...form, terrain_id: e.target.value })}
-            required={form.role === "gerant"}
-          >
-            <option value="">Terrain associé</option>
-            {terrains.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.nom}
-              </option>
-            ))}
-          </select>
+            onChange={(role) => setForm({ ...form, role, terrain_id: "" })}
+            options={[
+              { value: "gerant", label: "Gérant" },
+              { value: "proprietaire", label: "Propriétaire" },
+            ]}
+          />
+          {form.role === "gerant" ? (
+            <div className="sm:col-span-2">
+              <Select2
+                value={form.terrain_id}
+                onChange={(terrain_id) => setForm({ ...form, terrain_id })}
+                required
+                placeholder="Terrain associé"
+                options={terrains.map((t) => ({ value: String(t.id), label: t.nom }))}
+              />
+            </div>
+          ) : null}
           {form.role === "proprietaire" && (
             <p className="sm:col-span-2 rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-primary)_8%,white)] px-4 py-3 text-sm text-[var(--color-text-secondary)]">
               Le proprietaire sera cree sans terrain. Vous pourrez lui associer un terrain ensuite depuis la gestion des terrains.

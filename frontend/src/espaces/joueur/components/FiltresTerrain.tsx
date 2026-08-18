@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Select2 from "@/components/Select2";
 
 export type FiltresTerrainValues = {
   date: string;
@@ -127,19 +128,15 @@ export default function FiltresTerrain({
           Quartier{!geoAccordee ? " (recommandé)" : ""}
         </label>
         {quartiers.length > 0 ? (
-          <select
-            id="filtre-quartier"
+          <Select2
             value={value.quartier}
-            onChange={(e) => set("quartier", e.target.value)}
-            className="w-full h-11 px-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--surface)] text-sm outline-none"
-          >
-            <option value="">Tous les quartiers</option>
-            {quartiers.map((q) => (
-              <option key={q} value={q}>
-                {q}
-              </option>
-            ))}
-          </select>
+            onChange={(quartier) => set("quartier", quartier)}
+            placeholder="Tous les quartiers"
+            options={[
+              { value: "", label: "Tous les quartiers" },
+              ...quartiers.map((q) => ({ value: q, label: q })),
+            ]}
+          />
         ) : (
           <input
             id="filtre-quartier"

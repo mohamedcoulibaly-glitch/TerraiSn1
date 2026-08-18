@@ -19,6 +19,21 @@ const {
   updateTerrainPhoto,
   deleteTerrainPhoto,
 } = require('../terrainPhotoService');
+const {
+  listRegles,
+  apercuPrix,
+  creerRegle,
+  modifierRegle,
+  toggleRegle,
+  supprimerRegle,
+  mapRegle,
+  grilleFromRegles,
+  appliquerGrille,
+  listPropositions,
+  validerProposition,
+  refuserProposition,
+} = require('../services/tarifService');
+const { normaliserDelaiHeures } = require('../services/annulationService');
 
 const router = express.Router();
 
@@ -95,16 +110,17 @@ router.get('/terrains', async (req, res) => {
 router.post('/terrains', async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, quartier, ville, surface, taille, prix_heure, prix_moitie, prix_entier, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, photos, proprietaire_id, commodites } = req.body;
+    const { nom, quartier, ville, surface, taille, prix_heure, prix_moitie, prix_entier, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, photos, proprietaire_id, commodites, delai_remboursement_heures } = req.body;
     if (!nom || !prix_heure || !proprietaire_id) return res.status(400).json({ error: 'Nom, prix et proprietaire requis' });
     const prixEntier = Number(prix_entier || prix_heure);
     const prixMoitie = Number(prix_moitie || prixEntier * 0.6);
     const pourcentageAvance = Number(pourcentage_avance || 8);
     const avanceReference = montantAvanceReference(prixEntier, pourcentageAvance);
+    const delaiRemboursement = normaliserDelaiHeures(delai_remboursement_heures);
     const result = runSql(db, `INSERT INTO terrains
-      (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_entier, prix_moitie, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, photos, description, commodites, is_active)
-      VALUES (?, ?, ?, ?, 'foot', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      [proprietaire_id, nom, quartier, ville || 'Dakar', taille || '11v11', prixEntier, prixEntier, prixMoitie, avanceReference, avanceReference, pourcentageAvance, modele_revenus || 'commission', Number(commission_pourcentage || 0), Number(abonnement_montant || 0), Number(achat_definitif_montant || 0), Number.isFinite(Number(latitude)) ? Number(latitude) : null, Number.isFinite(Number(longitude)) ? Number(longitude) : null, JSON.stringify(photos || []), surface || 'synthetique', typeof commodites === 'string' ? commodites : JSON.stringify(Array.isArray(commodites) ? commodites : [])]);
+      (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_entier, prix_moitie, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, photos, description, commodites, is_active, delai_remboursement_heures)
+      VALUES (?, ?, ?, ?, 'foot', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      [proprietaire_id, nom, quartier, ville || 'Dakar', taille || '11v11', prixEntier, prixEntier, prixMoitie, avanceReference, avanceReference, pourcentageAvance, modele_revenus || 'commission', Number(commission_pourcentage || 0), Number(abonnement_montant || 0), Number(achat_definitif_montant || 0), Number.isFinite(Number(latitude)) ? Number(latitude) : null, Number.isFinite(Number(longitude)) ? Number(longitude) : null, JSON.stringify(photos || []), surface || 'synthetique', typeof commodites === 'string' ? commodites : JSON.stringify(Array.isArray(commodites) ? commodites : []), delaiRemboursement]);
     const terrainId = result.lastInsertRowid;
     for (const jour of ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']) {
       runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, '06:00', '00:00']);
@@ -124,6 +140,16 @@ router.patch('/terrains/:id/statut', async (req, res) => {
   if (!['actif', 'suspendu'].includes(req.body.statut)) return res.status(400).json({ error: 'Statut invalide' });
   runSql(db, 'UPDATE terrains SET is_active = ? WHERE id = ?', [req.body.statut === 'actif' ? 1 : 0, Number(req.params.id)]);
   res.json({ message: `Terrain ${req.body.statut}` });
+});
+
+router.patch('/terrains/:id/politique-annulation', async (req, res) => {
+  const db = await getDb();
+  const terrainId = Number(req.params.id);
+  const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
+  if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+  const delai = normaliserDelaiHeures(req.body?.delai_remboursement_heures);
+  runSql(db, 'UPDATE terrains SET delai_remboursement_heures = ? WHERE id = ?', [delai, terrainId]);
+  res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
 });
 
 router.get('/terrains/:id/photos', async (req, res) => {
@@ -200,6 +226,138 @@ router.patch('/terrains/:id/tarifs', async (req, res) => {
     saveDb();
   }
   res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]));
+});
+
+router.get('/terrains/:id/regles-tarifs', async (req, res) => {
+  const db = await getDb();
+  const terrainId = Number(req.params.id);
+  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+  if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+  res.json({
+    terrain_id: terrainId,
+    prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
+    prix_moitie_base: Number(terrain.prix_moitie || 0),
+    regles: listRegles(db, terrainId),
+    apercu: apercuPrix(db, terrainId),
+    grille_standard: grilleFromRegles(listRegles(db, terrainId, { actifsUniquement: true }), {
+      prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
+      prix_moitie_base: Number(terrain.prix_moitie || 0),
+    }),
+    propositions: listPropositions(db, { terrainId, statut: 'en_attente' }),
+  });
+});
+
+router.post('/terrains/:id/regles-tarifs', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+    const row = creerRegle(db, terrainId, req.body || {});
+    res.status(201).json({
+      regle: mapRegle(row),
+      apercu: apercuPrix(db, terrainId),
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.put('/terrains/:id/regles-tarifs/:regleId', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const row = modifierRegle(db, terrainId, Number(req.params.regleId), req.body || {});
+    res.json({
+      regle: mapRegle(row),
+      apercu: apercuPrix(db, terrainId),
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.patch('/terrains/:id/regles-tarifs/:regleId', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const row = toggleRegle(db, terrainId, Number(req.params.regleId), req.body?.actif);
+    res.json({
+      regle: mapRegle(row),
+      apercu: apercuPrix(db, terrainId),
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.delete('/terrains/:id/regles-tarifs/:regleId', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const result = supprimerRegle(db, terrainId, Number(req.params.regleId));
+    res.json({
+      ...result,
+      apercu: apercuPrix(db, terrainId),
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.put('/terrains/:id/grille-tarifs', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+    const base = {
+      prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
+      prix_moitie_base: Number(terrain.prix_moitie || 0),
+    };
+    const applied = appliquerGrille(db, terrainId, req.body || {}, base);
+    const { notifyTerrain } = require('../realtimeHub');
+    notifyTerrain(terrainId, 'tarifs');
+    res.json({
+      message: 'Grille tarifaire activée',
+      ...applied,
+      prix_entier_base: base.prix_entier_base,
+      prix_moitie_base: base.prix_moitie_base,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.get('/propositions-tarifs', async (req, res) => {
+  const db = await getDb();
+  const statut = String(req.query.statut || 'en_attente');
+  res.json({ propositions: listPropositions(db, { statut }) });
+});
+
+router.post('/propositions-tarifs/:id/valider', async (req, res) => {
+  try {
+    const db = await getDb();
+    const result = validerProposition(db, Number(req.params.id), req.user.id);
+    const terrainId = result?.proposition?.terrain_id || result?.regles?.[0]?.terrain_id;
+    if (terrainId) {
+      const { notifyTerrain } = require('../realtimeHub');
+      notifyTerrain(terrainId, 'tarifs');
+    }
+    res.json({ message: 'Grille tarifaire activée', ...result });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.post('/propositions-tarifs/:id/refuser', async (req, res) => {
+  try {
+    const db = await getDb();
+    const proposition = refuserProposition(db, Number(req.params.id), req.user.id, req.body?.commentaire);
+    res.json({ message: 'Proposition refusée', proposition });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
 });
 
 router.post('/abonnements/:id/payer', async (req, res) => {

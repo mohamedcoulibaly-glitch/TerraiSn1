@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import Select2 from "@/components/Select2";
 
 interface BlockSlotModalProps {
   isOpen: boolean;
@@ -104,18 +105,12 @@ const BlockSlotModal = ({ isOpen, onClose, onSubmit, isLoading = false }: BlockS
           {/* Motif */}
           <div className="space-y-2">
             <label className="text-sm font-medium">Motif *</label>
-            <select
+            <Select2
               value={motif}
-              onChange={(e) => setMotif(e.target.value)}
-              className="w-full bg-muted rounded-lg px-3 py-2 text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+              onChange={setMotif}
               required
-            >
-              {motifOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              options={motifOptions}
+            />
           </div>
 
           {/* Actions */}

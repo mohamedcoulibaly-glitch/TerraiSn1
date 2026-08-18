@@ -4,7 +4,7 @@ export const ROLE_HOME: Record<AppRole, string> = {
   joueur: "/",
   gerant: "/backoffice/gerant",
   proprietaire: "/backoffice/proprietaire",
-  super_admin: "/backoffice/admin",
+  super_admin: "/backoffice/superadmin",
 };
 
 /** Normalise le rôle API (accountType + role) vers le rôle applicatif. */

@@ -151,6 +151,49 @@ function initDb(database) {
     FOREIGN KEY (terrain_id) REFERENCES terrains(id),
     FOREIGN KEY (employe_id) REFERENCES employes(id)
   )`);
+  addColumnIfMissing(database, 'blocages_creneaux', 'type_blocage', "TEXT DEFAULT 'MANUEL'");
+  addColumnIfMissing(database, 'blocages_creneaux', 'montant', 'INTEGER');
+  addColumnIfMissing(database, 'blocages_creneaux', 'libelle', 'TEXT');
+  addColumnIfMissing(database, 'blocages_creneaux', 'groupe_id', 'TEXT');
+  addColumnIfMissing(database, 'blocages_creneaux', 'date_debut', 'DATE');
+  addColumnIfMissing(database, 'blocages_creneaux', 'date_fin', 'DATE');
+  addColumnIfMissing(database, 'blocages_creneaux', 'jours', 'TEXT');
+  addColumnIfMissing(database, 'blocages_creneaux', 'inclure_dans_ca', 'INTEGER DEFAULT 0');
+  database.run('CREATE INDEX IF NOT EXISTS idx_blocages_groupe ON blocages_creneaux(groupe_id)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS blocages_groupes (
+    id TEXT PRIMARY KEY,
+    terrain_id INTEGER NOT NULL,
+    employe_id INTEGER,
+    type_blocage TEXT NOT NULL DEFAULT 'MANUEL',
+    libelle TEXT,
+    date_debut DATE,
+    date_fin DATE,
+    jours TEXT,
+    heure_debut TIME,
+    heure_fin TIME,
+    montant INTEGER,
+    motif TEXT,
+    inclure_dans_ca INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  addColumnIfMissing(database, 'blocages_groupes', 'inclure_dans_ca', 'INTEGER DEFAULT 0');
+  database.run('CREATE INDEX IF NOT EXISTS idx_blocages_groupes_terrain ON blocages_groupes(terrain_id)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS encaissements_blocages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    groupe_id TEXT NOT NULL,
+    terrain_id INTEGER NOT NULL,
+    employe_id INTEGER,
+    montant INTEGER NOT NULL,
+    date_encaissement DATE NOT NULL,
+    note TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_encaissements_blocages_groupe ON encaissements_blocages(groupe_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_encaissements_blocages_terrain ON encaissements_blocages(terrain_id, date_encaissement)');
 
   // 7. reservations
   database.run(`CREATE TABLE IF NOT EXISTS reservations (
@@ -230,6 +273,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'reservations', 'operational_stage', "TEXT DEFAULT 'reserved'");
   addColumnIfMissing(database, 'reservations', 'checked_in_at', 'DATETIME');
   addColumnIfMissing(database, 'reservations', 'checkout_at', 'DATETIME');
+  addColumnIfMissing(database, 'reservations', 'confirme_at', 'DATETIME');
   addColumnIfMissing(database, 'creneaux', 'fenetre_retard', 'INTEGER DEFAULT 30');
   addColumnIfMissing(database, 'paiements', 'reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'paiements', 'montant_acompte', 'INTEGER');
@@ -265,6 +309,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'terrains', 'latitude', 'REAL');
   addColumnIfMissing(database, 'terrains', 'longitude', 'REAL');
   addColumnIfMissing(database, 'terrains', 'commodites', "TEXT DEFAULT '[]'");
+  addColumnIfMissing(database, 'terrains', 'delai_remboursement_heures', 'INTEGER DEFAULT 24');
   addColumnIfMissing(database, 'users', 'terrain_id', 'INTEGER');
   addColumnIfMissing(database, 'users', 'must_change_password', 'INTEGER DEFAULT 0');
   addColumnIfMissing(database, 'users', 'prenom', 'VARCHAR(255)');
@@ -316,6 +361,11 @@ function initDb(database) {
   database.run('UPDATE reservations SET acompte = MIN(5000, montant) WHERE acompte IS NULL');
   database.run('UPDATE reservations SET reste_a_payer = MAX(0, prix_total - acompte) WHERE reste_a_payer IS NULL');
   database.run('UPDATE reservations SET montant_avance = acompte WHERE montant_avance IS NULL AND acompte IS NOT NULL');
+  database.run(`UPDATE reservations SET confirme_at = (
+    SELECT p.created_at FROM paiements p
+     WHERE p.reservation_id = reservations.id AND p.statut = 'paye'
+     ORDER BY p.id DESC LIMIT 1
+  ) WHERE confirme_at IS NULL AND statut IN ('confirme', 'acceptee', 'match_joue', 'joue')`);
   database.run('UPDATE reservations SET montant_restant = reste_a_payer WHERE montant_restant IS NULL AND reste_a_payer IS NOT NULL');
   database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_code ON reservations(code_reservation)');
   database.run('CREATE INDEX IF NOT EXISTS idx_users_telephone ON users(telephone)');
@@ -346,6 +396,40 @@ function initDb(database) {
     FOREIGN KEY (terrain_id) REFERENCES terrains(id)
   )`);
   database.run('CREATE INDEX IF NOT EXISTS idx_tarifs_dynamiques_terrain ON tarifs_dynamiques(terrain_id)');
+
+  /** Règles tarifaires (week-end, soirée, etc.) — distinctes de la grille horaire cellule par cellule. */
+  database.run(`CREATE TABLE IF NOT EXISTS regles_tarifs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    nom TEXT NOT NULL,
+    prix_demi_terrain INTEGER NOT NULL,
+    prix_terrain_entier INTEGER NOT NULL,
+    type TEXT CHECK(type IN ('semaine','weekend','soiree','special')),
+    jours TEXT,
+    heure_debut TIME,
+    heure_fin TIME,
+    priorite INTEGER DEFAULT 0,
+    actif INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_regles_tarifs_terrain ON regles_tarifs(terrain_id)');
+  addColumnIfMissing(database, 'regles_tarifs', 'source', "TEXT DEFAULT 'manuelle'");
+
+  database.run(`CREATE TABLE IF NOT EXISTS propositions_grille_tarifs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    demandeur_type TEXT,
+    demandeur_id INTEGER,
+    payload TEXT NOT NULL,
+    statut TEXT DEFAULT 'en_attente',
+    commentaire TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    traite_at DATETIME,
+    traite_par INTEGER,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_propositions_grille_terrain ON propositions_grille_tarifs(terrain_id, statut)');
 
   database.run(`CREATE TABLE IF NOT EXISTS portefeuille_gerant (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

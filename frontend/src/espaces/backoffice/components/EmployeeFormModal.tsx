@@ -11,13 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import Select2 from "@/components/Select2";
 import { toast } from "sonner";
 import { employesApi, proprietaireApi } from "@/lib/api";
 import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
@@ -189,21 +183,15 @@ const EmployeeFormModal = ({ open, onOpenChange, terrains: propTerrains, onSucce
           {/* Terrain affecté */}
           <div className="space-y-2">
             <Label htmlFor="terrain_id">Terrain à gérer *</Label>
-            <Select
+            <Select2
               value={form.terrain_id}
-              onValueChange={(value) => setForm({ ...form, terrain_id: value })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Sélectionner un terrain" />
-              </SelectTrigger>
-              <SelectContent>
-                {terrains.map((t) => (
-                  <SelectItem key={t.id} value={t.id.toString()}>
-                    {t.nom} {t.ville && ` - ${t.ville}`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              onChange={(value) => setForm({ ...form, terrain_id: value })}
+              placeholder="Sélectionner un terrain"
+              options={terrains.map((t) => ({
+                value: t.id.toString(),
+                label: `${t.nom}${t.ville ? ` - ${t.ville}` : ""}`,
+              }))}
+            />
             <p className="text-[10px] text-muted-foreground">
               Ce gérant aura accès uniquement à ce terrain.
             </p>

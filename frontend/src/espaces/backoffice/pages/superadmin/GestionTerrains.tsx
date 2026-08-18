@@ -1,458 +1,282 @@
-import { FormEvent, useEffect, useState } from "react";
-import { Loader2, Upload } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { MoreHorizontal } from "lucide-react";
 import { superAdminApi } from "@/services/superAdminApi";
-import CommoditesPicker from "@/components/CommoditesPicker";
-import type { CommoditeId } from "@/lib/commodites";
+import { useAuth } from "@/hooks/use-auth";
+import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
+import ContratBadge from "@/espaces/backoffice/components/superadmin/ContratBadge";
+import ModeBadge from "@/espaces/backoffice/components/superadmin/ModeBadge";
+import TerrainCreateForm from "@/espaces/backoffice/components/superadmin/TerrainCreateForm";
+import Select2 from "@/components/Select2";
+import {
+  fcfa,
+  fraisLabel,
+  getContratOverlay,
+  terrainStatutListe,
+} from "@/lib/saContrat";
 
-const emptyForm = {
-  nom: "",
-  quartier: "",
-  ville: "Dakar",
-  surface: "synthetique",
-  taille: "11v11",
-  prix_heure: "",
-  prix_moitie: "",
-  pourcentage_avance: "8",
-  modele_revenus: "commission",
-  commission_pourcentage: "10",
-  abonnement_montant: "",
-  achat_definitif_montant: "",
-  latitude: "",
-  longitude: "",
-  photos: "",
-  proprietaire_id: "",
-  commodites: [] as CommoditeId[],
-};
-
-function revenueLabel(terrain: any) {
-  if (terrain.modele_revenus === "abonnement") {
-    return `Abonnement ${Number(terrain.abonnement_montant || 0).toLocaleString()} CFA`;
-  }
-  if (terrain.modele_revenus === "achat_definitif") {
-    return terrain.achat_definitif_paye ? "Achat definitif paye" : "Achat definitif en attente";
-  }
-  return `Commission ${Number(terrain.commission_pourcentage || 0).toLocaleString()}%`;
+function statutBadge(statut: "actif" | "suspendu" | "en_attente") {
+  if (statut === "actif") return { label: "Actif", color: "var(--sa-success)", bg: "var(--sa-success-bg)" };
+  if (statut === "suspendu") return { label: "Suspendu", color: "var(--sa-danger)", bg: "var(--sa-danger-bg)" };
+  return { label: "En attente", color: "var(--sa-warning)", bg: "var(--sa-warning-bg)" };
 }
 
 export default function GestionTerrains() {
+  useSaCrumbs([{ label: "Terrains", to: "/backoffice/superadmin/terrains" }]);
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [items, setItems] = useState<any[]>([]);
   const [owners, setOwners] = useState<any[]>([]);
+  const [gerants, setGerants] = useState<any[]>([]);
+  const [finances, setFinances] = useState<any>();
   const [show, setShow] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [menuId, setMenuId] = useState<number | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
-  const [payingTerrain, setPayingTerrain] = useState<number | null>(null);
-  const [uploadingTerrain, setUploadingTerrain] = useState<number | null>(null);
-  const [form, setForm] = useState(emptyForm);
+  const [q, setQ] = useState("");
+  const [filtreStatut, setFiltreStatut] = useState("tous");
+  const [filtreMode, setFiltreMode] = useState("tous");
+  const [filtreCanal, setFiltreCanal] = useState("tous");
 
   const load = () =>
-    Promise.all([superAdminApi.terrains(), superAdminApi.users()]).then(([t, u]) => {
-      setItems(t);
-      setOwners(u.filter((x: any) => x.role === "proprietaire"));
-    });
+    Promise.all([superAdminApi.terrains(), superAdminApi.users(), superAdminApi.finances().catch(() => null)]).then(
+      ([t, u, f]) => {
+        setItems(t);
+        setOwners(u.filter((x: any) => x.role === "proprietaire"));
+        setGerants(u.filter((x: any) => x.role === "gerant"));
+        setFinances(f);
+      },
+    );
 
   useEffect(() => {
     load().catch(console.error);
   }, []);
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const prixEntier = Number(form.prix_heure);
-      await superAdminApi.createTerrain({
-        ...form,
-        photos: form.photos
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean),
-        prix_heure: prixEntier,
-        prix_entier: prixEntier,
-        prix_moitie: Number(form.prix_moitie || prixEntier * 0.6),
-        pourcentage_avance: Number(form.pourcentage_avance || 8),
-        commission_pourcentage:
-          form.modele_revenus === "commission" ? Number(form.commission_pourcentage || 0) : 0,
-        abonnement_montant:
-          form.modele_revenus === "abonnement" ? Number(form.abonnement_montant || 0) : 0,
-        achat_definitif_montant:
-          form.modele_revenus === "achat_definitif" ? Number(form.achat_definitif_montant || 0) : 0,
-        latitude: form.latitude ? Number(form.latitude) : null,
-        longitude: form.longitude ? Number(form.longitude) : null,
-        proprietaire_id: Number(form.proprietaire_id),
+  const filtresActifs = q || filtreStatut !== "tous" || filtreMode !== "tous" || filtreCanal !== "tous";
+
+  const rows = useMemo(() => {
+    return items
+      .map((t) => {
+        const c = getContratOverlay(t.id);
+        const fin = (finances?.terrains || []).find((f: any) => Number(f.id) === Number(t.id)) || {};
+        const du = Math.max(0, Number(fin.avances || 0) - Number(fin.commissions || 0) - Number(fin.reverse || 0));
+        const statut = terrainStatutListe(t, c);
+        const remb = c.remboursement_autorise || Number(t.delai_remboursement_heures || 0) > 0;
+        return { t, c, du, statut, remb };
+      })
+      .filter((r) => {
+        const hay = `${r.t.nom} ${r.t.adresse || ""} ${r.t.quartier || ""} ${r.t.ville || ""}`.toLowerCase();
+        if (q && !hay.includes(q.toLowerCase())) return false;
+        if (filtreStatut !== "tous" && r.statut !== filtreStatut) return false;
+        if (filtreMode !== "tous" && r.c.payout_mode !== filtreMode) return false;
+        if (filtreCanal === "verifie" && r.c.wave_statut !== "verifie" && r.c.om_statut !== "verifie") return false;
+        if (filtreCanal === "non" && (r.c.wave_statut !== "absent" || r.c.om_statut !== "absent")) return false;
+        return true;
       });
-      setShow(false);
-      setForm(emptyForm);
-      await load();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function markPurchasePaid(terrain: any) {
-    setPayingTerrain(terrain.id);
-    try {
-      await superAdminApi.payerAchatDefinitif(terrain.id, Number(terrain.achat_definitif_montant || 0));
-      await load();
-    } finally {
-      setPayingTerrain(null);
-    }
-  }
-
-  const readFileAsDataUrl = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
-
-  async function uploadPhoto(terrainId: number, file?: File | null) {
-    if (!file) return;
-    setUploadingTerrain(terrainId);
-    try {
-      const dataUrl = await readFileAsDataUrl(file);
-      await superAdminApi.uploadTerrainPhoto(terrainId, { dataUrl, est_principale: true, ordre: 0 });
-      await load();
-    } finally {
-      setUploadingTerrain(null);
-    }
-  }
-
-  const fieldClass =
-    "w-full h-[48px] rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 text-sm outline-none focus:border-[var(--color-primary)] bg-white";
+  }, [items, finances, q, filtreStatut, filtreMode, filtreCanal]);
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <div className="space-y-5 max-w-[1200px]">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2
-            className="text-xl font-semibold text-[var(--color-text-primary)]"
-            style={{ fontFamily: "var(--font-display)" }}
-          >
-            Gestion des terrains
+        <div className="flex items-center gap-2">
+          <h2 className="text-[22px] font-semibold" style={{ fontFamily: "var(--font-display)", color: "var(--sa-text)" }}>
+            Terrains
           </h2>
-          <p className="text-sm text-[var(--color-text-secondary)] mt-1">{items.length} terrains</p>
+          <span className="min-h-[22px] px-2 rounded-full text-[11px] font-semibold" style={{ background: "var(--sa-surface-2)", color: "var(--sa-text-2)" }}>
+            {items.length}
+          </span>
         </div>
         <button
           type="button"
           onClick={() => setShow(!show)}
-          className="min-h-[52px] px-5 rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium hover:bg-[var(--color-primary-light)]"
+          className="min-h-[44px] px-4 rounded-lg text-[13px] font-semibold text-white"
+          style={{ background: "var(--sa-primary)" }}
         >
-          {show ? "Fermer" : "Ajouter un terrain"}
+          {show ? "Fermer" : "+ Ajouter un terrain"}
         </button>
       </div>
 
-      {show && (
-        <form
-          onSubmit={submit}
-          className="bg-white rounded-[var(--radius-lg)] p-5 sm:p-6 shadow-sm border border-[var(--color-border)] grid grid-cols-1 sm:grid-cols-2 gap-4"
-        >
-          <input
-            className={fieldClass}
-            placeholder="Nom"
-            value={form.nom}
-            onChange={(e) => setForm({ ...form, nom: e.target.value })}
-            required
-          />
-          <input
-            className={fieldClass}
-            placeholder="Quartier"
-            value={form.quartier}
-            onChange={(e) => setForm({ ...form, quartier: e.target.value })}
-          />
-          <input
-            className={fieldClass}
-            placeholder="Ville"
-            value={form.ville}
-            onChange={(e) => setForm({ ...form, ville: e.target.value })}
-          />
-          <input
-            className={fieldClass}
-            type="number"
-            step="any"
-            placeholder="Latitude"
-            value={form.latitude}
-            onChange={(e) => setForm({ ...form, latitude: e.target.value })}
-          />
-          <input
-            className={fieldClass}
-            type="number"
-            step="any"
-            placeholder="Longitude"
-            value={form.longitude}
-            onChange={(e) => setForm({ ...form, longitude: e.target.value })}
-          />
-          <select
-            className={fieldClass}
-            value={form.surface}
-            onChange={(e) => setForm({ ...form, surface: e.target.value })}
-          >
-            <option value="gazon_naturel">Gazon naturel</option>
-            <option value="gazon_synthetique">Gazon synthetique</option>
-            <option value="beton">Beton</option>
-          </select>
-          <select
-            className={fieldClass}
-            value={form.taille}
-            onChange={(e) => setForm({ ...form, taille: e.target.value })}
-          >
-            <option value="5v5">5v5</option>
-            <option value="7v7">7v7</option>
-            <option value="11v11">11v11</option>
-          </select>
-          <input
-            className={fieldClass}
-            type="number"
-            placeholder="Prix terrain entier / heure"
-            value={form.prix_heure}
-            onChange={(e) => setForm({ ...form, prix_heure: e.target.value })}
-            required
-          />
-          <input
-            className={fieldClass}
-            type="number"
-            placeholder="Prix demi-terrain / heure"
-            value={form.prix_moitie}
-            onChange={(e) => setForm({ ...form, prix_moitie: e.target.value })}
-          />
-          <input
-            className={fieldClass}
-            type="number"
-            min="1"
-            max="100"
-            step="0.1"
-            placeholder="Avance (%)"
-            value={form.pourcentage_avance}
-            onChange={(e) => setForm({ ...form, pourcentage_avance: e.target.value })}
-            required
-          />
-          <select
-            className={fieldClass}
-            value={form.modele_revenus}
-            onChange={(e) => setForm({ ...form, modele_revenus: e.target.value })}
-          >
-            <option value="commission">Commission</option>
-            <option value="abonnement">Abonnement mensuel</option>
-            <option value="achat_definitif">Achat definitif</option>
-          </select>
-          {form.modele_revenus === "commission" && (
-            <input
-              className={fieldClass}
-              type="number"
-              min="0"
-              max="100"
-              step="0.1"
-              placeholder="Commission plateforme (%)"
-              value={form.commission_pourcentage}
-              onChange={(e) => setForm({ ...form, commission_pourcentage: e.target.value })}
-            />
-          )}
-          {form.modele_revenus === "abonnement" && (
-            <input
-              className={fieldClass}
-              type="number"
-              min="0"
-              placeholder="Abonnement mensuel (CFA)"
-              value={form.abonnement_montant}
-              onChange={(e) => setForm({ ...form, abonnement_montant: e.target.value })}
-            />
-          )}
-          {form.modele_revenus === "achat_definitif" && (
-            <input
-              className={fieldClass}
-              type="number"
-              min="0"
-              placeholder="Achat definitif (CFA)"
-              value={form.achat_definitif_montant}
-              onChange={(e) => setForm({ ...form, achat_definitif_montant: e.target.value })}
-            />
-          )}
-          <input
-            className={`${fieldClass} sm:col-span-2`}
-            placeholder="Photos (URLs separees par des virgules)"
-            value={form.photos}
-            onChange={(e) => setForm({ ...form, photos: e.target.value })}
-          />
-          <select
-            className={fieldClass}
-            value={form.proprietaire_id}
-            onChange={(e) => setForm({ ...form, proprietaire_id: e.target.value })}
-            required
-          >
-            <option value="">Proprietaire</option>
-            {owners.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.nom}
-              </option>
-            ))}
-          </select>
-          <div className="sm:col-span-2 rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 bg-white">
-            <p className="text-sm font-medium mb-1">Commodités &amp; services inclus</p>
-            <p className="text-xs text-[var(--color-text-muted)] mb-3">
-              Affichés sur la fiche détaillée joueur.
-            </p>
-            <CommoditesPicker
-              value={form.commodites}
-              onChange={(commodites) => setForm({ ...form, commodites })}
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={saving}
-            className="min-h-[52px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium hover:bg-[var(--color-primary-light)] disabled:bg-[var(--color-text-muted)] inline-flex items-center justify-center gap-2"
-          >
-            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-            Enregistrer
-          </button>
-        </form>
-      )}
+      {show ? (
+        <TerrainCreateForm
+          owners={owners}
+          gerants={gerants}
+          auteur={user?.nom || "Super Admin"}
+          onCancel={() => setShow(false)}
+          onCreated={async () => {
+            setShow(false);
+            await load();
+          }}
+        />
+      ) : null}
 
-      <div className="flex flex-col gap-3 md:hidden">
-        {items.map((t) => (
-          <article
-            key={t.id}
-            className={`bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] border-l-4 p-4 shadow-sm ${
-              t.is_active ? "border-l-[var(--color-success)]" : "border-l-[var(--color-danger)]"
-            }`}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="font-semibold text-sm" style={{ fontFamily: "var(--font-display)" }}>
-                  {t.nom}
-                </p>
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  {t.adresse || t.quartier || "-"} - {t.ville}
-                </p>
-                <p className="text-xs text-[var(--color-text-secondary)] mt-1">
-                  {t.proprietaire_nom || "Sans proprietaire"}
-                </p>
-                <p className="text-xs text-[var(--color-text-secondary)] mt-1">
-                  Avance {Number(t.pourcentage_avance || 8).toLocaleString()}% - {revenueLabel(t)}
-                </p>
-              </div>
-              <span
-                className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${
-                  t.is_active
-                    ? "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]"
-                    : "bg-[color-mix(in_srgb,var(--color-danger)_12%,white)] text-[var(--color-danger)]"
-                }`}
-              >
-                {t.is_active ? "Actif" : "Suspendu"}
-              </span>
-            </div>
-            <button
-              type="button"
-              disabled={toggling === t.id}
-              className="mt-3 min-h-[44px] px-4 rounded-[var(--radius-sm)] border border-[var(--color-border)] text-xs font-medium text-[var(--color-primary)] disabled:opacity-50"
-              onClick={async () => {
-                setToggling(t.id);
-                try {
-                  await superAdminApi.terrainStatus(t.id, t.is_active ? "suspendu" : "actif");
-                  await load();
-                } finally {
-                  setToggling(null);
-                }
-              }}
-            >
-              {toggling === t.id ? "..." : t.is_active ? "Suspendre" : "Activer"}
-            </button>
-            {t.modele_revenus === "achat_definitif" && !t.achat_definitif_paye && (
-              <button
-                type="button"
-                disabled={payingTerrain === t.id}
-                className="mt-2 min-h-[44px] px-4 rounded-[var(--radius-sm)] bg-[var(--color-primary)] text-white text-xs font-medium disabled:opacity-50"
-                onClick={() => markPurchasePaid(t)}
-              >
-                {payingTerrain === t.id ? "Validation..." : "Marquer achat paye"}
-              </button>
-            )}
-            <label className="mt-2 min-h-[44px] px-4 rounded-[var(--radius-sm)] border border-[var(--color-border)] text-xs font-medium text-[var(--color-primary)] inline-flex items-center justify-center gap-2 cursor-pointer">
-              <Upload className="w-4 h-4" />
-              {uploadingTerrain === t.id ? "Upload..." : "Ajouter photo"}
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                className="hidden"
-                disabled={uploadingTerrain === t.id}
-                onChange={(e) => uploadPhoto(t.id, e.target.files?.[0])}
-              />
-            </label>
-          </article>
-        ))}
+      <div className="flex flex-wrap gap-2 items-center">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Recherche (nom, quartier)"
+          className="h-10 px-3 rounded-lg text-[13px] min-w-[200px] flex-1"
+          style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface)" }}
+        />
+        <Select2
+          size="sm"
+          className="!w-[180px] min-w-[160px]"
+          value={filtreStatut}
+          onChange={setFiltreStatut}
+          options={[
+            { value: "tous", label: "Tous les statuts" },
+            { value: "actif", label: "Actif" },
+            { value: "suspendu", label: "Suspendu" },
+            { value: "en_attente", label: "En attente" },
+          ]}
+        />
+        <Select2
+          size="sm"
+          className="!w-[160px] min-w-[140px]"
+          value={filtreMode}
+          onChange={setFiltreMode}
+          options={[
+            { value: "tous", label: "Tous les modes" },
+            { value: "auto", label: "Auto" },
+            { value: "retrait", label: "Retrait" },
+          ]}
+        />
+        <Select2
+          size="sm"
+          className="!w-[180px] min-w-[160px]"
+          value={filtreCanal}
+          onChange={setFiltreCanal}
+          options={[
+            { value: "tous", label: "Numéro Wave/OM" },
+            { value: "verifie", label: "Vérifié" },
+            { value: "non", label: "Non configuré" },
+          ]}
+        />
+        {filtresActifs ? (
+          <button type="button" onClick={() => { setQ(""); setFiltreStatut("tous"); setFiltreMode("tous"); setFiltreCanal("tous"); }} className="h-10 px-3 rounded-lg text-[12px] font-semibold" style={{ color: "var(--sa-primary)" }}>
+            Réinitialiser
+          </button>
+        ) : null}
       </div>
 
-      <div className="hidden md:block bg-white rounded-[var(--radius-lg)] shadow-sm border border-[var(--color-border)] overflow-x-auto">
-        <table className="bo-table">
+      <div className="hidden md:block rounded-xl overflow-hidden" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
+        <table className="sa-table">
           <thead>
             <tr>
-              <th>Nom</th>
-              <th>Quartier</th>
-              <th>Proprietaire</th>
-              <th>Revenus</th>
-              <th>Avance</th>
+              <th>Terrain</th>
+              <th>Contrat commercial</th>
+              <th>Remboursement</th>
+              <th>Mode reversement</th>
+              <th>Wave / OM</th>
+              <th>Dû gérant</th>
               <th>Statut</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {items.map((t) => (
-              <tr key={t.id}>
-                <td className="font-medium">{t.nom}</td>
-                <td>
-                  {t.adresse || t.quartier || "-"}
-                  {t.ville ? `, ${t.ville}` : ""}
-                </td>
-                <td>{t.proprietaire_nom || "-"}</td>
-                <td>{revenueLabel(t)}</td>
-                <td>{Number(t.pourcentage_avance || 8).toLocaleString()}%</td>
-                <td>
-                  <span
-                    className={`badge-status ${t.is_active ? "badge-status-actif" : "badge-status-suspendu"}`}
-                  >
-                    {t.is_active ? "Actif" : "Suspendu"}
-                  </span>
-                </td>
-                <td>
-                  <button
-                    type="button"
-                    disabled={toggling === t.id}
-                    className="text-sm text-[var(--color-primary)] font-medium hover:underline disabled:opacity-50"
-                    onClick={async () => {
-                      setToggling(t.id);
-                      try {
-                        await superAdminApi.terrainStatus(t.id, t.is_active ? "suspendu" : "actif");
-                        await load();
-                      } finally {
-                        setToggling(null);
-                      }
-                    }}
-                  >
-                    {t.is_active ? "Suspendre" : "Activer"}
-                  </button>
-                  {t.modele_revenus === "achat_definitif" && !t.achat_definitif_paye && (
-                    <button
-                      type="button"
-                      disabled={payingTerrain === t.id}
-                      className="ml-3 text-sm text-[var(--color-accent)] font-medium hover:underline disabled:opacity-50"
-                      onClick={() => markPurchasePaid(t)}
-                    >
-                      {payingTerrain === t.id ? "Validation..." : "Marquer achat paye"}
-                    </button>
-                  )}
-                  <label className="ml-3 text-sm text-[var(--color-primary)] font-medium hover:underline cursor-pointer">
-                    {uploadingTerrain === t.id ? "Upload..." : "Ajouter photo"}
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      disabled={uploadingTerrain === t.id}
-                      onChange={(e) => uploadPhoto(t.id, e.target.files?.[0])}
-                    />
-                  </label>
-                </td>
-              </tr>
-            ))}
+            {rows.map(({ t, c, du, statut, remb }) => {
+              const st = statutBadge(statut);
+              const duPill = du <= 0 ? { label: "0", color: "var(--sa-muted)", bg: "var(--sa-surface-2)" } : remb ? { label: "En fenêtre", color: "var(--sa-warning)", bg: "var(--sa-warning-bg)" } : { label: "Payable", color: "var(--sa-success)", bg: "var(--sa-success-bg)" };
+              return (
+                <tr key={t.id}>
+                  <td>
+                    <p className="text-[13px] font-semibold" style={{ color: "var(--sa-text)" }}>{t.nom}</p>
+                    <p className="text-[11px]" style={{ color: "var(--sa-muted)" }}>{t.adresse || t.quartier || "—"}{t.ville ? ` · ${t.ville}` : ""}</p>
+                  </td>
+                  <td>
+                    <span className="inline-flex gap-1">
+                      <span className="rounded-full px-2 py-0.5 text-[12px]" style={{ background: "var(--sa-surface-2)" }}>Avance {Number(t.pourcentage_avance || 0)}%</span>
+                      <span className="rounded-full px-2 py-0.5 text-[12px]" style={{ background: "var(--sa-surface-2)" }}>Com. {Number(t.commission_pourcentage || 0)}%</span>
+                    </span>
+                  </td>
+                  <td>
+                    <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: remb ? "var(--sa-warning-bg)" : "var(--sa-absent-bg)", color: remb ? "var(--sa-warning)" : "var(--sa-danger)" }}>
+                      {remb ? `${Number(t.delai_remboursement_heures || 0)} h` : "Non"}
+                    </span>
+                  </td>
+                  <td>
+                    <ModeBadge mode={c.payout_mode} />
+                    <p className="text-[10px] mt-0.5" style={{ color: "var(--sa-muted)" }}>{c.payout_mode === "auto" ? fraisLabel(c) : "0 frais"}</p>
+                  </td>
+                  <td>
+                    <div className="flex gap-1">
+                      <ContratBadge statut={c.wave_statut} operateur="wave" />
+                      <ContratBadge statut={c.om_statut} operateur="om" />
+                    </div>
+                  </td>
+                  <td>
+                    <p className="text-[13px]">{fcfa(du)}</p>
+                    <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: duPill.bg, color: duPill.color }}>{duPill.label}</span>
+                  </td>
+                  <td>
+                    <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: st.bg, color: st.color }}>{st.label}</span>
+                  </td>
+                  <td className="relative">
+                    <div className="flex items-center gap-2">
+                      <button type="button" onClick={() => navigate(`/backoffice/superadmin/terrains/${t.id}?tab=contrat`)} className="h-8 px-2 rounded-md text-[11px] font-semibold" style={{ background: "var(--sa-primary-glow)", color: "var(--sa-primary)" }}>
+                        Contrat
+                      </button>
+                      <button type="button" onClick={() => setMenuId(menuId === t.id ? null : t.id)} className="w-8 h-8 rounded-md grid place-items-center" style={{ border: "1px solid var(--sa-border)" }}>
+                        <MoreHorizontal size={14} />
+                      </button>
+                    </div>
+                    {menuId === t.id ? (
+                      <div className="absolute right-0 mt-1 z-10 w-40 rounded-lg py-1" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow-md)", border: "1px solid var(--sa-border)" }}>
+                        <button type="button" className="w-full text-left px-3 py-2 text-[12px]" onClick={() => { setMenuId(null); navigate(`/backoffice/superadmin/terrains/${t.id}?tab=infos`); }}>Éditer</button>
+                        <button
+                          type="button"
+                          disabled={toggling === t.id}
+                          className="w-full text-left px-3 py-2 text-[12px]"
+                          onClick={async () => {
+                            setToggling(t.id);
+                            try {
+                              await superAdminApi.terrainStatus(t.id, t.is_active ? "suspendu" : "actif");
+                              await load();
+                            } finally {
+                              setToggling(null);
+                              setMenuId(null);
+                            }
+                          }}
+                        >
+                          {t.is_active ? "Suspendre" : "Activer"}
+                        </button>
+                        <button type="button" className="w-full text-left px-3 py-2 text-[12px]" onClick={() => { setMenuId(null); navigate("/backoffice/superadmin/utilisateurs"); }}>
+                          Voir proprio
+                        </button>
+                      </div>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+      </div>
+
+      <div className="md:hidden space-y-3">
+        {rows.map(({ t, c, du, statut, remb }) => {
+          const st = statutBadge(statut);
+          return (
+            <article key={t.id} className="rounded-xl p-4" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[13px] font-semibold">{t.nom}</p>
+                  <p className="text-[11px]" style={{ color: "var(--sa-muted)" }}>{t.ville}</p>
+                </div>
+                <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: st.bg, color: st.color }}>{st.label}</span>
+              </div>
+              <p className="mt-2 text-[12px]" style={{ color: "var(--sa-text-2)" }}>Avance {Number(t.pourcentage_avance || 0)}% · Com. {Number(t.commission_pourcentage || 0)}%</p>
+              <div className="mt-2 flex flex-wrap gap-1">
+                <ModeBadge mode={c.payout_mode} />
+                <ContratBadge statut={c.wave_statut} operateur="wave" />
+                <ContratBadge statut={c.om_statut} operateur="om" />
+                <span className="rounded-full px-2 py-0.5 text-[11px]" style={{ background: remb ? "var(--sa-warning-bg)" : "var(--sa-absent-bg)", color: remb ? "var(--sa-warning)" : "var(--sa-danger)" }}>{remb ? `${t.delai_remboursement_heures} h` : "Remb. non"}</span>
+              </div>
+              <p className="mt-2 text-[13px] font-semibold">{fcfa(du)}</p>
+              <button type="button" onClick={() => navigate(`/backoffice/superadmin/terrains/${t.id}?tab=contrat`)} className="mt-3 w-full h-10 rounded-lg text-[12px] font-semibold" style={{ background: "var(--sa-primary-glow)", color: "var(--sa-primary)" }}>
+                Contrat
+              </button>
+            </article>
+          );
+        })}
       </div>
     </div>
   );

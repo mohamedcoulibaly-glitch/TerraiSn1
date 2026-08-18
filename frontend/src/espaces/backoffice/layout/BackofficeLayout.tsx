@@ -16,6 +16,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { normalizeRole, profileForUser, AppRole } from "@/auth/roles";
 import GerantLayout from "@/espaces/backoffice/layout/GerantLayout";
 import ProprietaireChrome from "@/espaces/backoffice/layout/ProprietaireChrome";
+import SuperadminLayout from "@/espaces/backoffice/layout/SuperadminLayout";
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean };
 type HeaderUser = { prenom?: string; nom?: string; photo_url?: string } | null;
@@ -51,7 +52,7 @@ const CRUMB_LABELS: Record<string, string> = {
   profil: "Profil",
   creneaux: "Heures de match",
   reservations: "Reservations",
-  finances: "Mes gains",
+  finances: "Finances",
   parametres: "Parametres",
   joueurs: "Joueurs",
   terrain: "Terrain",
@@ -101,6 +102,7 @@ export default function BackofficeLayout() {
 
   if (role === "gerant") return <GerantLayout />;
   if (role === "proprietaire") return <ProprietaireChrome />;
+  if (role === "super_admin") return <SuperadminLayout />;
 
   const links = role && role !== "joueur" ? NAV_BY_ROLE[role] : [];
 

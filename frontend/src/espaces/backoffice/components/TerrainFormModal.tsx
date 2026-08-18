@@ -12,13 +12,8 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import Select2 from "@/components/Select2";
+import PctMontantPair, { montantDepuisPct } from "@/components/PctMontantPair";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { terrainsApi } from "@/lib/api";
@@ -244,19 +239,15 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="type">Type de terrain *</Label>
-              <Select
+              <Select2
                 value={form.type}
-                onValueChange={(value) => setForm({ ...form, type: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="5v5">5 contre 5</SelectItem>
-                  <SelectItem value="7v7">7 contre 7</SelectItem>
-                  <SelectItem value="11v11">11 contre 11</SelectItem>
-                </SelectContent>
-              </Select>
+                onChange={(value) => setForm({ ...form, type: value })}
+                options={[
+                  { value: "5v5", label: "5 contre 5" },
+                  { value: "7v7", label: "7 contre 7" },
+                  { value: "11v11", label: "11 contre 11" },
+                ]}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="prix_entier">Terrain entier / heure (FCFA) *</Label>
@@ -276,35 +267,42 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
               <Label htmlFor="prix_moitie">Moitié du terrain / heure (FCFA) *</Label>
               <Input id="prix_moitie" type="number" placeholder="Ex: 40000" value={form.prix_moitie} onChange={(e) => setForm({ ...form, prix_moitie: e.target.value })} required />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="pourcentage_avance">Avance de reservation (%) *</Label>
-              <Input id="pourcentage_avance" type="number" min="1" max="100" step="0.1" placeholder="Ex: 8" value={form.pourcentage_avance} onChange={(e) => setForm({ ...form, pourcentage_avance: e.target.value })} required />
-            </div>
+          </div>
+
+          <div className="space-y-4">
+            <PctMontantPair
+              label="Avance de réservation"
+              labelMontant="Montant avance"
+              pct={form.pourcentage_avance}
+              onPctChange={(value) => setForm({ ...form, pourcentage_avance: value })}
+              base={Number(form.prix_entier) || 0}
+              minPct={1}
+            />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="modele_revenus">Modele de revenus *</Label>
-              <Select
+              <Select2
                 value={form.modele_revenus}
                 disabled
-                onValueChange={(value) => setForm({ ...form, modele_revenus: value })}
-              >
-                <SelectTrigger id="modele_revenus">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="commission">Commission</SelectItem>
-                  <SelectItem value="abonnement">Abonnement mensuel</SelectItem>
-                  <SelectItem value="achat_definitif">Achat definitif</SelectItem>
-                </SelectContent>
-              </Select>
+                onChange={(value) => setForm({ ...form, modele_revenus: value })}
+                options={[
+                  { value: "commission", label: "Commission" },
+                  { value: "abonnement", label: "Abonnement mensuel" },
+                  { value: "achat_definitif", label: "Achat definitif" },
+                ]}
+              />
             </div>
             {form.modele_revenus === "commission" && (
-              <div className="space-y-2">
-                <Label htmlFor="commission_pourcentage">Commission plateforme (%)</Label>
-                <Input id="commission_pourcentage" type="number" min="0" max="100" step="0.1" placeholder="Ex: 10" value={form.commission_pourcentage} disabled readOnly onChange={(e) => setForm({ ...form, commission_pourcentage: e.target.value })} />
-              </div>
+              <PctMontantPair
+                label="Commission plateforme"
+                labelMontant="Montant commission"
+                pct={form.commission_pourcentage}
+                onPctChange={(value) => setForm({ ...form, commission_pourcentage: value })}
+                base={montantDepuisPct(Number(form.pourcentage_avance) || 0, Number(form.prix_entier) || 0)}
+                disabled
+              />
             )}
             {form.modele_revenus === "abonnement" && (
               <div className="space-y-2">
@@ -321,7 +319,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
           </div>
 
           <p className="rounded-xl border border-[color-mix(in_srgb,var(--color-primary)_18%,white)] bg-[color-mix(in_srgb,var(--color-primary)_7%,white)] px-4 py-3 text-xs text-muted-foreground">
-            Le modele de revenus est defini par le Super Admin apres negociation. Vous pouvez modifier les informations du terrain, mais pas le mode commission / abonnement / achat definitif.
+            Le mode de paiement du terrain est fixé avec TerrainSN. Tu peux modifier les infos du terrain, mais pas ce mode.
           </p>
 
           {/* Ville et Adresse */}
