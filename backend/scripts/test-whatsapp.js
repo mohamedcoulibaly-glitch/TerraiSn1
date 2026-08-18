@@ -1,79 +1,46 @@
 /**
- * Test d'envoi WhatsApp réel.
+ * Test d'envoi WhatsApp via OpenWA.
  * Usage: node scripts/test-whatsapp.js [numero]
  * Exemple: node scripts/test-whatsapp.js +221778261225
  *
- * Prérequis: scanner le QR au premier lancement (WhatsApp → Appareils connectés).
+ * Prérequis: session plateforme connectée (QR sur /whatsapp-qr ou dashboard OpenWA).
  */
 require('dotenv').config();
 
-const qrcode = require('qrcode-terminal');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const whatsappClient = require('../whatsappClient');
+const { formatNumero } = require('../notificationService');
 
 const target = process.argv[2] || process.env.WHATSAPP_TEST_NUMBER || '+221778261225';
 const message =
   process.argv.slice(3).join(' ') ||
-  `\u2705 *TerrainSN* — test WhatsApp OK \u26BD\n` +
+  `\u2705 *TerrainSN* — test WhatsApp OpenWA OK \u26BD\n` +
   `\uD83D\uDCF1 Message envoye le ${new Date().toLocaleString('fr-SN')}.\n` +
-  `QR + WhatsApp operationnels !`;
-
-function toChatId(telephone) {
-  let numero = String(telephone || '').replace(/\D/g, '');
-  if (numero.startsWith('00')) numero = numero.slice(2);
-  if (numero.length === 9) numero = `221${numero}`;
-  if (!numero.startsWith('221') || numero.length !== 12) {
-    throw new Error(`Numéro WhatsApp sénégalais invalide : ${telephone}`);
-  }
-  return `${numero}@c.us`;
-}
+  `Integration OpenWA operationnelle !`;
 
 async function main() {
-  const chatId = toChatId(target);
+  if (!process.env.OPENWA_API_KEY) {
+    throw new Error('OPENWA_API_KEY manquant dans backend/.env');
+  }
+  const chatId = formatNumero(target);
   console.log(`Cible: ${target} → ${chatId}`);
-  console.log('Démarrage WhatsApp (Chromium)…');
+  console.log(`OpenWA: ${process.env.OPENWA_BASE_URL || 'https://mywa.tickets-place.net'}`);
 
-  const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: process.env.WHATSAPP_SESSION_PATH || '.wwebjs_auth' }),
-    puppeteer: {
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    },
-  });
+  const started = await whatsappClient.ensureStarted('platform');
+  if (!started.ready) {
+    const qr = await whatsappClient.getQrPayload('platform');
+    if (qr.dataUrl) {
+      console.log('📱 Session non connectée — ouvrez /whatsapp-qr pour scanner le QR OpenWA.');
+    }
+    throw new Error(started.error || 'WhatsApp plateforme non connecté sur OpenWA');
+  }
 
-  client.on('qr', (qr) => {
-    console.log('\n📱 Scannez ce QR avec WhatsApp → Paramètres → Appareils connectés :\n');
-    qrcode.generate(qr, { small: true });
-  });
-
-  client.on('authenticated', () => console.log('🔐 Authentifié, synchronisation…'));
-  client.on('auth_failure', (msg) => {
-    console.error('❌ Échec auth:', msg);
-    process.exit(1);
-  });
-
-  const ready = new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Timeout 180s — QR non scanné ou session bloquée')),
-      180000
-    );
-    client.on('ready', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-
-  await client.initialize();
-  await ready;
-  console.log('✅ WhatsApp connecté — envoi…');
-
-  await client.sendMessage(chatId, message);
+  console.log('✅ Session OpenWA prête — envoi…');
+  await whatsappClient.sendMessageForSession('platform', chatId, message);
   console.log(`✅ Message envoyé à ${target}`);
-
-  await client.destroy();
   process.exit(0);
 }
 
-main().catch(async (err) => {
+main().catch((err) => {
   console.error('❌', err.message || err);
   process.exit(1);
 });

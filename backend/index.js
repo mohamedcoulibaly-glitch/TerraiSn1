@@ -1717,35 +1717,42 @@ app.post('/api/gerant/reservations', authMiddleware, requireRole('gerant'), asyn
   return creerReservationAvecPaiement(req, res, 'gerant', 2 * 60 * 60 * 1000, Number(req.user.terrain_id));
 });
 
-app.get('/api/whatsapp/status', (req, res) => {
+app.get('/api/whatsapp/status', async (req, res) => {
   const whatsappClient = require('./whatsappClient');
-  res.json(typeof whatsappClient.getStatus === 'function' ? whatsappClient.getStatus() : {
+  if (typeof whatsappClient.getStatus === 'function') {
+    return res.json(await whatsappClient.getStatus());
+  }
+  res.json({
     connected: Boolean(whatsappClient.isReady),
     mock: String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true',
+    provider: 'openwa',
   });
 });
 
-app.get('/api/whatsapp/qr', (req, res) => {
+app.get('/api/whatsapp/qr', async (req, res) => {
   const whatsappClient = require('./whatsappClient');
   const payload = typeof whatsappClient.getQrPayload === 'function'
-    ? whatsappClient.getQrPayload()
-    : { connected: Boolean(whatsappClient.isReady), mock: false };
+    ? await whatsappClient.getQrPayload()
+    : { connected: Boolean(whatsappClient.isReady), mock: false, provider: 'openwa' };
   res.json(payload);
 });
 
-app.get('/whatsapp-qr', (req, res) => {
+app.get('/whatsapp-qr', async (req, res) => {
   const whatsappClient = require('./whatsappClient');
+  if (typeof whatsappClient.ensureStarted === 'function') {
+    await whatsappClient.ensureStarted('platform').catch(() => {});
+  }
   const payload = typeof whatsappClient.getQrPayload === 'function'
-    ? whatsappClient.getQrPayload()
+    ? await whatsappClient.getQrPayload()
     : { connected: Boolean(whatsappClient.isReady) };
-  const status = typeof whatsappClient.getStatus === 'function' ? whatsappClient.getStatus() : {};
+  const status = typeof whatsappClient.getStatus === 'function' ? await whatsappClient.getStatus() : {};
   const img = payload.dataUrl
     ? `<img src="${payload.dataUrl}" alt="QR WhatsApp" width="320" height="320" />`
     : payload.connected
-      ? `<p style="color:#0A5C36;font-size:1.25rem">WhatsApp deja connecte</p>`
+      ? `<p style="color:#0A5C36;font-size:1.25rem">WhatsApp deja connecte (OpenWA)</p>`
       : status.mock
         ? `<p>Mode MOCK actif (WHATSAPP_MOCK=true)</p>`
-        : `<p>En attente du QR… rafraîchissement auto</p><script>setTimeout(()=>location.reload(),2500)</script>`;
+        : `<p>En attente du QR OpenWA… rafraîchissement auto</p><script>setTimeout(()=>location.reload(),2500)</script>`;
   res.type('html').send(`<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"/><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>TerrainSN — Connecter WhatsApp</title>
@@ -1757,6 +1764,7 @@ app.get('/whatsapp-qr', (req, res) => {
 </style></head><body><div class="card">
 <h1>Scanner pour activer WhatsApp</h1>
 <p>WhatsApp → Paramètres → Appareils connectés → Connecter un appareil</p>
+<p style="font-size:.8rem;color:#888">Via OpenWA · ${process.env.OPENWA_BASE_URL || 'https://mywa.tickets-place.net'}</p>
 ${img}
 <p style="margin-top:1rem;font-size:.85rem">Puis un test peut être envoyé à ${process.env.WHATSAPP_TEST_NUMBER || ''}</p>
 </div></body></html>`);

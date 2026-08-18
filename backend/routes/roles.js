@@ -226,7 +226,7 @@ function gerantWaKey(req) {
 
 router.get('/gerant/whatsapp/status', authMiddleware, requireRole('gerant'), async (req, res) => {
   const key = gerantWaKey(req);
-  const status = whatsappClient.getStatus(key);
+  const status = await whatsappClient.getStatus(key);
   if (status.connected && status.phone) {
     const db = await getDb();
     await persistGerantWhatsapp(db, req.user.id, status.phone);
@@ -260,7 +260,7 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
     null;
 
   const started = await whatsappClient.ensureStarted(key, { force, phoneNumber });
-  const qr = whatsappClient.getQrPayload(key);
+  const qr = await whatsappClient.getQrPayload(key);
   if (started.mock || qr.mock) {
     return res.status(503).json({
       error:
@@ -287,13 +287,12 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
 
 router.get('/gerant/whatsapp/qr', authMiddleware, requireRole('gerant'), async (req, res) => {
   const key = gerantWaKey(req);
-  const status = whatsappClient.getStatus(key);
+  const status = await whatsappClient.getStatus(key);
   // Ne démarrer une session que s'il n'y a ni QR ni init en cours
-  // (sinon on détruit le navigateur pendant que l'utilisateur scanne).
   if (!status.connected && !status.initializing && !status.hasQr) {
     await whatsappClient.ensureStarted(key);
   }
-  res.json(whatsappClient.getQrPayload(key));
+  res.json(await whatsappClient.getQrPayload(key));
 });
 
 router.post('/gerant/whatsapp/disconnect', authMiddleware, requireRole('gerant'), async (req, res) => {

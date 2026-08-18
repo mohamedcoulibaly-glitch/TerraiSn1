@@ -69,9 +69,10 @@ async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = '
     console.log(`[WHATSAPP MOCK][${key}] Image vers ${telephone} : ${mediaUrl} (${caption || ''})`);
     return;
   }
-  const { MessageMedia } = require('whatsapp-web.js');
-  const media = await MessageMedia.fromUrl(mediaUrl, { unsafeMime: true });
-  await client.sendMessageForSession(key, formatNumero(telephone), null, { media, sendOptions: { caption: caption || '' } });
+  await client.sendImageForSession(key, formatNumero(telephone), {
+    url: mediaUrl,
+    caption: caption || '',
+  });
 }
 
 function sessionKeyFromReservation(reservation = {}) {
@@ -229,9 +230,11 @@ async function envoyerConfirmation(reservationId) {
     const caption = `QR Code — ${data.code_reservation}`;
 
     if (fs.existsSync(absolutePath) && String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
-      const { MessageMedia } = require('whatsapp-web.js');
-      const media = MessageMedia.fromFilePath(absolutePath);
-      await client.sendMessageForSession(waKey, formatNumero(tel), null, { media, sendOptions: { caption } });
+      await client.sendImageForSession(waKey, formatNumero(tel), {
+        filePath: absolutePath,
+        mimetype: 'image/png',
+        caption,
+      });
     } else {
       const imageUrl = data.qr_code_url.startsWith('http')
         ? data.qr_code_url
