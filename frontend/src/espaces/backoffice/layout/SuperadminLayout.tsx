@@ -12,11 +12,16 @@ import {
   X,
   Bell,
   LogOut,
-  ChevronRight,
   ExternalLink,
+  Sparkles,
+  MessageCircle,
+  CircleDot,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
+import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
+import WhatsAppInfraBanner from "@/espaces/backoffice/components/WhatsAppInfraBanner";
 
 export type SaCrumb = { label: string; to?: string };
 
@@ -31,7 +36,9 @@ const SaHeaderContext = createContext<SaHeaderCtx | null>(null);
 
 export function useSaHeader() {
   const ctx = useContext(SaHeaderContext);
-  if (!ctx) throw new Error("useSaHeader must be used inside SuperadminLayout");
+  if (!ctx) {
+    return { crumbs: [], setCrumbs: () => {}, alertCount: 0, setAlertCount: () => {} };
+  }
   return ctx;
 }
 
@@ -54,6 +61,9 @@ const FALLBACK_CRUMBS: Record<string, string> = {
   rapprochement: "Rapprochement",
   revenus: "Revenus",
   abonnements: "Abonnements",
+  commodites: "Commodités",
+  whatsapp: "WhatsApp",
+  audit: "Audit",
 };
 
 type NavEntry =
@@ -62,14 +72,15 @@ type NavEntry =
 
 const SECTIONS: { title: string; items: NavEntry[] }[] = [
   {
-    title: "Tableau de bord",
-    items: [{ kind: "link", to: "/backoffice/superadmin", label: "Dashboard", icon: LayoutDashboard, end: true }],
+    title: "",
+    items: [{ kind: "link", to: "/backoffice/superadmin", label: "Tableau de bord", icon: LayoutDashboard, end: true }],
   },
   {
-    title: "Plateforme",
+    title: "Gestion",
     items: [
       { kind: "link", to: "/backoffice/superadmin/terrains", label: "Terrains", icon: Map },
       { kind: "link", to: "/backoffice/superadmin/utilisateurs", label: "Utilisateurs", icon: Users },
+      { kind: "link", to: "/backoffice/superadmin/abonnements", label: "Abonnements", icon: CreditCard },
     ],
   },
   {
@@ -81,8 +92,12 @@ const SECTIONS: { title: string; items: NavEntry[] }[] = [
     ],
   },
   {
-    title: "Configuration",
-    items: [{ kind: "soon", label: "Abonnements", icon: CreditCard }],
+    title: "Plateforme",
+    items: [
+      { kind: "link", to: "/backoffice/superadmin/commodites", label: "Commodités", icon: Sparkles },
+      { kind: "link", to: "/backoffice/superadmin/audit", label: "Audit", icon: ClipboardList },
+      { kind: "link", to: "/backoffice/superadmin/whatsapp", label: "Paramètres", icon: MessageCircle },
+    ],
   },
 ];
 
@@ -104,30 +119,35 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
 
   return (
     <aside
-      className="flex flex-col h-full shrink-0"
-      style={{ width: "var(--sa-sidebar-width)", background: "var(--sa-sidebar-bg)" }}
+      className="sa-sidebar flex flex-col h-full shrink-0 overflow-x-hidden overflow-y-auto"
+      style={{
+        width: "var(--sa-sidebar-width)",
+        minWidth: "var(--sa-sidebar-width)",
+        background: "var(--sa-sidebar-bg)",
+        boxShadow: "1px 0 0 rgba(255,255,255,0.04)",
+      }}
     >
-      <div className="px-5 py-5" style={{ borderBottom: "1px solid var(--sa-sidebar-border)" }}>
-        <p className="text-white text-[16px] font-black tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-          TERRAIN.SN
+      <div className="h-14 px-4 flex items-center gap-2 min-w-0" style={{ borderBottom: "1px solid var(--sa-sidebar-border)" }}>
+        <CircleDot size={18} className="shrink-0" style={{ color: "var(--sa-sidebar-logo)" }} />
+        <p className="text-[15px] font-black tracking-tight truncate min-w-0" style={{ fontFamily: "var(--sa-font-display)", color: "var(--sa-sidebar-logo)" }}>
+          TerrainSN
         </p>
-        <span
-          className="mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold"
-          style={{ background: "var(--sa-primary-glow)", color: "var(--sa-primary-light)" }}
-        >
-          Super Admin
+        <span className="ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: "var(--sa-sidebar-active-bg)", color: "var(--sa-sidebar-active-text)" }}>
+          Admin
         </span>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
         {SECTIONS.map((section) => (
           <div key={section.title}>
+            {section.title ? (
             <p
               className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider"
               style={{ color: "var(--sa-sidebar-section)" }}
             >
               {section.title}
             </p>
+            ) : null}
             <div className="space-y-0.5">
               {section.items.map((item) => {
                 if (item.kind === "soon") {
@@ -150,23 +170,23 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
                     end={item.end}
                     onClick={onNavigate}
                     className={({ isActive }) =>
-                      `flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors ${
-                        isActive ? "pl-[9px]" : ""
+                      `flex items-center gap-2.5 mx-1 px-3 py-2 rounded-md text-[13px] font-medium leading-snug ${
+                        isActive ? "" : ""
                       }`
                     }
                     style={({ isActive }) =>
                       isActive
                         ? {
                             background: "var(--sa-sidebar-active-bg)",
-                            color: "var(--sa-sidebar-active)",
-                            borderLeft: "3px solid var(--sa-primary-light)",
+                            color: "var(--sa-sidebar-active-text)",
+                            boxShadow: "inset 3px 0 0 var(--sa-sidebar-active-border)",
                           }
                         : { color: "var(--sa-sidebar-text)" }
                     }
                     onMouseEnter={(e) => {
-                      if (!(e.currentTarget as HTMLAnchorElement).classList.contains("active")) {
-                        e.currentTarget.style.background = "var(--sa-sidebar-hover)";
-                        e.currentTarget.style.color = "#fff";
+                      if (e.currentTarget.getAttribute("aria-current") !== "page") {
+                        e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+                        e.currentTarget.style.color = "var(--sa-sidebar-text-hover)";
                       }
                     }}
                     onMouseLeave={(e) => {
@@ -174,11 +194,12 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
                       if (!active) {
                         e.currentTarget.style.background = "transparent";
                         e.currentTarget.style.color = "var(--sa-sidebar-text)";
+                        e.currentTarget.style.boxShadow = "none";
                       }
                     }}
                   >
-                    <item.icon size={16} />
-                    {item.label}
+                    <item.icon size={15} className="shrink-0" />
+                    <span className="min-w-0 flex-1 whitespace-normal break-words">{item.label}</span>
                   </NavLink>
                 );
               })}
@@ -195,7 +216,7 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
         >
           <span
             className="w-8 h-8 rounded-full grid place-items-center text-[11px] font-bold shrink-0"
-            style={{ background: "var(--sa-sidebar-active-bg)", color: "var(--sa-sidebar-active)" }}
+            style={{ background: "var(--sa-sidebar-active-bg)", color: "var(--sa-sidebar-active-text)" }}
           >
             {user?.photo_url ? (
               <img src={user.photo_url} alt="" className="w-full h-full object-cover rounded-full" />
@@ -204,7 +225,7 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
             )}
           </span>
           <span className="min-w-0">
-            <span className="block text-[12px] font-semibold truncate" style={{ color: "var(--sa-sidebar-active)" }}>
+            <span className="block text-[12px] font-semibold truncate" style={{ color: "var(--sa-sidebar-logo)" }}>
               {displayName(user)}
             </span>
             <span className="block text-[10px]" style={{ color: "var(--sa-sidebar-text)" }}>
@@ -212,15 +233,27 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
             </span>
           </span>
         </button>
-        <button
-          type="button"
-          onClick={() => logout()}
-          className="mt-1 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium"
-          style={{ color: "var(--sa-danger)" }}
-        >
-          <LogOut size={16} />
-          Déconnexion
-        </button>
+        <div className="mt-1 flex items-center gap-1 px-2">
+          <button
+            type="button"
+            onClick={() => logout()}
+            className="flex-1 inline-flex items-center justify-center gap-2 h-9 rounded-lg text-[12px]"
+            style={{ color: "var(--sa-sidebar-text)" }}
+            title="Déconnexion"
+          >
+            <LogOut size={15} />
+          </button>
+          <a
+            href="/joueur"
+            target="_blank"
+            rel="noreferrer"
+            className="flex-1 inline-flex items-center justify-center h-9 rounded-lg"
+            style={{ color: "var(--sa-sidebar-text)" }}
+            title="Voir l'app"
+          >
+            <ExternalLink size={15} />
+          </a>
+        </div>
       </div>
     </aside>
   );
@@ -231,6 +264,7 @@ export default function SuperadminLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [crumbs, setCrumbs] = useState<SaCrumb[]>([]);
   const [alertCount, setAlertCount] = useState(0);
+  const { down: waDown } = useWhatsappInfra(true);
 
   const autoCrumbs = useMemo<SaCrumb[]>(() => {
     const parts = location.pathname.split("/").filter(Boolean);
@@ -246,7 +280,10 @@ export default function SuperadminLayout() {
   return (
     <SaHeaderContext.Provider value={ctx}>
       <div className="superadmin-app min-h-screen" style={{ background: "var(--sa-bg)" }}>
-        <div className="hidden md:flex fixed inset-y-0 left-0 z-40">
+        <div
+          className="hidden md:flex fixed inset-y-0 left-0 z-40"
+          style={{ width: "var(--sa-sidebar-width)", minWidth: "var(--sa-sidebar-width)" }}
+        >
           <SidebarNav onNavigate={() => {}} />
         </div>
 
@@ -259,9 +296,9 @@ export default function SuperadminLayout() {
           </div>
         ) : null}
 
-        <div className="md:ml-[240px] min-h-screen flex flex-col">
+        <div className="sa-shell-main min-h-screen flex flex-col">
           <header
-            className="sticky top-0 z-30 flex items-center justify-between gap-3 px-4 md:px-6"
+            className="sticky top-0 z-30 flex items-center justify-between gap-3 px-5 md:px-8"
             style={{
               height: "var(--sa-header-height)",
               background: "var(--sa-surface)",
@@ -277,10 +314,10 @@ export default function SuperadminLayout() {
               >
                 {mobileOpen ? <X size={20} /> : <Menu size={20} />}
               </button>
-              <nav className="flex items-center gap-1 text-[13px] overflow-x-auto scrollbar-hide" style={{ color: "var(--sa-muted)" }}>
+              <nav className="flex items-center gap-1 text-[13px] overflow-x-auto scrollbar-hide" style={{ color: "var(--sa-text-3)" }}>
                 {shown.map((c, i) => (
                   <span key={`${c.label}-${i}`} className="flex items-center gap-1 shrink-0">
-                    {i > 0 ? <ChevronRight size={14} /> : null}
+                    {i > 0 ? <span style={{ color: "var(--sa-text-muted)" }}>/</span> : null}
                     {i === shown.length - 1 ? (
                       <span className="font-medium" style={{ color: "var(--sa-text)" }}>
                         {c.label}
@@ -297,6 +334,10 @@ export default function SuperadminLayout() {
               </nav>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <span className="hidden sm:inline-flex items-center gap-1.5 text-[12px]" style={{ color: "var(--sa-text-3)" }}>
+                <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: waDown ? "var(--sa-danger)" : "var(--sa-success)" }} />
+                {waDown ? "Hors ligne" : "Live"}
+              </span>
               <NavLink
                 to="/backoffice/superadmin"
                 className="relative inline-flex items-center justify-center w-9 h-9 rounded-lg"
@@ -314,17 +355,22 @@ export default function SuperadminLayout() {
                 ) : null}
               </NavLink>
               <a
-                href="/"
+                href="/joueur"
+                target="_blank"
+                rel="noreferrer"
                 className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-semibold"
                 style={{ border: "1px solid var(--sa-border)", color: "var(--sa-text-2)", background: "var(--sa-surface)" }}
               >
                 <ExternalLink size={13} />
-                Retour à l'app
+                Voir l&apos;app
               </a>
             </div>
           </header>
-          <main className="flex-1 p-4 md:p-6">
-            <Outlet />
+          <WhatsAppInfraBanner visible={waDown} tone="superadmin" />
+          <main className="flex-1 min-w-0 px-5 py-6 md:px-8 md:py-8">
+            <div className="max-w-[1280px] mx-auto w-full min-w-0">
+              <Outlet />
+            </div>
           </main>
         </div>
       </div>

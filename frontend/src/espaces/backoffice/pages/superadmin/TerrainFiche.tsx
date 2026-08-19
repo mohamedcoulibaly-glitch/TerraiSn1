@@ -1,12 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Loader2, Upload } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { superAdminApi } from "@/services/superAdminApi";
+import { superAdminApi, type TerrainPhoto } from "@/services/superAdminApi";
 import { useAuth } from "@/hooks/use-auth";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
 import GrilleTarifaireAdmin from "@/espaces/backoffice/components/GrilleTarifaireAdmin";
 import ContratPaiementTab from "@/espaces/backoffice/components/superadmin/ContratPaiementTab";
+import EssaiGratuitSection from "@/espaces/backoffice/components/superadmin/EssaiGratuitSection";
+import FeatureFlag, { type TerrainFeature } from "@/espaces/backoffice/components/superadmin/FeatureFlag";
+import PhotoUploadTerrain from "@/espaces/backoffice/components/superadmin/PhotoUploadTerrain";
+import LocalisationTerrain from "@/espaces/backoffice/components/superadmin/LocalisationTerrain";
+import TerrainCommoditesEditor, { type CommoditeToggle } from "@/espaces/backoffice/components/superadmin/TerrainCommoditesEditor";
+import AuditTables, { type AuditCommoditeRow, type AuditPhotoRow } from "@/espaces/backoffice/components/superadmin/AuditTables";
 import {
   gerantDuTerrain,
   getContratOverlay,
@@ -16,11 +22,20 @@ import {
 
 const TABS = [
   { id: "infos", label: "Informations" },
+  { id: "localisation", label: "Localisation" },
   { id: "contrat", label: "Contrat paiement" },
+  { id: "features", label: "Fonctionnalités" },
   { id: "tarifs", label: "Tarifs" },
   { id: "users", label: "Utilisateurs" },
+  { id: "audit", label: "Audit" },
   { id: "historique", label: "Historique" },
 ] as const;
+
+function toCoord(value: unknown): number | null {
+  if (value === "" || value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
 export default function TerrainFiche() {
   const { id } = useParams();
@@ -33,7 +48,19 @@ export default function TerrainFiche() {
   const [users, setUsers] = useState<any[]>([]);
   const [contrat, setContrat] = useState<ContratOverlay>(getContratOverlay(terrainId));
   const [toggling, setToggling] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [photos, setPhotos] = useState<TerrainPhoto[]>([]);
+  const [adresseTheorique, setAdresseTheorique] = useState("");
+  const [adresseNominatim, setAdresseNominatim] = useState("");
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
+  const [erreurLoc, setErreurLoc] = useState<string | undefined>();
+  const [savingLoc, setSavingLoc] = useState(false);
+  const [catalogCommodites, setCatalogCommodites] = useState<CommoditeToggle[]>([]);
+  const [selectedCommodites, setSelectedCommodites] = useState<number[]>([]);
+  const [savingCommodites, setSavingCommodites] = useState(false);
+  const [auditPhotos, setAuditPhotos] = useState<AuditPhotoRow[]>([]);
+  const [auditCommodites, setAuditCommodites] = useState<AuditCommoditeRow[]>([]);
+  const [features, setFeatures] = useState<TerrainFeature[]>([]);
 
   useSaCrumbs([
     { label: "Terrains", to: "/backoffice/superadmin/terrains" },
@@ -41,15 +68,65 @@ export default function TerrainFiche() {
   ]);
 
   const load = () =>
-    Promise.all([superAdminApi.terrains(), superAdminApi.users()]).then(([t, u]) => {
-      setTerrain(t.find((x: any) => Number(x.id) === terrainId) || null);
-      setUsers(u);
+    Promise.all([
+      superAdminApi.terrains(),
+      superAdminApi.users(),
+      superAdminApi.terrainPhotos(terrainId).catch(() => []),
+      superAdminApi.terrainCommodites(terrainId).catch(() => []),
+    ]).then(([t, u, p, commodites]) => {
+      const list = Array.isArray(t) ? t : [];
+      const found = list.find((x: any) => Number(x.id) === terrainId) || null;
+      setTerrain(found);
+      setUsers(Array.isArray(u) ? u : []);
       setContrat(getContratOverlay(terrainId));
+      setPhotos(Array.isArray(p) ? p : []);
+      const commoditesList = Array.isArray(commodites) ? commodites : [];
+      setCatalogCommodites(commoditesList);
+      setSelectedCommodites(
+        commoditesList.filter((c: CommoditeToggle) => c.associee).map((c: CommoditeToggle) => Number(c.id)),
+      );
+      if (found) {
+        setAdresseTheorique(found.adresse_theorique || "");
+        setAdresseNominatim(found.adresse_nominatim || "");
+        setLatitude(toCoord(found.latitude));
+        setLongitude(toCoord(found.longitude));
+      }
     });
 
   useEffect(() => {
     load().catch(console.error);
   }, [terrainId]);
+
+  useEffect(() => {
+    if (tab !== "features") return;
+    superAdminApi
+      .terrainFeatures(terrainId)
+      .then((rows) => setFeatures(Array.isArray(rows) ? rows : []))
+      .catch(() => toast.error("Impossible de charger les fonctionnalités"));
+  }, [tab, terrainId]);
+
+  useEffect(() => {
+    if (tab !== "audit") return;
+    superAdminApi
+      .terrainAudit(terrainId)
+      .then((data) => {
+        setAuditPhotos(Array.isArray(data?.photos) ? data.photos : []);
+        setAuditCommodites(Array.isArray(data?.commodites) ? data.commodites : []);
+      })
+      .catch(() => toast.error("Impossible de charger l'audit"));
+  }, [tab, terrainId]);
+
+  const locComplete = Boolean(adresseTheorique.trim() && latitude != null && longitude != null);
+
+  const locDirty = useMemo(() => {
+    if (!terrain) return false;
+    return (
+      (adresseTheorique || "") !== (terrain.adresse_theorique || "") ||
+      (adresseNominatim || "") !== (terrain.adresse_nominatim || "") ||
+      toCoord(latitude) !== toCoord(terrain.latitude) ||
+      toCoord(longitude) !== toCoord(terrain.longitude)
+    );
+  }, [terrain, adresseTheorique, adresseNominatim, latitude, longitude]);
 
   if (!terrain) {
     return <p className="text-sm" style={{ color: "var(--sa-muted)" }}>Chargement…</p>;
@@ -70,18 +147,53 @@ export default function TerrainFiche() {
     try {
       await superAdminApi.terrainStatus(terrain.id, terrain.is_active ? "suspendu" : "actif");
       await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Impossible de changer le statut");
     } finally {
       setToggling(false);
     }
   }
 
-  const readFileAsDataUrl = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
+  async function saveCommodites() {
+    setSavingCommodites(true);
+    try {
+      await superAdminApi.saveTerrainCommodites(terrainId, selectedCommodites);
+      toast.success("Commodités enregistrées");
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Impossible d'enregistrer les commodités");
+    } finally {
+      setSavingCommodites(false);
+    }
+  }
+
+  async function saveLocalisation() {
+    if (!adresseTheorique.trim() || latitude == null || longitude == null) {
+      setErreurLoc(
+        !adresseTheorique.trim()
+          ? "L'adresse pour les joueurs est obligatoire"
+          : "Veuillez définir la position exacte du terrain sur la carte",
+      );
+      document.getElementById("sa-localisation-terrain")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    setErreurLoc(undefined);
+    setSavingLoc(true);
+    try {
+      const updated = await superAdminApi.updateLocalisation(terrain.id, {
+        adresse_theorique: adresseTheorique.trim(),
+        adresse_nominatim: adresseNominatim,
+        latitude,
+        longitude,
+      });
+      setTerrain((prev: any) => ({ ...prev, ...updated }));
+      toast.success("Localisation enregistrée");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
+    } finally {
+      setSavingLoc(false);
+    }
+  }
 
   return (
     <div className="space-y-5 max-w-[960px]">
@@ -91,7 +203,7 @@ export default function TerrainFiche() {
             {terrain.nom}
           </h1>
           <p className="text-[13px] mt-1" style={{ color: "var(--sa-muted)" }}>
-            {terrain.adresse || terrain.quartier || "—"} {terrain.ville ? `· ${terrain.ville}` : ""}
+            {terrain.adresse_theorique || terrain.adresse || terrain.quartier || "—"} {terrain.ville ? `· ${terrain.ville}` : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -131,7 +243,9 @@ export default function TerrainFiche() {
       </div>
 
       {tab === "contrat" ? (
-        <ContratPaiementTab
+        <>
+          <EssaiGratuitSection terrainId={terrainId} nom={terrain.nom} />
+          <ContratPaiementTab
           terrain={terrain}
           contrat={contrat}
           gerant={gerant}
@@ -141,6 +255,11 @@ export default function TerrainFiche() {
             load().catch(() => {});
           }}
         />
+        </>
+      ) : null}
+
+      {tab === "features" ? (
+        <FeatureFlag terrainId={terrainId} features={features} onSaved={setFeatures} />
       ) : null}
 
       {tab === "infos" ? (
@@ -163,31 +282,55 @@ export default function TerrainFiche() {
               <dd>{Number(terrain.prix_heure || 0).toLocaleString("fr-FR")} FCFA</dd>
             </div>
           </dl>
-          <label className="inline-flex items-center gap-2 h-10 px-3 rounded-lg text-[12px] font-semibold cursor-pointer" style={{ border: "1px solid var(--sa-border)", color: "var(--sa-primary)" }}>
-            {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload size={14} />}
-            Ajouter une photo
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              className="hidden"
-              disabled={uploading}
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                setUploading(true);
-                try {
-                  const dataUrl = await readFileAsDataUrl(file);
-                  await superAdminApi.uploadTerrainPhoto(terrain.id, { dataUrl, est_principale: true, ordre: 0 });
-                  toast.success("Photo ajoutée");
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : "Upload impossible");
-                } finally {
-                  setUploading(false);
-                }
-              }}
+          <PhotoUploadTerrain terrainId={terrain.id} photos={photos} onPhotosChange={setPhotos} />
+          <div className="pt-4">
+            <TerrainCommoditesEditor
+              embedded
+              items={catalogCommodites}
+              selectedIds={selectedCommodites}
+              onChange={setSelectedCommodites}
+              onSave={() => void saveCommodites()}
+              saving={savingCommodites}
             />
-          </label>
+          </div>
         </section>
+      ) : null}
+
+      {tab === "localisation" ? (
+        <div className="space-y-3">
+          <LocalisationTerrain
+            adresseTheorique={adresseTheorique}
+            adresseNominatim={adresseNominatim}
+            latitude={latitude}
+            longitude={longitude}
+            onChangeAdresseTheorique={(v) => {
+              setAdresseTheorique(v);
+              if (erreurLoc) setErreurLoc(undefined);
+            }}
+            onChangeCoordonnees={(lat, lng, nominatim) => {
+              setLatitude(lat);
+              setLongitude(lng);
+              setAdresseNominatim(nominatim);
+              if (erreurLoc) setErreurLoc(undefined);
+            }}
+            erreur={erreurLoc}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={savingLoc || !locDirty}
+              onClick={() => void saveLocalisation()}
+              className="min-h-[44px] px-5 rounded-lg text-[13px] font-semibold text-white inline-flex items-center gap-2"
+              style={{ background: "var(--sa-primary)", opacity: savingLoc || !locDirty ? 0.6 : 1 }}
+            >
+              {savingLoc ? <Loader2 size={14} className="animate-spin" /> : null}
+              Enregistrer la localisation
+            </button>
+            <p className="text-[12px]" style={{ color: locComplete ? "var(--sa-success)" : "var(--sa-danger)" }}>
+              {locComplete ? "Adresse + coordonnées ✓" : "Adresse + coordonnées ✗"}
+            </p>
+          </div>
+        </div>
       ) : null}
 
       {tab === "tarifs" ? (
@@ -217,6 +360,10 @@ export default function TerrainFiche() {
             </tbody>
           </table>
         </section>
+      ) : null}
+
+      {tab === "audit" ? (
+        <AuditTables photos={auditPhotos} commodites={auditCommodites} />
       ) : null}
 
       {tab === "historique" ? (

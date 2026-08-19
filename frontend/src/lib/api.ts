@@ -8,6 +8,8 @@ import {
   type CachedReservation,
 } from './offlineStore';
 import type { OperationalStage } from './kanbanRules';
+import { WHATSAPP_INFRA_MESSAGE } from './whatsappMessages';
+import { registerBackgroundSync } from './pwaRegister';
 
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -40,7 +42,7 @@ function removeUser() {
 }
 
 const TECHNICAL_ERROR_RE = /syntaxerror|sql\b|stack|paytech|<html|exception|traceback|econnrefused|errno/i;
-const WHATSAPP_USER_ERROR_RE = /whatsapp non connect|numero whatsapp|envoi whatsapp|lien whatsapp/i;
+const WHATSAPP_USER_ERROR_RE = /whatsapp non connect|numero whatsapp|envoi whatsapp|lien whatsapp|problème avec whatsapp|paramètres pour le lier/i;
 
 function isTechnicalMessage(message: string): boolean {
   if (!message) return true;
@@ -80,8 +82,11 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
   if ((isQrScan || isGerantRoute) && raw && !isTechnicalMessage(raw)) {
     return raw;
   }
-  if (WHATSAPP_USER_ERROR_RE.test(raw)) {
-    return raw;
+  if (/openwa|chromium|puppeteer|engine_type|mywa\.tickets|pthread_create/i.test(raw) || path.includes('whatsapp')) {
+    if (WHATSAPP_USER_ERROR_RE.test(raw) && !/openwa|chromium|puppeteer|engine_type/i.test(raw)) {
+      return raw;
+    }
+    return WHATSAPP_INFRA_MESSAGE;
   }
   if (isAuth) {
     return 'Identifiants incorrects ou session expirée.';
@@ -158,6 +163,7 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
   let res: Response;
   try {
     res = await fetch(`${API_URL}${endpoint}`, {
+      cache: 'no-store',
       ...options,
       headers,
       credentials: 'include',
@@ -474,10 +480,11 @@ export const reservationsApi = {
     heure_debut: string;
     heure_fin: string;
     joueur_nom: string;
+    joueur_prenom?: string;
     joueur_telephone?: string;
     format_terrain?: 'moitie' | 'entier';
     joueur_id?: number;
-    mode?: 'paiement' | 'bloquer';
+    mode?: 'paiement' | 'bloquer' | 'manuel';
     anonyme?: boolean;
   }) {
     return await request('/reservations/gerant', { method: 'POST', body: JSON.stringify(data) });
@@ -557,8 +564,31 @@ export const proprietaireApi = {
     return await request(`/proprietaire/revenus?periode=${periode}`);
   },
 
+  async finances(periode: 'aujourd_hui' | 'semaine' | 'mois' | 'annee' = 'aujourd_hui', terrainId?: number | string) {
+    const sp = new URLSearchParams({ periode });
+    if (terrainId != null && terrainId !== '' && terrainId !== 'all') sp.set('terrain_id', String(terrainId));
+    return await request(`/proprietaire/finances?${sp.toString()}`);
+  },
+
   async santeTerrain(terrainId: number | string) {
     return await request(`/proprietaire/sante/${terrainId}`);
+  },
+
+  async confirmerAvance(reservationId: number | string) {
+    return await request(`/proprietaire/reservations/${reservationId}/confirmer-avance`, {
+      method: 'POST',
+    });
+  },
+
+  async getTarifs(terrainId: number | string) {
+    return await request(`/proprietaire/terrains/${terrainId}/tarifs`);
+  },
+
+  async proposerTarifs(terrainId: number | string, data: unknown) {
+    return await request(`/proprietaire/terrains/${terrainId}/tarifs/proposition`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
 };
 
@@ -592,6 +622,18 @@ export const gerantApi = {
     return await request(`/gerant/reservations/today${q}`);
   },
 
+  async reservationsWeek() {
+    return await request('/gerant/reservations/week');
+  },
+
+  async reservationsList(params?: { statut?: string; q?: string }) {
+    const sp = new URLSearchParams();
+    if (params?.statut) sp.set('statut', params.statut);
+    if (params?.q) sp.set('q', params.q);
+    const q = sp.toString();
+    return await request(`/gerant/reservations${q ? `?${q}` : ''}`);
+  },
+
   async reservationDetail(id: number | string) {
     return await request(`/gerant/reservations/${id}`);
   },
@@ -612,6 +654,19 @@ export const gerantApi = {
     if (params?.filter) sp.set('filter', params.filter);
     const q = sp.toString();
     return await request(`/gerant/joueurs${q ? `?${q}` : ''}`);
+  },
+
+  async joueurByTelephone(numero: string) {
+    return await request(`/joueurs/telephone/${encodeURIComponent(numero)}`) as {
+      trouve: boolean;
+      joueur: {
+        id: number;
+        nom: string | null;
+        prenom: string | null;
+        display_nom: string;
+        telephone: string | null;
+      } | null;
+    };
   },
 
   async joueurDetail(id: number | string) {
@@ -675,6 +730,21 @@ export const gerantApi = {
     return await request('/gerant/portefeuille');
   },
 
+  async finances(periode: 'aujourd_hui' | 'semaine' | 'mois' | 'annee' = 'aujourd_hui') {
+    return await request(`/gerant/finances?periode=${encodeURIComponent(periode)}`);
+  },
+
+  async dettes() {
+    return await request('/gerant/dettes');
+  },
+
+  async confirmerManuellement(id: number | string, note?: string) {
+    return await request(`/gerant/reservations/${id}/confirmer-manuellement`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+
   async whatsappStatus() {
     return await request('/gerant/whatsapp/status');
   },
@@ -694,6 +764,46 @@ export const gerantApi = {
     return await request('/gerant/whatsapp/disconnect', { method: 'POST' });
   },
 
+  async terrainCommodites() {
+    return await request('/gerant/terrain/commodites');
+  },
+
+  async patchTerrainCommodites(commodite_ids: number[]) {
+    return await request('/gerant/terrain/commodites', {
+      method: 'PATCH',
+      body: JSON.stringify({ commodite_ids }),
+    });
+  },
+
+  async terrainPhotos() {
+    return await request('/gerant/terrain/photos');
+  },
+
+  async uploadTerrainPhoto(file: File, estPrincipale = false) {
+    const form = new FormData();
+    form.append('photos', file);
+    if (estPrincipale) form.append('est_principale', 'true');
+    const token = getToken();
+    const res = await fetch(`${API_URL}/gerant/terrain/photos`, {
+      method: 'POST',
+      body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as { error?: string }).error || 'Upload impossible');
+    return data;
+  },
+
+  async deleteTerrainPhoto(id: number) {
+    return await request(`/gerant/terrain/photos/${id}`, { method: 'DELETE' });
+  },
+
+  async setTerrainPhotoPrincipale(id: number) {
+    return await request(`/gerant/terrain/photos/${id}/principale`, { method: 'PATCH' });
+  },
+
   async updateHoraires(horaires: any[]) {
     return await request('/gerant/horaires', { method: 'PUT', body: JSON.stringify({ horaires }) });
   },
@@ -710,12 +820,71 @@ export const gerantApi = {
     return await request('/gerant/blocages/batch', { method: 'POST', body: JSON.stringify(data) });
   },
 
+  async addBlocageAbonnement(data: {
+    libelle: string;
+    date_debut: string;
+    date_fin: string;
+    heure_debut: string;
+    heure_fin: string;
+    jours: string[];
+    montant_mensuel_abonnement?: number | null;
+  }) {
+    return await request('/gerant/blocages/abonnement', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async addBlocageTournoi(data: {
+    libelle: string;
+    date_debut: string;
+    date_fin: string;
+    heure_debut?: string;
+    heure_fin?: string;
+    jours?: string[];
+    creneaux?: Array<{ heure_debut: string; heure_fin: string }>;
+    montant_tournoi?: number | null;
+  }) {
+    return await request('/gerant/blocages/tournoi', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async listBlocageGroupes(type?: "ABONNEMENT" | "TOURNOI") {
+    const q = type ? `?type=${encodeURIComponent(type)}` : "";
+    return await request(`/gerant/blocages/groupes${q}`);
+  },
+
+  async getBlocageGroupe(id: string) {
+    return await request(`/gerant/blocages/groupes/${id}`);
+  },
+
+  async encaisserBlocageGroupe(
+    id: string,
+    data: { montant: number; date_encaissement?: string; note?: string },
+  ) {
+    return await request(`/gerant/blocages/groupes/${id}/encaisser`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  async removeBlocageGroupe(id: string) {
+    return await request(`/gerant/blocages/groupes/${id}`, { method: 'DELETE' });
+  },
+
   async removeBlocage(id: number | string) {
     return await request(`/gerant/blocages/${id}`, { method: 'DELETE' });
   },
 
+  async removeBlocages(ids: number[]) {
+    return await request('/gerant/blocages/debloquer', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  },
+
   async getTarifs() {
     return await request('/gerant/tarifs');
+  },
+
+  async proposerTarifs(data: unknown) {
+    return await request('/gerant/tarifs/proposition', { method: 'POST', body: JSON.stringify(data) });
   },
 
   async getDevis(params: {

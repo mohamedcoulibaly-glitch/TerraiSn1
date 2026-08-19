@@ -2,16 +2,27 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
+  BarChart2,
   Clock,
+  DollarSign,
+  FlaskConical,
   Inbox,
+  MapPin,
+  MessageCircle,
   Percent,
-  TrendingUp,
-  XCircle,
+  RefreshCw,
+  ShoppingCart,
 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
+import SaKpi from "@/espaces/backoffice/components/superadmin/ui/SaKpi";
+import SaCard, { SaCardBody, SaCardFooter, SaCardHeader } from "@/espaces/backoffice/components/superadmin/ui/SaCard";
+import ModeRevenuBadge from "@/espaces/backoffice/components/superadmin/ui/ModeRevenuBadge";
+import { resolveModeRevenu } from "@/lib/modeRevenu";
+import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import { superAdminApi } from "@/services/superAdminApi";
 import { useSaCrumbs, useSaHeader } from "@/espaces/backoffice/layout/SuperadminLayout";
 import ContratBadge from "@/espaces/backoffice/components/superadmin/ContratBadge";
-import NumeroCopier from "@/espaces/backoffice/components/superadmin/NumeroCopier";
 import ConfirmationModal from "@/espaces/backoffice/components/superadmin/ConfirmationModal";
 import Select2 from "@/components/Select2";
 import {
@@ -22,59 +33,22 @@ import {
   getIncidentsAuto,
   relativeDepuis,
   upsertDemandeRetrait,
-  upsertIncidentAuto,
   type DemandeRetrait,
 } from "@/lib/saContrat";
 
-function KpiCard({
-  icon: Icon,
-  iconColor,
-  iconBg,
-  value,
-  valueColor,
-  label,
-  sub,
-  badge,
-}: {
-  icon: typeof TrendingUp;
-  iconColor: string;
-  iconBg: string;
-  value: string;
-  valueColor?: string;
-  label: string;
-  sub?: string;
-  badge?: boolean;
-}) {
-  return (
-    <article className="rounded-xl p-4" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-      <div className="flex items-start justify-between">
-        <span className="w-9 h-9 rounded-lg grid place-items-center" style={{ background: iconBg, color: iconColor }}>
-          <Icon size={16} />
-        </span>
-        {badge ? (
-          <span className="min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white grid place-items-center" style={{ background: "var(--sa-danger)" }}>
-            !
-          </span>
-        ) : null}
-      </div>
-      <p className="mt-3 text-[20px] font-semibold leading-none" style={{ color: valueColor || "var(--sa-text)", fontFamily: "var(--font-display)" }}>
-        {value}
-      </p>
-      <p className="mt-1 text-[11px]" style={{ color: "var(--sa-muted)" }}>{label}</p>
-      {sub ? <p className="mt-1 text-[10px]" style={{ color: "var(--sa-warning)" }}>{sub}</p> : null}
-    </article>
-  );
-}
-
 export default function Dashboard() {
   const { setAlertCount } = useSaHeader();
+  const { user } = useAuth();
+  const { down: waDown } = useWhatsappInfra(true);
   useSaCrumbs([{ label: "Tableau de bord" }]);
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
 
   const [finances, setFinances] = useState<any>();
   const [terrains, setTerrains] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [demandes, setDemandes] = useState<DemandeRetrait[]>([]);
   const [incidents, setIncidents] = useState(getIncidentsAuto());
+  const [essaiKpis, setEssaiKpis] = useState<{ actifs?: number; proches?: number; expires?: number } | null>(null);
   const [refModal, setRefModal] = useState<DemandeRetrait | null>(null);
   const [rejectModal, setRejectModal] = useState<DemandeRetrait | null>(null);
   const [refInput, setRefInput] = useState("");
@@ -89,9 +63,10 @@ export default function Dashboard() {
   useEffect(() => {
     superAdminApi.finances().then(setFinances).catch(console.error);
     Promise.all([superAdminApi.terrains(), superAdminApi.users()]).then(([t, u]) => {
-      setTerrains(t);
-      setUsers(u);
+      setTerrains(Array.isArray(t) ? t : []);
+      setUsers(Array.isArray(u) ? u : []);
     }).catch(console.error);
+    superAdminApi.essaiKpis().then(setEssaiKpis).catch(() => {});
     reloadOps();
   }, []);
 
@@ -120,6 +95,8 @@ export default function Dashboard() {
     retraitsOld ? { msg: `${retraitsOld} demande(s) de retrait depuis plus d'1 heure`, to: "/backoffice/superadmin/caisse", label: "Traiter" } : null,
     autoEchecs.length ? { msg: `${autoEchecs.length} payout auto en échec`, to: "/backoffice/superadmin/caisse", label: "Relancer" } : null,
     fenetreExpiree ? { msg: `${fenetreExpiree} terrain(s) — fenêtre de remboursement expirée, dû payable`, to: "/backoffice/superadmin/caisse", label: "Voir" } : null,
+    Number(essaiKpis?.expires) ? { msg: `${essaiKpis?.expires} essai(s) expiré(s)`, to: "/backoffice/superadmin/terrains", label: "Traiter" } : null,
+    Number(essaiKpis?.proches) ? { msg: `${essaiKpis?.proches} terrain(s) dont l'essai expire bientôt`, to: "/backoffice/superadmin/terrains", label: "Voir" } : null,
   ].filter(Boolean) as { msg: string; to: string; label: string }[];
 
   useEffect(() => {
@@ -130,10 +107,13 @@ export default function Dashboard() {
   const commission = Number(finances?.total_commissions || 0);
   const reverse = Number(finances?.total_reverse || 0);
   const duTotal = Math.max(0, encaisse - commission - reverse);
-  const duAuto = rows.filter((r) => r.c.payout_mode === "auto").reduce((s, r) => s + r.du, 0);
-  const duRetrait = rows.filter((r) => r.c.payout_mode === "retrait").reduce((s, r) => s + r.du, 0);
-  const bloque = sansNumero.reduce((s, r) => s + r.du, 0);
-  const autoActifs = rows.filter((r) => r.c.payout_mode === "auto" && r.c.production_paiement);
+  const modeCounts = {
+    essai: rows.filter((r) => resolveModeRevenu(r.t) === "essai").length,
+    commission: rows.filter((r) => resolveModeRevenu(r.t) === "commission").length,
+    abonnement: rows.filter((r) => resolveModeRevenu(r.t) === "abonnement").length,
+    achat: rows.filter((r) => resolveModeRevenu(r.t) === "achat").length,
+  };
+  const visibleAlertes = showAllAlerts ? alertes : alertes.slice(0, 3);
 
   function marquerEnvoye() {
     if (!refModal) return;
@@ -163,207 +143,203 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-6 max-w-[1200px]">
+    <div className="space-y-6">
+      <SaPageHeader
+        titre="Vue d'ensemble"
+        sousTitre={`${new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · Bonjour ${user?.prenom || "Admin"}`}
+        actions={<Link to="/backoffice/superadmin/terrains" className="sa-btn sa-btn-primary">+ Ajouter un terrain</Link>}
+      />
       {alertes.length > 0 ? (
-        <section className="rounded-xl px-4 py-3.5 space-y-2" style={{ background: "var(--sa-danger-bg)", border: "1px solid var(--sa-danger)" }}>
-          {alertes.map((a) => (
+        <section className="rounded-[var(--sa-radius-md)] px-3.5 py-2.5 space-y-1.5" style={{ background: "var(--sa-warning-subtle)", borderLeft: "3px solid var(--sa-warning)" }}>
+          {visibleAlertes.map((a) => (
             <div key={a.msg} className="flex items-start sm:items-center gap-2 text-[13px]">
-              <AlertTriangle size={14} className="shrink-0 mt-0.5" style={{ color: "var(--sa-danger)" }} />
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" style={{ color: "var(--sa-warning)" }} />
               <span className="flex-1" style={{ color: "var(--sa-text)" }}>{a.msg}</span>
-              <Link to={a.to} className="text-[12px] font-semibold shrink-0" style={{ color: "var(--sa-danger)" }}>
-                {a.label}
+              <Link to={a.to} className="text-[12px] font-semibold shrink-0" style={{ color: "var(--sa-warning-text)" }}>
+                Traiter →
               </Link>
             </div>
           ))}
+          {alertes.length > 3 ? (
+            <button type="button" className="text-[12px] font-semibold" style={{ color: "var(--sa-warning-text)" }} onClick={() => setShowAllAlerts((v) => !v)}>
+              {showAllAlerts ? "Réduire" : "Tout voir"}
+            </button>
+          ) : null}
         </section>
       ) : null}
 
-      <section className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-        <KpiCard icon={TrendingUp} iconColor="var(--sa-primary)" iconBg="var(--sa-primary-glow)" value={fcfa(encaisse)} label="Encaissé ce mois" />
-        <KpiCard icon={Percent} iconColor="var(--sa-success)" iconBg="var(--sa-success-bg)" value={fcfa(commission)} valueColor="var(--sa-success)" label="Commission ce mois" sub={`En fenêtre de remboursement : ${fcfa(0)}`} />
-        <KpiCard icon={Clock} iconColor="var(--sa-warning)" iconBg="var(--sa-warning-bg)" value={fcfa(duTotal)} valueColor="var(--sa-warning)" label="Dû payable (non encore reversé)" sub={`Auto : ${fcfa(duAuto)} · Retrait : ${fcfa(duRetrait)}`} />
-        <KpiCard
-          icon={AlertTriangle}
-          iconColor={bloque > 0 ? "var(--sa-danger)" : "var(--sa-success)"}
-          iconBg={bloque > 0 ? "var(--sa-danger-bg)" : "var(--sa-success-bg)"}
-          value={fcfa(bloque)}
-          valueColor={bloque > 0 ? "var(--sa-danger)" : "var(--sa-success)"}
-          label="Bloqué sans numéro Wave/OM"
-        />
-        <KpiCard icon={Inbox} iconColor="var(--sa-info)" iconBg="var(--sa-info-bg)" value={String(demandes.length)} label="Demandes de retrait en attente" badge={demandes.length > 0} />
-        <KpiCard icon={XCircle} iconColor="var(--sa-danger)" iconBg="var(--sa-danger-bg)" value={String(autoEchecs.length)} label="Payouts auto en échec" />
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+        <SaKpi icon={DollarSign} iconColor="var(--sa-success-text)" iconBg="var(--sa-success-subtle)" value={fcfa(encaisse)} label="Encaissé ce mois" />
+        <SaKpi icon={Percent} iconColor="var(--sa-primary-text)" iconBg="var(--sa-primary-subtle)" value={fcfa(commission)} label="Commission acquise" />
+        <SaKpi icon={MapPin} iconColor="var(--sa-info-text)" iconBg="var(--sa-info-subtle)" value={String(terrains.filter((t) => t.is_active).length)} label="Terrains actifs" />
+        <SaKpi icon={Clock} iconColor="var(--sa-warning-text)" iconBg="var(--sa-warning-subtle)" value={fcfa(duTotal)} label="Dû payable" />
+        <SaKpi icon={Inbox} iconColor="var(--sa-danger-text)" iconBg="var(--sa-danger-subtle)" value={String(demandes.length)} label="Retraits en attente" />
+        <SaKpi icon={FlaskConical} iconColor="var(--sa-mode-essai-text)" iconBg="var(--sa-mode-essai-bg)" value={String(essaiKpis?.actifs || 0)} label="Terrains en essai" />
       </section>
 
-      {demandes.length > 0 ? (
-        <section className="rounded-xl overflow-hidden" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-          <div className="px-4 py-3 flex items-center justify-between gap-2">
-            <div>
-              <h3 className="text-[15px] font-semibold flex items-center gap-2" style={{ color: "var(--sa-text)" }}>
-                Demandes de retrait à traiter
-                <span className="min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold text-white grid place-items-center" style={{ background: "var(--sa-danger)" }}>
-                  {demandes.length}
-                </span>
-              </h3>
-              <p className="text-[12px]" style={{ color: "var(--sa-muted)" }}>Ces gérants ont cliqué Retirer et attendent</p>
-            </div>
-            <Link to="/backoffice/superadmin/caisse" className="text-[12px] font-semibold" style={{ color: "var(--sa-primary)" }}>
-              Voir toutes les demandes
-            </Link>
-          </div>
-          <div className="hidden md:block overflow-x-auto">
-            <table className="sa-table">
-              <thead>
-                <tr>
-                  <th>Terrain</th>
-                  <th>Gérant</th>
-                  <th>Montant net</th>
-                  <th>Wave</th>
-                  <th>OM</th>
-                  <th>Depuis</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {demandes.map((d) => {
-                  const rel = relativeDepuis(d.demande_at);
-                  return (
-                    <tr key={d.id}>
-                      <td className="font-semibold text-[13px]">{d.terrain_nom}</td>
-                      <td className="text-[13px]">{d.gerant_nom}</td>
-                      <td className="font-bold" style={{ color: "var(--sa-success)" }}>{fcfa(d.montant_net)}</td>
-                      <td><NumeroCopier numero={d.wave_numero} masque /></td>
-                      <td><NumeroCopier numero={d.om_numero} masque /></td>
-                      <td style={{ color: rel.urgence === "danger" ? "var(--sa-danger)" : rel.urgence === "warn" ? "var(--sa-warning)" : "var(--sa-muted)" }}>{rel.label}</td>
+      <div className="grid grid-cols-1 min-[1100px]:grid-cols-[minmax(0,1fr)_minmax(280px,340px)] gap-5 items-start">
+        <div className="min-w-0 space-y-4">
+          <SaCard>
+            <SaCardHeader>
+              <p className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Terrains</p>
+              <Link to="/backoffice/superadmin/terrains" className="sa-btn sa-btn-ghost sa-btn-sm">Gérer →</Link>
+            </SaCardHeader>
+            <div className="overflow-x-auto">
+              <table className="sa-table">
+                <thead>
+                  <tr>
+                    <th>Terrain</th>
+                    <th>Mode</th>
+                    <th>Wave/OM</th>
+                    <th>Dû</th>
+                    <th>Statut</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 8).map(({ t, c, du }) => (
+                    <tr key={t.id}>
                       <td>
-                        <div className="flex gap-2">
-                          <button type="button" onClick={() => setRefModal(d)} className="h-8 px-2 rounded-md text-[11px] font-semibold text-white" style={{ background: "var(--sa-success)" }}>Marquer envoyé</button>
-                          <button type="button" onClick={() => setRejectModal(d)} className="h-8 px-2 rounded-md text-[11px] font-semibold" style={{ color: "var(--sa-danger)", border: "1px solid var(--sa-danger)" }}>Rejeter</button>
+                        <div className="sa-cell-stack">
+                          <Link to={`/backoffice/superadmin/terrains/${t.id}`} className="sa-cell-title">{t.nom}</Link>
+                          <p className="sa-cell-sub">{t.ville || t.quartier || "—"}</p>
                         </div>
                       </td>
+                      <td><ModeRevenuBadge mode={resolveModeRevenu(t)} /></td>
+                      <td>
+                        <div className="sa-canal-row">
+                          <ContratBadge statut={c.wave_statut} operateur="wave" />
+                          <ContratBadge statut={c.om_statut} operateur="om" />
+                        </div>
+                      </td>
+                      <td>{fcfa(du)}</td>
+                      <td>{t.is_active ? "Actif" : "Suspendu"}</td>
+                      <td><Link to={`/backoffice/superadmin/terrains/${t.id}`} className="text-[12px]" style={{ color: "var(--sa-primary)" }}>→</Link></td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div className="md:hidden p-3 space-y-3">
-            {demandes.map((d) => {
-              const rel = relativeDepuis(d.demande_at);
-              return (
-                <article key={d.id} className="rounded-lg p-3" style={{ border: "1px solid var(--sa-border)" }}>
-                  <p className="text-[13px] font-semibold">{d.terrain_nom}</p>
-                  <p className="text-[12px]" style={{ color: "var(--sa-muted)" }}>{d.gerant_nom}</p>
-                  <p className="mt-1 font-bold" style={{ color: "var(--sa-success)" }}>{fcfa(d.montant_net)}</p>
-                  <div className="mt-2 flex gap-2">
-                    <button type="button" onClick={() => setRefModal(d)} className="flex-1 h-10 rounded-md text-[12px] font-semibold text-white" style={{ background: "var(--sa-success)" }}>Marquer envoyé</button>
-                    <button type="button" onClick={() => setRejectModal(d)} className="flex-1 h-10 rounded-md text-[12px] font-semibold" style={{ color: "var(--sa-danger)", border: "1px solid var(--sa-danger)" }}>Rejeter</button>
-                  </div>
-                  <p className="mt-1 text-[11px]" style={{ color: rel.urgence === "danger" ? "var(--sa-danger)" : "var(--sa-warning)" }}>{rel.label}</p>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <SaCardFooter>
+              <Link to="/backoffice/superadmin/terrains" className="text-[12px] font-semibold" style={{ color: "var(--sa-primary)" }}>Voir tous les terrains →</Link>
+            </SaCardFooter>
+          </SaCard>
 
-      {autoActifs.length > 0 || autoEchecs.length > 0 ? (
-        <section className="rounded-xl overflow-hidden" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-          <div className="px-4 py-3">
-            <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Payouts automatiques</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="sa-table">
-              <thead>
-                <tr>
-                  <th>Terrain</th>
-                  <th>Dernier payout</th>
-                  <th>Statut</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(incidents.length ? incidents : autoActifs.map((r) => ({ terrain_id: r.t.id, terrain_nom: r.t.nom, statut: "en_attente" as const }))).map((i) => (
-                  <tr key={i.terrain_id}>
-                    <td>{i.terrain_nom}</td>
-                    <td>{i.dernier_at ? new Date(i.dernier_at).toLocaleString("fr-FR") : "—"}</td>
-                    <td>{i.statut === "echec" ? "Échec" : i.statut === "ok" ? "OK" : "En attente"}</td>
-                    <td>
-                      {i.statut === "echec" ? (
-                        <button
-                          type="button"
-                          className="text-[12px] font-semibold"
-                          style={{ color: "var(--sa-danger)" }}
-                          onClick={() => {
-                            upsertIncidentAuto({ ...i, statut: "en_attente", message: "Relance demandée" });
-                            reloadOps();
-                          }}
-                        >
-                          Relancer
-                        </button>
-                      ) : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
+          {demandes.length > 0 ? (
+            <SaCard>
+              <SaCardHeader>
+                <p className="text-[14px] font-semibold inline-flex items-center gap-2" style={{ color: "var(--sa-text)" }}>
+                  Retraits à traiter
+                  <span className="min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold text-white grid place-items-center" style={{ background: "var(--sa-danger)" }}>{demandes.length}</span>
+                </p>
+                <Link to="/backoffice/superadmin/caisse" className="sa-btn sa-btn-ghost sa-btn-sm">Voir la caisse →</Link>
+              </SaCardHeader>
+              <div className="overflow-x-auto">
+                <table className="sa-table">
+                  <thead>
+                    <tr>
+                      <th>Gérant</th>
+                      <th>Montant</th>
+                      <th>Depuis</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {demandes.map((d) => {
+                      const rel = relativeDepuis(d.demande_at);
+                      return (
+                        <tr key={d.id}>
+                          <td>
+                            <p className="font-semibold">{d.gerant_nom}</p>
+                            <p className="text-[11px]" style={{ color: "var(--sa-text-muted)" }}>{d.terrain_nom}</p>
+                          </td>
+                          <td className="font-bold" style={{ color: "var(--sa-success)" }}>{fcfa(d.montant_net)}</td>
+                          <td style={{ color: rel.urgence === "danger" ? "var(--sa-danger)" : "var(--sa-warning)" }}>{rel.label}</td>
+                          <td>
+                            <div className="inline-flex flex-wrap items-center gap-2">
+                            <button type="button" onClick={() => setRefModal(d)} className="sa-btn sa-btn-sm sa-btn-primary">Marquer envoyé</button>
+                            <button type="button" onClick={() => setRejectModal(d)} className="sa-btn sa-btn-sm sa-btn-danger">Rejeter</button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </SaCard>
+          ) : null}
+        </div>
 
-      {sansNumero.length > 0 ? (
-        <section className="rounded-xl overflow-hidden" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-          <div className="px-4 py-3 flex items-center gap-2">
-            <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Terrains à configurer</h3>
-            <span className="min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold text-white grid place-items-center" style={{ background: "var(--sa-danger)" }}>
-              {sansNumero.length}
-            </span>
-          </div>
-          <div className="overflow-x-auto hidden md:block">
-            <table className="sa-table">
-              <thead>
-                <tr>
-                  <th>Terrain</th>
-                  <th>Proprio</th>
-                  <th>Gérant</th>
-                  <th>Manque</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {sansNumero.map(({ t, gerant, c }) => (
-                  <tr key={t.id}>
-                    <td className="font-semibold">{t.nom}</td>
-                    <td>{t.proprietaire_nom || "—"}</td>
-                    <td>{gerant?.nom || "—"}</td>
-                    <td className="flex gap-1">
-                      <ContratBadge statut={c.wave_statut} operateur="wave" />
-                      <ContratBadge statut={c.om_statut} operateur="om" />
-                    </td>
-                    <td>
-                      <Link to={`/backoffice/superadmin/terrains/${t.id}?tab=contrat`} className="text-[12px] font-semibold" style={{ color: "var(--sa-primary)" }}>
-                        Configurer
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="md:hidden p-3 space-y-2">
-            {sansNumero.map(({ t, gerant }) => (
-              <article key={t.id} className="rounded-lg p-3 flex items-center justify-between" style={{ border: "1px solid var(--sa-border)" }}>
-                <div>
-                  <p className="text-[13px] font-semibold">{t.nom}</p>
-                  <p className="text-[11px]" style={{ color: "var(--sa-muted)" }}>{t.proprietaire_nom} · {gerant?.nom || "Sans gérant"}</p>
+        <div className="min-w-0 space-y-4">
+          <SaCard>
+            <SaCardHeader>
+              <p className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Modes actifs</p>
+              <Link to="/backoffice/superadmin/abonnements" className="sa-btn sa-btn-ghost sa-btn-sm">Gérer →</Link>
+            </SaCardHeader>
+            <SaCardBody className="space-y-3">
+              {[
+                { Icon: FlaskConical, label: "Essai gratuit", n: modeCounts.essai, color: "var(--sa-mode-essai)" },
+                { Icon: BarChart2, label: "Commission", n: modeCounts.commission, color: "var(--sa-mode-commission)" },
+                { Icon: RefreshCw, label: "Abonnement mensuel", n: modeCounts.abonnement, color: "var(--sa-mode-abonnement)" },
+                { Icon: ShoppingCart, label: "Achat définitif", n: modeCounts.achat, color: "var(--sa-mode-achat)" },
+              ].map((m) => (
+                <div key={m.label} className="flex items-center gap-3 min-w-0">
+                  <m.Icon size={16} className="shrink-0" style={{ color: m.color }} />
+                  <span className="flex-1 min-w-0 text-[13px]" style={{ color: "var(--sa-text-2)" }}>{m.label}</span>
+                  <span className="text-[13px] font-semibold shrink-0">{m.n}</span>
                 </div>
-                <Link to={`/backoffice/superadmin/terrains/${t.id}?tab=contrat`} className="text-[12px] font-semibold" style={{ color: "var(--sa-primary)" }}>
-                  Configurer
+              ))}
+            </SaCardBody>
+            <SaCardFooter>
+              <Link to="/backoffice/superadmin/abonnements" className="text-[12px] font-semibold" style={{ color: "var(--sa-primary)" }}>Aller aux abonnements →</Link>
+            </SaCardFooter>
+          </SaCard>
+
+          <SaCard>
+            <SaCardHeader>
+              <p className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Santé WhatsApp</p>
+            </SaCardHeader>
+            <SaCardBody>
+              <p className="inline-flex items-center gap-2 text-[13px]">
+                <span className="w-2 h-2 rounded-full" style={{ background: waDown ? "var(--sa-danger)" : "var(--sa-success)" }} />
+                {waDown ? "Déconnecté" : "Connecté"}
+              </p>
+              <div className="mt-3">
+                <Link to="/backoffice/superadmin/whatsapp" className="sa-btn sa-btn-secondary sa-btn-sm">
+                  <MessageCircle size={14} />
+                  {waDown ? "Reconnecter" : "Tester"}
                 </Link>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
+              </div>
+            </SaCardBody>
+          </SaCard>
+
+          <SaCard>
+            <SaCardHeader>
+              <p className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Activité récente</p>
+            </SaCardHeader>
+            <SaCardBody className="space-y-3">
+              {[
+                ...demandes.slice(0, 4).map((d) => ({ id: `d-${d.id}`, text: `Retrait ${d.gerant_nom} · ${fcfa(d.montant_net)}`, time: relativeDepuis(d.demande_at).label })),
+                ...autoEchecs.slice(0, 2).map((i) => ({ id: `i-${i.terrain_id}`, text: `Payout auto en échec · ${i.terrain_nom}`, time: "à traiter" })),
+                ...sansNumero.slice(0, 2).map((r) => ({ id: `s-${r.t.id}`, text: `${r.t.nom} sans Wave/OM`, time: "contrat" })),
+              ].slice(0, 8).map((a) => (
+                <div key={a.id} className="flex items-start gap-2">
+                  <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "var(--sa-primary)" }} />
+                  <div>
+                    <p className="text-[13px]" style={{ color: "var(--sa-text-2)" }}>{a.text}</p>
+                    <p className="text-[11px]" style={{ color: "var(--sa-text-muted)" }}>{a.time}</p>
+                  </div>
+                </div>
+              ))}
+              {demandes.length + autoEchecs.length + sansNumero.length === 0 ? (
+                <p className="text-[13px]" style={{ color: "var(--sa-text-muted)" }}>Aucune activité récente.</p>
+              ) : null}
+            </SaCardBody>
+          </SaCard>
+        </div>
+      </div>
+
 
       <ConfirmationModal
         ouvert={Boolean(refModal)}

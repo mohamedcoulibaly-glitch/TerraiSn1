@@ -6,6 +6,9 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { localYmd } from "@/lib/localDate";
 import Select2 from "@/components/Select2";
+import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
+import { confirmWhatsappAction, WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
+import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
 
 const statusMeta: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
@@ -57,6 +60,7 @@ export default function ReservationsManuelles() {
   const [loading, setLoading] = useState(true);
   const [manualLoading, setManualLoading] = useState(false);
   const [resendId, setResendId] = useState<number | null>(null);
+  const { down: waDown } = useWhatsappInfra(true);
   const [dateFilter, setDateFilter] = useState<"today" | "week" | "all">("today");
   const [phoneFieldError, setPhoneFieldError] = useState<string | null>(null);
   const [devis, setDevis] = useState<{
@@ -156,6 +160,10 @@ export default function ReservationsManuelles() {
   };
 
   const handleResendWhatsApp = async (id: number) => {
+    if (waDown) {
+      toast.error(WHATSAPP_INFRA_MESSAGE);
+      if (!confirmWhatsappAction(true)) return;
+    }
     setResendId(id);
     try {
       await reservationsApi.renvoyerLienWhatsApp(id);
@@ -178,6 +186,10 @@ export default function ReservationsManuelles() {
       return;
     }
     setPhoneFieldError(null);
+    if (waDown) {
+      toast.error(WHATSAPP_INFRA_MESSAGE);
+      if (!confirmWhatsappAction(true)) return;
+    }
     setManualLoading(true);
     try {
       const result = (await reservationsApi.createGerant({
@@ -198,11 +210,7 @@ export default function ReservationsManuelles() {
             : "Réservation créée — lien WhatsApp envoyé au joueur",
         );
       } else {
-        toast.warning(
-          `Réservation créée, mais WhatsApp non envoyé${
-            result?.whatsapp_error ? ` : ${result.whatsapp_error}` : ""
-          }`
-        );
+        toast.warning(`Réservation créée, mais WhatsApp non envoyé. ${WHATSAPP_INFRA_MESSAGE}`);
       }
 
       setManual({

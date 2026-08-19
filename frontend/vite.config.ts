@@ -16,6 +16,18 @@ export default defineConfig(({ mode }) => ({
       '/api': {
         target: process.env.VITE_API_URL || 'http://localhost:3001',
         changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes, req) => {
+            if (String(req.url || '').includes('/events')) {
+              proxyRes.headers['cache-control'] = 'no-cache, no-transform';
+              proxyRes.headers['x-accel-buffering'] = 'no';
+              proxyRes.headers['connection'] = 'keep-alive';
+              delete proxyRes.headers['content-length'];
+            }
+          });
+        },
       },
       '/uploads': {
         target: process.env.VITE_API_URL || 'http://localhost:3001',
@@ -65,8 +77,8 @@ export default defineConfig(({ mode }) => ({
         name: 'TerrainSN — Réservation de terrains',
         short_name: 'TerrainSN',
         description: 'Trouvez et réservez des terrains de football au Sénégal. Paiement Wave et Orange Money.',
-        theme_color: '#0A5C36',
-        background_color: '#F4F6F9',
+        theme_color: '#1E40AF',
+        background_color: '#F4F7FB',
         display: 'standalone',
         orientation: 'portrait-primary',
         scope: '/',

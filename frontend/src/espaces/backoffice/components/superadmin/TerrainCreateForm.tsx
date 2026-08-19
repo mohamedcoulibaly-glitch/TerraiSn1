@@ -1,8 +1,6 @@
-import { FormEvent, useMemo, useState } from "react";
-import { ArrowRightLeft, DollarSign, Hand, Loader2, RefreshCw, Smartphone, Zap } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ArrowRightLeft, DollarSign, Hand, Loader2, RefreshCw, Smartphone, Zap, Check, X } from "lucide-react";
 import { toast } from "sonner";
-import CommoditesPicker from "@/components/CommoditesPicker";
-import type { CommoditeId } from "@/lib/commodites";
 import PctMontantPair, { montantDepuisPct } from "@/components/PctMontantPair";
 import Select2 from "@/components/Select2";
 import GrilleTarifaireForm, {
@@ -10,6 +8,9 @@ import GrilleTarifaireForm, {
   type GrilleValues,
 } from "@/espaces/backoffice/components/GrilleTarifaireForm";
 import PreviewContrat from "@/espaces/backoffice/components/superadmin/PreviewContrat";
+import PhotoUploadTerrain, { type LocalPhoto } from "@/espaces/backoffice/components/superadmin/PhotoUploadTerrain";
+import LocalisationTerrain from "@/espaces/backoffice/components/superadmin/LocalisationTerrain";
+import TerrainCommoditesEditor, { type CommoditeToggle } from "@/espaces/backoffice/components/superadmin/TerrainCommoditesEditor";
 import { superAdminApi } from "@/services/superAdminApi";
 import {
   type CanalReversement,
@@ -96,9 +97,13 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
   const [taille, setTaille] = useState("11v11");
   const [proprietaireId, setProprietaireId] = useState("");
   const [gerantId, setGerantId] = useState("");
-  const [latitude, setLatitude] = useState("");
-  const [longitude, setLongitude] = useState("");
-  const [commodites, setCommodites] = useState<CommoditeId[]>([]);
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
+  const [adresseTheorique, setAdresseTheorique] = useState("");
+  const [adresseNominatim, setAdresseNominatim] = useState("");
+  const [erreurLoc, setErreurLoc] = useState<string | undefined>();
+  const [catalogCommodites, setCatalogCommodites] = useState<CommoditeToggle[]>([]);
+  const [commoditeIds, setCommoditeIds] = useState<number[]>([]);
   const [grille, setGrille] = useState<GrilleValues>(emptyGrilleValues({ entier: 40000, demi: 24000 }));
 
   const [pctAvance, setPctAvance] = useState("12.5");
@@ -116,6 +121,17 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
   const [politique, setPolitique] = useState<FraisPolitique>("partage");
   const [pctG, setPctG] = useState("1");
   const [pctP, setPctP] = useState("1");
+  const [localPhotos, setLocalPhotos] = useState<LocalPhoto[]>([]);
+
+  useEffect(() => {
+    superAdminApi
+      .commodites()
+      .then((list) => {
+        const rows = (Array.isArray(list) ? list : []).filter((c: CommoditeToggle) => Number(c.actif) !== 0);
+        setCatalogCommodites(rows);
+      })
+      .catch(() => {});
+  }, []);
 
   const gerant = gerants.find((g) => String(g.id) === gerantId) || null;
   const whatsapp = gerant?.telephone || gerant?.whatsapp_number || "";
@@ -164,6 +180,20 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
       toast.error("Tous les tarifs de la grille (semaine et week-end, demi et entier) doivent être positifs");
       return;
     }
+    if (!localPhotos.some((p) => p.est_principale)) {
+      toast.error("Ajoute au moins une photo principale pour activer le terrain");
+      return;
+    }
+    if (!adresseTheorique.trim() || latitude == null || longitude == null) {
+      setErreurLoc(
+        !adresseTheorique.trim()
+          ? "L'adresse pour les joueurs est obligatoire"
+          : "Veuillez définir la position exacte du terrain sur la carte",
+      );
+      document.getElementById("sa-localisation-terrain")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    setErreurLoc(undefined);
     setSaving(true);
     try {
       const created = await superAdminApi.createTerrain({
@@ -179,10 +209,12 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
         modele_revenus: "commission",
         commission_pourcentage: Number(pctCommission || 0),
         delai_remboursement_heures: remb ? Number(delai || 0) : 0,
-        latitude: latitude ? Number(latitude) : null,
-        longitude: longitude ? Number(longitude) : null,
+        latitude,
+        longitude,
+        adresse_theorique: adresseTheorique.trim(),
+        adresse_nominatim: adresseNominatim,
         proprietaire_id: Number(proprietaireId),
-        commodites,
+        commodite_ids: commoditeIds,
         photos: [],
       });
       const terrainId = Number(created?.id);
@@ -229,6 +261,13 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
             apres: `Avance ${pctAvance}% · Com. ${pctCommission}% · ${mode}`,
           },
         );
+        for (const photo of localPhotos) {
+          try {
+            await superAdminApi.uploadTerrainPhotoFile(terrainId, photo.file, photo.est_principale);
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Photo non envoyée");
+          }
+        }
       }
       toast.success("Terrain créé avec contrat et grille tarifaire");
       await onCreated();
@@ -308,16 +347,47 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
               }}
             />
           </Field>
-          <Field label="Latitude">
-            <input className={inputClass} style={inputStyle} type="number" step="any" value={latitude} onChange={(e) => setLatitude(e.target.value)} />
-          </Field>
-          <Field label="Longitude">
-            <input className={inputClass} style={inputStyle} type="number" step="any" value={longitude} onChange={(e) => setLongitude(e.target.value)} />
-          </Field>
-          <div className="sm:col-span-2 rounded-lg p-3" style={{ border: "1px solid var(--sa-border)" }}>
-            <p className="text-[12px] font-medium mb-2" style={{ color: "var(--sa-text-2)" }}>Commodités</p>
-            <CommoditesPicker value={commodites} onChange={setCommodites} />
-          </div>
+        </div>
+      </section>
+
+      <LocalisationTerrain
+        adresseTheorique={adresseTheorique}
+        adresseNominatim={adresseNominatim}
+        latitude={latitude}
+        longitude={longitude}
+        onChangeAdresseTheorique={(v) => {
+          setAdresseTheorique(v);
+          if (erreurLoc) setErreurLoc(undefined);
+        }}
+        onChangeCoordonnees={(lat, lng, nominatim) => {
+          setLatitude(lat);
+          setLongitude(lng);
+          setAdresseNominatim(nominatim);
+          if (erreurLoc) setErreurLoc(undefined);
+        }}
+        erreur={erreurLoc}
+      />
+
+      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-info)" }}>
+        <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Équipements</h3>
+        <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+          Éclairage, vestiaires et autres commodités visibles par les joueurs.
+        </p>
+        <div className="mt-3">
+          <TerrainCommoditesEditor
+            embedded
+            showSave={false}
+            items={catalogCommodites}
+            selectedIds={commoditeIds}
+            onChange={setCommoditeIds}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-info)" }}>
+        <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Photos du terrain</h3>
+        <div className="mt-4">
+          <PhotoUploadTerrain localPhotos={localPhotos} onLocalPhotosChange={setLocalPhotos} />
         </div>
       </section>
 
@@ -523,6 +593,21 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
           />
         </div>
       </section>
+
+      <div className="rounded-xl p-4 text-[12px] space-y-1" style={{ background: "var(--sa-surface-2)", border: "1px solid var(--sa-border)" }}>
+        {[
+          { ok: Boolean(nom.trim() && proprietaireId), label: "Identité (nom + propriétaire)" },
+          { ok: Boolean(adresseTheorique.trim() && latitude != null && longitude != null), label: "Localisation (adresse + coordonnées)" },
+          { ok: localPhotos.some((p) => p.est_principale), label: "Photos (au moins 1 principale)" },
+          { ok: !grilleIncomplete(grille), label: "Grille tarifaire complète" },
+          { ok: Number(pctAvance) > 0 && Number(pctCommission) >= 0, label: "Contrat commercial (avance + commission)" },
+        ].map((row) => (
+          <p key={row.label} className="flex items-center gap-2" style={{ color: row.ok ? "var(--sa-success)" : "var(--sa-danger)" }}>
+            {row.ok ? <Check size={14} /> : <X size={14} />}
+            {row.label} {row.ok ? "✓" : "✗"}
+          </p>
+        ))}
+      </div>
 
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={saving} className="min-h-[48px] px-5 rounded-lg text-[13px] font-semibold text-white inline-flex items-center justify-center gap-2" style={{ background: "var(--sa-primary)" }}>

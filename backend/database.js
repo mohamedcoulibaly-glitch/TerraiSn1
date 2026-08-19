@@ -274,6 +274,10 @@ function initDb(database) {
   addColumnIfMissing(database, 'reservations', 'checked_in_at', 'DATETIME');
   addColumnIfMissing(database, 'reservations', 'checkout_at', 'DATETIME');
   addColumnIfMissing(database, 'reservations', 'confirme_at', 'DATETIME');
+  addColumnIfMissing(database, 'reservations', 'mode_paiement', "TEXT DEFAULT 'en_ligne'");
+  addColumnIfMissing(database, 'reservations', 'confirme_manuellement_par', 'INTEGER');
+  addColumnIfMissing(database, 'reservations', 'confirme_manuellement_at', 'DATETIME');
+  addColumnIfMissing(database, 'reservations', 'note_gerant', 'TEXT');
   addColumnIfMissing(database, 'creneaux', 'fenetre_retard', 'INTEGER DEFAULT 30');
   addColumnIfMissing(database, 'paiements', 'reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'paiements', 'montant_acompte', 'INTEGER');
@@ -308,6 +312,8 @@ function initDb(database) {
   addColumnIfMissing(database, 'terrains', 'achat_definitif_paye', 'INTEGER DEFAULT 0');
   addColumnIfMissing(database, 'terrains', 'latitude', 'REAL');
   addColumnIfMissing(database, 'terrains', 'longitude', 'REAL');
+  addColumnIfMissing(database, 'terrains', 'adresse_theorique', 'TEXT');
+  addColumnIfMissing(database, 'terrains', 'adresse_nominatim', 'TEXT');
   addColumnIfMissing(database, 'terrains', 'commodites', "TEXT DEFAULT '[]'");
   addColumnIfMissing(database, 'terrains', 'delai_remboursement_heures', 'INTEGER DEFAULT 24');
   addColumnIfMissing(database, 'users', 'terrain_id', 'INTEGER');
@@ -479,12 +485,146 @@ function initDb(database) {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     terrain_id INTEGER NOT NULL,
     url TEXT NOT NULL,
+    nom_fichier TEXT,
+    taille_octets INTEGER,
     est_principale INTEGER DEFAULT 0,
     ordre INTEGER DEFAULT 0,
+    uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (terrain_id) REFERENCES terrains(id)
   )`);
-  database.run('CREATE INDEX IF NOT EXISTS idx_terrain_photos_terrain ON terrain_photos(terrain_id, est_principale, ordre)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_terrain_photos_terrain ON terrain_photos(terrain_id, ordre)');
+  addColumnIfMissing(database, 'terrain_photos', 'nom_fichier', 'TEXT');
+  addColumnIfMissing(database, 'terrain_photos', 'taille_octets', 'INTEGER');
+  addColumnIfMissing(database, 'terrain_photos', 'uploaded_at', 'DATETIME');
+  addColumnIfMissing(database, 'terrain_photos', 'uploaded_by', 'INTEGER');
+  addColumnIfMissing(database, 'terrain_photos', 'uploaded_by_role', 'TEXT');
+  addColumnIfMissing(database, 'terrain_photos', 'valide', 'INTEGER DEFAULT 1');
+  addColumnIfMissing(database, 'terrain_photos', 'valide_par', 'INTEGER');
+  addColumnIfMissing(database, 'terrain_photos', 'valide_at', 'DATETIME');
+  addColumnIfMissing(database, 'terrain_photos', 'largeur_px', 'INTEGER');
+  addColumnIfMissing(database, 'terrain_photos', 'hauteur_px', 'INTEGER');
+  addColumnIfMissing(database, 'terrain_photos', 'ratio', 'TEXT');
+
+  database.run(`CREATE TABLE IF NOT EXISTS commodites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cle TEXT NOT NULL UNIQUE,
+    label_fr TEXT NOT NULL,
+    icone TEXT NOT NULL,
+    description TEXT,
+    actif INTEGER DEFAULT 1,
+    ordre INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS terrain_commodites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    commodite_id INTEGER NOT NULL,
+    actif INTEGER DEFAULT 1,
+    UNIQUE(terrain_id, commodite_id),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id),
+    FOREIGN KEY (commodite_id) REFERENCES commodites(id)
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS audit_photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    photo_id INTEGER,
+    action TEXT NOT NULL,
+    fait_par INTEGER,
+    role_fait_par TEXT,
+    detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS audit_commodites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER,
+    commodite_id INTEGER,
+    action TEXT NOT NULL,
+    fait_par INTEGER,
+    role_fait_par TEXT,
+    detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_terrain_commodites_terrain ON terrain_commodites(terrain_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_audit_photos_terrain ON audit_photos(terrain_id, created_at)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_audit_commodites_terrain ON audit_commodites(terrain_id, created_at)');
+  addColumnIfMissing(database, 'commodites', 'modifiable_gerant', 'INTEGER DEFAULT 1');
+  addColumnIfMissing(database, 'terrain_commodites', 'force_par_admin', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'mode_essai', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'essai_debut_at', 'DATETIME');
+  addColumnIfMissing(database, 'terrains', 'essai_duree_jours', 'INTEGER DEFAULT 30');
+  addColumnIfMissing(database, 'terrains', 'essai_fin_at', 'DATETIME');
+  addColumnIfMissing(database, 'terrains', 'essai_suspendu_auto', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'delai_negociation_jours', 'INTEGER DEFAULT 7');
+  addColumnIfMissing(database, 'terrains', 'notif_essai_fin_j7', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'notif_essai_fin_j3', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'notif_essai_fin_j1', 'INTEGER DEFAULT 0');
+  database.run(`CREATE TABLE IF NOT EXISTS terrain_features (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    feature_cle TEXT NOT NULL,
+    actif INTEGER DEFAULT 1,
+    configure_par INTEGER,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(terrain_id, feature_cle),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id) ON DELETE CASCADE
+  )`);
+  seedDefaultCommodites(database);
+  migrateJsonCommodites(database);
+
+  database.run(`CREATE TABLE IF NOT EXISTS dettes_commissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    gerant_id INTEGER NOT NULL,
+    reservation_id INTEGER NOT NULL,
+    montant_commission INTEGER NOT NULL,
+    montant_avance_manuelle INTEGER NOT NULL,
+    statut TEXT DEFAULT 'en_attente' CHECK(statut IN ('en_attente','payee','annulee')),
+    periode TEXT NOT NULL,
+    note TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    payee_at DATETIME,
+    remise_a_zero_par INTEGER,
+    remise_a_zero_at DATETIME,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id),
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id)
+  )`);
+  database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_dettes_reservation ON dettes_commissions(reservation_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_dettes_terrain ON dettes_commissions(terrain_id, statut, periode)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_dettes_gerant ON dettes_commissions(gerant_id, statut)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS audit_dette (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dette_id INTEGER,
+    terrain_id INTEGER,
+    action TEXT NOT NULL CHECK(action IN (
+      'creation','paiement_partiel','paiement_total',
+      'remise_a_zero','annulation','note_ajoutee'
+    )),
+    montant_concerne INTEGER,
+    fait_par INTEGER,
+    role_fait_par TEXT,
+    detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (dette_id) REFERENCES dettes_commissions(id),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS plateforme_settings (
+    cle TEXT PRIMARY KEY,
+    valeur TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS mode_revenu_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    ancien_mode TEXT,
+    nouveau_mode TEXT NOT NULL,
+    fait_par INTEGER,
+    note TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
 
   database.run(`CREATE TABLE IF NOT EXISTS activite_gerant (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -592,6 +732,60 @@ function initDb(database) {
   console.log('✅ Tables SQLite initialisées.');
 }
 
+const DEFAULT_COMMODITES = [
+  ['eclairage', 'Éclairage nocturne', 'Zap', 1],
+  ['vestiaires', 'Vestiaires', 'Users', 2],
+  ['douches', 'Douches', 'Droplets', 3],
+  ['parking', 'Parking', 'Car', 4],
+  ['buvette', 'Buvette', 'Coffee', 5],
+  ['tribune', 'Tribune', 'Armchair', 6],
+  ['wifi', 'Wi-Fi', 'Wifi', 7],
+  ['arbitre', 'Arbitre disponible', 'Flag', 8],
+  ['ballon', 'Ballon fourni', 'CircleDot', 9],
+  ['securite', 'Agent de sécurité', 'Shield', 10],
+  ['dossards', 'Dossards fournis', 'Shirt', 11],
+  ['eau', 'Eau à la mi-temps', 'Droplet', 12],
+  ['toilettes', 'Toilettes', 'Bath', 13],
+  ['priere', 'Espace de prière', 'Moon', 14],
+  ['glacons', 'Glaçons / Glacière', 'Snowflake', 15],
+  ['secours', 'Premiers secours', 'Ambulance', 16],
+  ['video', 'Enregistrement vidéo', 'Video', 17],
+];
+
+function seedDefaultCommodites(database) {
+  for (const [cle, label_fr, icone, ordre] of DEFAULT_COMMODITES) {
+    const exists = queryOne(database, 'SELECT id FROM commodites WHERE cle = ?', [cle]);
+    if (!exists) {
+      database.run(
+        'INSERT INTO commodites (cle, label_fr, icone, actif, ordre) VALUES (?, ?, ?, 1, ?)',
+        [cle, label_fr, icone, ordre],
+      );
+    }
+  }
+}
+
+function migrateJsonCommodites(database) {
+  const byCle = new Map(queryAll(database, 'SELECT id, cle FROM commodites').map((c) => [c.cle, c.id]));
+  const terrains = queryAll(database, 'SELECT id, commodites FROM terrains');
+  for (const terrain of terrains) {
+    let keys = [];
+    try {
+      const parsed = JSON.parse(terrain.commodites || '[]');
+      if (Array.isArray(parsed)) keys = parsed.map(String);
+    } catch {
+      keys = [];
+    }
+    for (const key of keys) {
+      const cid = byCle.get(key);
+      if (!cid) continue;
+      const existing = queryOne(database, 'SELECT id FROM terrain_commodites WHERE terrain_id = ? AND commodite_id = ?', [terrain.id, cid]);
+      if (!existing) {
+        database.run('INSERT INTO terrain_commodites (terrain_id, commodite_id, actif) VALUES (?, ?, 1)', [terrain.id, cid]);
+      }
+    }
+  }
+}
+
 function addColumnIfMissing(database, table, column, definition) {
   const columns = queryAll(database, `PRAGMA table_info(${table})`);
   if (!columns.some((item) => item.name === column)) {
@@ -621,12 +815,14 @@ function queryOne(database, sql, params = []) {
   return results.length > 0 ? results[0] : null;
 }
 
+let txDepth = 0;
+
 function runSql(database, sql, params = []) {
   try {
     database.run(sql, params);
     // Lire last_insert_rowid AVANT saveDb() (un reload efface le curseur sql.js)
     const result = queryOne(database, 'SELECT last_insert_rowid() as id');
-    saveDb();
+    if (txDepth === 0) saveDb();
     return { lastInsertRowid: result ? result.id : 0 };
   } catch (err) {
     console.error('SQL Error:', err.message, '\nQuery:', sql);
@@ -634,16 +830,29 @@ function runSql(database, sql, params = []) {
   }
 }
 
+function safeRun(database, sql) {
+  try {
+    database.run(sql);
+  } catch (err) {
+    const msg = String(err && err.message || '');
+    if (/no transaction is active/i.test(msg)) return;
+    throw err;
+  }
+}
+
 function transaction(database, callback) {
   database.run('BEGIN IMMEDIATE TRANSACTION');
+  txDepth += 1;
   try {
     const result = callback();
-    database.run('COMMIT');
+    safeRun(database, 'COMMIT');
     saveDb();
     return result;
   } catch (error) {
-    database.run('ROLLBACK');
+    safeRun(database, 'ROLLBACK');
     throw error;
+  } finally {
+    txDepth = Math.max(0, txDepth - 1);
   }
 }
 

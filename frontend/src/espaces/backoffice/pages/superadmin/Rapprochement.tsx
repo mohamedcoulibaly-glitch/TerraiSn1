@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { superAdminApi } from "@/services/superAdminApi";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
 import { fcfa, getContratOverlay } from "@/lib/saContrat";
+import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
 import Select2 from "@/components/Select2";
 
 type Periode = "mois" | "trimestre" | "annee" | "perso";
@@ -19,7 +20,7 @@ export default function Rapprochement() {
 
   useEffect(() => {
     superAdminApi.finances().then(setFinances).catch(console.error);
-    superAdminApi.terrains().then(setTerrains).catch(console.error);
+    superAdminApi.terrains().then((t) => setTerrains(Array.isArray(t) ? t : [])).catch(console.error);
   }, [periode]);
 
   const rows = useMemo(() => {
@@ -107,7 +108,7 @@ export default function Rapprochement() {
   return (
     <div className="space-y-5 max-w-[1200px]">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <h2 className="text-[22px] font-semibold" style={{ fontFamily: "var(--font-display)", color: "var(--sa-text)" }}>Rapprochement comptable</h2>
+        <SaPageHeader titre="Rapprochement comptable" />
         <div className="flex flex-wrap gap-2">
           {([
             ["mois", "Ce mois"],

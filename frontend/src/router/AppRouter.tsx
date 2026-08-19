@@ -48,6 +48,9 @@ const RevenusAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Re
 const CaisseAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Caisse"));
 const RapprochementAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Rapprochement"));
 const AbonnementsAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Abonnements"));
+const CommoditesAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Commodites"));
+const WhatsAppPlateforme = lazy(() => import("@/espaces/backoffice/pages/superadmin/WhatsAppPlateforme"));
+const AuditAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Audit"));
 const GerantDashboard = lazy(() => import("@/espaces/backoffice/pages/gerant/Dashboard"));
 const GerantJoueurs = lazy(() => import("@/espaces/backoffice/pages/gerant/JoueursReservations"));
 const DetailReservationGerant = lazy(() => import("@/espaces/backoffice/pages/gerant/DetailReservation"));
@@ -118,9 +121,12 @@ export default function AppRouter() {
         <Route path="superadmin/terrains/:id" element={<RoleGuard roles={["super_admin"]}>{withSuspense(TerrainFicheAdmin)}</RoleGuard>} />
         <Route path="superadmin/utilisateurs" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionUtilisateurs)}</RoleGuard>} />
         <Route path="superadmin/caisse" element={<RoleGuard roles={["super_admin"]}>{withSuspense(CaisseAdmin)}</RoleGuard>} />
+        <Route path="superadmin/audit" element={<RoleGuard roles={["super_admin"]}>{withSuspense(AuditAdmin)}</RoleGuard>} />
         <Route path="superadmin/rapprochement" element={<RoleGuard roles={["super_admin"]}>{withSuspense(RapprochementAdmin)}</RoleGuard>} />
         <Route path="superadmin/revenus" element={<RoleGuard roles={["super_admin"]}>{withSuspense(RevenusAdmin)}</RoleGuard>} />
         <Route path="superadmin/abonnements" element={<RoleGuard roles={["super_admin"]}>{withSuspense(AbonnementsAdmin)}</RoleGuard>} />
+        <Route path="superadmin/commodites" element={<RoleGuard roles={["super_admin"]}>{withSuspense(CommoditesAdmin)}</RoleGuard>} />
+        <Route path="superadmin/whatsapp" element={<RoleGuard roles={["super_admin"]}>{withSuspense(WhatsAppPlateforme)}</RoleGuard>} />
         <Route path="admin" element={<Navigate to="/backoffice/superadmin" replace />} />
         <Route path="admin/terrains" element={<Navigate to="/backoffice/superadmin/terrains" replace />} />
         <Route path="admin/utilisateurs" element={<Navigate to="/backoffice/superadmin/utilisateurs" replace />} />

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
 import { superAdminApi } from "@/services/superAdminApi";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
 import { fcfa, getContratOverlay } from "@/lib/saContrat";
@@ -54,7 +55,7 @@ export default function Revenus() {
 
   const [terrainsList, setTerrainsList] = useState<any[]>([]);
   useEffect(() => {
-    superAdminApi.terrains().then(setTerrainsList).catch(console.error);
+    superAdminApi.terrains().then((t) => setTerrainsList(Array.isArray(t) ? t : [])).catch(console.error);
   }, []);
 
   const table = merged.map((r) => {
@@ -75,11 +76,10 @@ export default function Revenus() {
 
   return (
     <div className="space-y-5 max-w-[1200px]">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <h2 className="text-[22px] font-semibold" style={{ fontFamily: "var(--font-display)", color: "var(--sa-text)" }}>
-          Revenus TerrainSN
-        </h2>
-        <div className="flex flex-wrap gap-2">
+      <SaPageHeader
+        titre="Revenus TerrainSN"
+        actions={
+          <div className="flex flex-wrap gap-2">
           {PERIODS.map((p) => (
             <button
               key={p.value}
@@ -105,8 +105,9 @@ export default function Revenus() {
               ...terrainsList.map((t) => ({ value: String(t.id), label: t.nom })),
             ]}
           />
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       <p className="text-[12px]" style={{ color: "var(--sa-muted)" }}>
         Revenus de TerrainSN (commission + frais absorbés) — pas les revenus propriétaires ni gérants.

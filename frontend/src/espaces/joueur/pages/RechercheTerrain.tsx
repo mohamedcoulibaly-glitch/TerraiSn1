@@ -44,7 +44,7 @@ const Explorer = () => {
       setError(null);
       setLoading(true);
       const data = await terrainsApi.list();
-      setTerrains(data || []);
+      setTerrains(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
       setError("Erreur lors du chargement des terrains. Veuillez vérifier votre connexion.");

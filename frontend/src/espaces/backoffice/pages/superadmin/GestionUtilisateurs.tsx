@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { superAdminApi } from "@/services/superAdminApi";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
+import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
+import SaButton from "@/espaces/backoffice/components/superadmin/ui/SaButton";
 import Select2 from "@/components/Select2";
 
 const roleBadge: Record<string, string> = {
@@ -29,8 +31,8 @@ export default function GestionUtilisateurs() {
 
   const load = () =>
     Promise.all([superAdminApi.users(), superAdminApi.terrains()]).then(([u, t]) => {
-      setUsers(u);
-      setTerrains(t);
+      setUsers(Array.isArray(u) ? u : []);
+      setTerrains(Array.isArray(t) ? t : []);
     });
 
   useEffect(() => {
@@ -65,24 +67,11 @@ export default function GestionUtilisateurs() {
 
   return (
     <div className="space-y-6 max-w-6xl">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2
-            className="text-xl font-semibold text-[var(--color-text-primary)]"
-            style={{ fontFamily: "var(--font-display)" }}
-          >
-            Gestion des utilisateurs
-          </h2>
-          <p className="text-sm text-[var(--color-text-secondary)] mt-1">{users.length} comptes</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setShow(!show)}
-          className="min-h-[52px] px-5 rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium hover:bg-[var(--color-primary-light)]"
-        >
-          {show ? "Fermer" : "Créer un accès"}
-        </button>
-      </div>
+      <SaPageHeader
+        titre="Utilisateurs"
+        sousTitre={`${users.length} comptes`}
+        actions={<SaButton onClick={() => setShow(!show)}>{show ? "Fermer" : "Créer un accès"}</SaButton>}
+      />
 
       {message && (
         <p className="text-sm text-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_10%,white)] rounded-[var(--radius-md)] px-4 py-3">

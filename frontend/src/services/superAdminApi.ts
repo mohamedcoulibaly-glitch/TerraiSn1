@@ -2,6 +2,18 @@ import { authApi } from "@/lib/api";
 
 const API_URL = import.meta.env.VITE_API_URL || "/api";
 
+export type TerrainPhoto = {
+  id: number;
+  terrain_id: number;
+  url: string;
+  nom_fichier?: string | null;
+  taille_octets?: number | null;
+  est_principale?: number | boolean;
+  ordre?: number;
+  uploaded_by?: number | null;
+  uploaded_by_role?: string | null;
+};
+
 async function adminRequest(endpoint: string, options: RequestInit = {}) {
   const token = authApi.getToken() || localStorage.getItem("admin_token");
   const headers: Record<string, string> = {
@@ -10,7 +22,17 @@ async function adminRequest(endpoint: string, options: RequestInit = {}) {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+  const res = await fetch(`${API_URL}${endpoint}`, { cache: "no-store", ...options, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Erreur serveur");
+  return data;
+}
+
+async function adminFormData(endpoint: string, form: FormData) {
+  const token = authApi.getToken() || localStorage.getItem("admin_token");
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API_URL}${endpoint}`, { method: "POST", body: form, headers, cache: "no-store" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Erreur serveur");
   return data;
@@ -25,13 +47,32 @@ export const superAdminApi = {
   terrains: () => adminRequest("/admin/terrains"),
   createTerrain: (data: unknown) =>
     adminRequest("/admin/terrains", { method: "POST", body: JSON.stringify(data) }),
+  updateLocalisation: (
+    id: number,
+    data: {
+      adresse_theorique?: string | null;
+      adresse_nominatim?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+    },
+  ) => adminRequest(`/admin/terrains/${id}/localisation`, { method: "PATCH", body: JSON.stringify(data) }),
   terrainStatus: (id: number, statut: string) =>
     adminRequest(`/admin/terrains/${id}/statut`, { method: "PATCH", body: JSON.stringify({ statut }) }),
-  terrainPhotos: (id: number) => adminRequest(`/admin/terrains/${id}/photos`),
+  terrainPhotos: (id: number): Promise<TerrainPhoto[]> => adminRequest(`/admin/terrains/${id}/photos`),
   uploadTerrainPhoto: (id: number, data: { dataUrl: string; est_principale?: boolean; ordre?: number }) =>
     adminRequest(`/admin/terrains/${id}/photos`, { method: "POST", body: JSON.stringify(data) }),
+  uploadTerrainPhotoFile: (id: number, file: File, estPrincipale = false) => {
+    const form = new FormData();
+    form.append("photos", file);
+    if (estPrincipale) form.append("est_principale", "true");
+    return adminFormData(`/admin/terrains/${id}/photos`, form);
+  },
   updateTerrainPhoto: (id: number, photoId: number, data: { est_principale?: boolean; ordre?: number }) =>
     adminRequest(`/admin/terrains/${id}/photos/${photoId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  setTerrainPhotoPrincipale: (id: number, photoId: number) =>
+    adminRequest(`/admin/terrains/${id}/photos/${photoId}/principale`, { method: "PATCH" }),
+  reorderTerrainPhotos: (id: number, ordre: number[]) =>
+    adminRequest(`/admin/terrains/${id}/photos/ordre`, { method: "PATCH", body: JSON.stringify({ ordre }) }),
   removeTerrainPhoto: (id: number, photoId: number) =>
     adminRequest(`/admin/terrains/${id}/photos/${photoId}`, { method: "DELETE" }),
   users: () => adminRequest("/admin/users"),
@@ -87,4 +128,55 @@ export const superAdminApi = {
       method: "POST",
       body: JSON.stringify({ commentaire }),
     }),
+  dettes: (params?: { periode?: string; terrain_id?: number; statut?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.periode) sp.set("periode", params.periode);
+    if (params?.terrain_id) sp.set("terrain_id", String(params.terrain_id));
+    if (params?.statut) sp.set("statut", params.statut);
+    const q = sp.toString();
+    return adminRequest(`/admin/dettes${q ? `?${q}` : ""}`);
+  },
+  remiseAZeroDette: (terrainId: number, data: { note?: string; montant_recu?: number; periode?: string }) =>
+    adminRequest(`/admin/dettes/${terrainId}/remise-a-zero`, { method: "PATCH", body: JSON.stringify(data) }),
+  saveDetteInstructions: (texte: string) =>
+    adminRequest("/admin/dettes/instructions", { method: "PATCH", body: JSON.stringify({ texte }) }),
+  commodites: () => adminRequest("/admin/commodites"),
+  createCommodite: (data: unknown) =>
+    adminRequest("/admin/commodites", { method: "POST", body: JSON.stringify(data) }),
+  updateCommodite: (id: number, data: unknown) =>
+    adminRequest(`/admin/commodites/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteCommodite: (id: number) =>
+    adminRequest(`/admin/commodites/${id}`, { method: "DELETE" }),
+  terrainCommodites: (id: number) => adminRequest(`/admin/terrains/${id}/commodites`),
+  saveTerrainCommodites: (id: number, commodite_ids: number[]) =>
+    adminRequest(`/admin/terrains/${id}/commodites`, { method: "PUT", body: JSON.stringify({ commodite_ids }) }),
+  terrainAudit: (id: number) => adminRequest(`/admin/terrains/${id}/audit`),
+  auditGlobal: (params?: Record<string, string | number | undefined>) => {
+    const sp = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v != null && v !== "") sp.set(k, String(v));
+    });
+    const q = sp.toString();
+    return adminRequest(`/admin/audit/photos-commodites${q ? `?${q}` : ""}`);
+  },
+  terrainEssai: (id: number) => adminRequest(`/admin/terrains/${id}/essai`),
+  patchTerrainEssai: (id: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${id}/essai`, { method: "PATCH", body: JSON.stringify(body) }),
+  essaiKpis: () => adminRequest("/admin/essai-kpis"),
+  terrainFeatures: (id: number) => adminRequest(`/admin/terrains/${id}/features`),
+  saveTerrainFeatures: (id: number, features: { cle: string; actif: boolean }[]) =>
+    adminRequest(`/admin/terrains/${id}/features`, { method: "PUT", body: JSON.stringify({ features }) }),
+  whatsappStatus: () => adminRequest("/admin/whatsapp/status"),
+  whatsappQr: () => adminRequest("/admin/whatsapp/qr"),
+  whatsappConnect: (force = false) =>
+    adminRequest("/admin/whatsapp/connect", { method: "POST", body: JSON.stringify({ force }) }),
+  whatsappDisconnect: () => adminRequest("/admin/whatsapp/disconnect", { method: "POST" }),
+  whatsappTest: (telephone: string) =>
+    adminRequest("/admin/whatsapp/test", { method: "POST", body: JSON.stringify({ telephone }) }),
+  modeRevenuDefaults: () => adminRequest("/admin/mode-revenu/defaults"),
+  saveModeRevenuDefaults: (body: Record<string, unknown>) =>
+    adminRequest("/admin/mode-revenu/defaults", { method: "PATCH", body: JSON.stringify(body) }),
+  modeRevenuHistory: () => adminRequest("/admin/mode-revenu/history"),
+  patchTerrainModeRevenu: (id: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${id}/mode-revenu`, { method: "PATCH", body: JSON.stringify(body) }),
 };

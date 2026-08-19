@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
 import { superAdminApi } from "@/services/superAdminApi";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
 import AlerteBandeau from "@/espaces/backoffice/components/superadmin/AlerteBandeau";
@@ -7,6 +8,7 @@ import ModeBadge from "@/espaces/backoffice/components/superadmin/ModeBadge";
 import NumeroCopier from "@/espaces/backoffice/components/superadmin/NumeroCopier";
 import StatutDu from "@/espaces/backoffice/components/superadmin/StatutDu";
 import ConfirmationModal from "@/espaces/backoffice/components/superadmin/ConfirmationModal";
+import DettesCommissionsTab from "@/espaces/backoffice/components/superadmin/DettesCommissionsTab";
 import Select2 from "@/components/Select2";
 import {
   fcfa,
@@ -19,7 +21,7 @@ import {
   type DemandeRetrait,
 } from "@/lib/saContrat";
 
-type TabId = "fenetre" | "payable" | "retraits";
+type TabId = "fenetre" | "payable" | "retraits" | "dettes";
 
 export default function Caisse() {
   useSaCrumbs([{ label: "Caisse & Reversements" }]);
@@ -35,13 +37,14 @@ export default function Caisse() {
   const [motif, setMotif] = useState("Numéro incorrect");
   const [motifLibre, setMotifLibre] = useState("");
   const [histOpen, setHistOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
 
   const reload = () => setDemandes(getDemandesRetrait());
 
   useEffect(() => {
     Promise.all([superAdminApi.terrains(), superAdminApi.users(), superAdminApi.finances()]).then(([t, u, f]) => {
-      setTerrains(t);
-      setUsers(u);
+      setTerrains(Array.isArray(t) ? t : []);
+      setUsers(Array.isArray(u) ? u : []);
       setFinances(f);
     }).catch(console.error);
     reload();
@@ -72,6 +75,7 @@ export default function Caisse() {
     { id: "fenetre", label: "En fenêtre de remboursement", count: fenetre.length },
     { id: "payable", label: "Payable", count: payable.length },
     { id: "retraits", label: "Demandes de retrait", count: attente.length },
+    { id: "dettes", label: "Dettes commissions", count: Number(finances?.dettes?.terrains_concernes || 0) },
   ];
 
   function marquerEnvoye() {
@@ -91,10 +95,7 @@ export default function Caisse() {
 
   return (
     <div className="space-y-5 max-w-[1200px]">
-      <div>
-        <h2 className="text-[22px] font-semibold" style={{ fontFamily: "var(--font-display)", color: "var(--sa-text)" }}>Caisse & Reversements</h2>
-        <p className="text-[13px] mt-1" style={{ color: "var(--sa-muted)" }}>Suivi des avances, commissions et reversements gérants</p>
-      </div>
+      <SaPageHeader titre="Caisse & Reversements" sousTitre="Suivi des avances, commissions et reversements gérants" />
 
       <div className="flex flex-wrap gap-2">
         {tabs.map((t) => {
@@ -256,6 +257,7 @@ export default function Caisse() {
                 <table className="sa-table">
                   <thead>
                     <tr>
+                      <th />
                       <th>Terrain</th>
                       <th>Gérant</th>
                       <th>Montant net</th>
@@ -269,8 +271,12 @@ export default function Caisse() {
                     {attente.map((d) => {
                       const rel = relativeDepuis(d.demande_at);
                       const wa = String(d.gerant_whatsapp || "").replace(/\D/g, "");
+                      const urgent = Date.now() - new Date(d.demande_at).getTime() > 3600000;
                       return (
-                        <tr key={d.id}>
+                        <tr key={d.id} style={urgent ? { background: "var(--sa-warning-subtle)" } : undefined}>
+                          <td>
+                            <input type="checkbox" checked={selected.includes(d.id)} onChange={(e) => setSelected((prev) => e.target.checked ? [...prev, d.id] : prev.filter((x) => x !== d.id))} />
+                          </td>
                           <td>
                             <p className="font-semibold text-[13px]">{d.terrain_nom}</p>
                             <p className="text-[11px]" style={{ color: "var(--sa-muted)" }}>{d.terrain_ville}</p>
@@ -337,35 +343,34 @@ export default function Caisse() {
               <span className="text-[12px]" style={{ color: "var(--sa-muted)" }}>{histOpen ? "Masquer" : "Afficher"}</span>
             </button>
             {histOpen ? (
-              <div className="overflow-x-auto">
-                <table className="sa-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Terrain</th>
-                      <th>Gérant</th>
-                      <th>Montant</th>
-                      <th>Référence</th>
-                      <th>Traité par</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {historique.map((d) => (
-                      <tr key={d.id}>
-                        <td>{d.traite_at ? new Date(d.traite_at).toLocaleString("fr-FR") : "—"}</td>
-                        <td>{d.terrain_nom}</td>
-                        <td>{d.gerant_nom}</td>
-                        <td>{fcfa(d.montant_net)}</td>
-                        <td>{d.ref_manuelle || d.motif_rejet || "—"}</td>
-                        <td>{d.traite_par || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="px-4 pb-4 space-y-3">
+                {historique.map((d) => (
+                  <div key={d.id} className="flex gap-3">
+                    <span className="mt-1.5 w-2 h-2 rounded-full shrink-0" style={{ background: d.statut === "envoye" ? "var(--sa-success)" : "var(--sa-danger)" }} />
+                    <div>
+                      <p className="text-[13px]" style={{ color: "var(--sa-text)" }}>{d.statut === "envoye" ? "Virement envoyé" : "Retrait rejeté"} · {d.terrain_nom} · {fcfa(d.montant_net)}</p>
+                      <p className="text-[11px]" style={{ color: "var(--sa-text-muted)" }}>{d.traite_par || "—"} · {d.traite_at ? new Date(d.traite_at).toLocaleString("fr-FR") : ""} · {d.ref_manuelle || d.motif_rejet || ""}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>
         </section>
+      ) : tab === "dettes" ? (
+        <DettesCommissionsTab terrains={terrains} />
+      ) : null}
+
+      {selected.length > 0 && tab === "retraits" ? (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-full" style={{ background: "var(--sa-sidebar-bg)", color: "var(--sa-sidebar-logo)", boxShadow: "var(--sa-shadow-xl)" }}>
+          <span className="text-[13px]">{selected.length} sélectionné(s)</span>
+          <button type="button" className="sa-btn sa-btn-sm sa-btn-primary" onClick={() => {
+            attente.filter((d) => selected.includes(d.id)).forEach((d) => upsertDemandeRetrait({ ...d, statut: "envoye", traite_par: "Super Admin", traite_at: new Date().toISOString() }));
+            setSelected([]);
+            reload();
+          }}>Marquer envoyé</button>
+          <button type="button" className="text-[12px]" onClick={() => setSelected([])}>Annuler</button>
+        </div>
       ) : null}
 
       <ConfirmationModal ouvert={Boolean(refModal)} titre="Saisir la référence du virement" texte="Confirmez après le virement manuel. Le solde gérant passera à 0." labelConfirmer="Confirmer" variante="success" onConfirmer={marquerEnvoye} onAnnuler={() => setRefModal(null)}>
