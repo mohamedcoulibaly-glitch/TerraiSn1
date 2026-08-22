@@ -9,7 +9,13 @@ function digits(value) {
 function displayName(row) {
   const prenom = String(row.prenom || '').trim();
   const nom = String(row.nom || '').trim();
-  return [prenom, nom].filter(Boolean).join(' ') || nom || 'Joueur';
+  if (prenom && nom) {
+    const nomLower = nom.toLowerCase();
+    const prenomLower = prenom.toLowerCase();
+    if (nomLower === prenomLower || nomLower.startsWith(`${prenomLower} `)) return nom;
+    return `${prenom} ${nom}`;
+  }
+  return prenom || nom || 'Joueur';
 }
 
 function mapListRow(row, todayYmd) {
@@ -33,6 +39,9 @@ function mapListRow(row, todayYmd) {
     matches_joues: Number(row.matches_joues || 0),
     no_shows: Number(row.no_shows || 0),
     last_match_at: row.last_match_at || null,
+    reservations_total: Number(row.reservations_total || 0),
+    first_reservation_at: row.first_reservation_at || null,
+    last_reservation_at: row.last_reservation_at || null,
     solde_ouvert: solde,
     reservations_30j: Number(row.reservations_30j || 0),
     matches_30j: Number(row.matches_30j || 0),
@@ -52,6 +61,8 @@ function listJoueursSql(todayYmd, since30) {
       COALESCE(u.is_banned, 0) AS is_banned,
       u.notes_internes, u.banned_reason, u.banned_at,
       COUNT(r.id) AS reservations_total,
+      MIN(r.date) AS first_reservation_at,
+      MAX(r.date::text || ' ' || COALESCE(SUBSTRING(r.heure_debut::text FROM 1 FOR 5), '')) AS last_reservation_at,
       SUM(CASE WHEN r.statut IN ('match_joue', 'joue') THEN 1 ELSE 0 END) AS matches_joues,
       SUM(CASE WHEN r.statut = 'confirme' AND r.date < ? THEN 1 ELSE 0 END) AS no_shows,
       MAX(CASE WHEN r.statut IN ('match_joue', 'joue') THEN r.date ELSE NULL END) AS last_match_at,
@@ -68,6 +79,46 @@ function listJoueursSql(todayYmd, since30) {
 }
 
 function mountGerantCrmRoutes(app) {
+  app.get('/api/joueurs/telephone/:numero', authMiddleware, requireRole('gerant'), async (req, res) => {
+    try {
+      const db = await getDb();
+      const raw = String(req.params.numero || '');
+      const phoneDigits = digits(raw);
+      const local9 = phoneDigits.length >= 9 ? phoneDigits.slice(-9) : phoneDigits;
+      if (local9.length !== 9) {
+        return res.status(400).json({ error: 'Numéro invalide', trouve: false, joueur: null });
+      }
+
+      const joueur = await queryOne(
+        db,
+        `SELECT id, nom, prenom, telephone, email, photo_url
+         FROM users
+         WHERE COALESCE(role, 'joueur') = 'joueur'
+           AND REPLACE(REPLACE(REPLACE(COALESCE(telephone, ''), ' ', ''), '+', ''), '-', '') LIKE ?
+         ORDER BY id DESC LIMIT 1`,
+        [`%${local9}`],
+      );
+
+      if (!joueur) {
+        return res.json({ trouve: false, joueur: null });
+      }
+
+      return res.json({
+        trouve: true,
+        joueur: {
+          id: joueur.id,
+          nom: joueur.nom || null,
+          prenom: joueur.prenom || null,
+          display_nom: displayName(joueur),
+          telephone: joueur.telephone || null,
+        },
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Erreur serveur', trouve: false, joueur: null });
+    }
+  });
+
   app.get('/api/gerant/joueurs', authMiddleware, requireRole('gerant'), async (req, res) => {
     try {
       const db = await getDb();
@@ -82,7 +133,7 @@ function mountGerantCrmRoutes(app) {
       since.setDate(since.getDate() - 30);
       const since30 = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, '0')}-${String(since.getDate()).padStart(2, '0')}`;
 
-      let rows = queryAll(db, listJoueursSql(todayYmd, since30), [todayYmd, since30, since30, terrainId]);
+      let rows = await queryAll(db, listJoueursSql(todayYmd, since30), [todayYmd, since30, since30, terrainId]);
       let mapped = rows.map((row) => mapListRow(row, todayYmd));
 
       if (q) {
@@ -94,8 +145,19 @@ function mountGerantCrmRoutes(app) {
       if (filter === 'bannis') mapped = mapped.filter((j) => j.is_banned);
       else if (filter === 'dette') mapped = mapped.filter((j) => j.solde_ouvert > 0 && !j.is_banned);
       else if (filter === 'actifs') mapped = mapped.filter((j) => !j.is_banned && j.matches_joues > 0);
+      else if (filter === 'frequents') mapped = mapped.filter((j) => Number(j.reservations_total || 0) >= 3);
+      else if (filter === 'nouveaux') {
+        const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+        mapped = mapped.filter((j) => String(j.first_reservation_at || '') >= monthStart);
+      }
 
-      mapped.sort((a, b) => String(a.display_nom).localeCompare(String(b.display_nom), 'fr'));
+      if (filter === 'frequents') {
+        mapped.sort((a, b) => Number(b.reservations_total || 0) - Number(a.reservations_total || 0));
+      } else if (filter === 'nouveaux') {
+        mapped.sort((a, b) => String(b.first_reservation_at || '').localeCompare(String(a.first_reservation_at || '')));
+      } else {
+        mapped.sort((a, b) => String(b.last_reservation_at || '').localeCompare(String(a.last_reservation_at || '')));
+      }
       res.json({ joueurs: mapped, total: mapped.length });
     } catch (err) {
       console.error(err);
@@ -114,17 +176,17 @@ function mountGerantCrmRoutes(app) {
       since.setDate(since.getDate() - 30);
       const since30 = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, '0')}-${String(since.getDate()).padStart(2, '0')}`;
 
-      const user = queryOne(db, `
+      const user = await queryOne(db, `
         SELECT id, nom, prenom, telephone, email, photo_url, quartier,
                COALESCE(is_banned, 0) AS is_banned, banned_at, banned_reason, notes_internes
         FROM users WHERE id = ? AND COALESCE(role, 'joueur') = 'joueur'
       `, [joueurId]);
       if (!user) return res.status(404).json({ error: 'Joueur introuvable' });
 
-      const touch = queryOne(db, 'SELECT id FROM reservations WHERE joueur_id = ? AND terrain_id = ? LIMIT 1', [joueurId, terrainId]);
+      const touch = await queryOne(db, 'SELECT id FROM reservations WHERE joueur_id = ? AND terrain_id = ? LIMIT 1', [joueurId, terrainId]);
       if (!touch) return res.status(404).json({ error: 'Joueur introuvable' });
 
-      const reservations = queryAll(db, `
+      const reservations = await queryAll(db, `
         SELECT id, date, heure_debut, heure_fin, statut, code_reservation,
                COALESCE(prix_total, montant, 0) AS montant_total,
                COALESCE(montant_avance, acompte, 0) AS montant_avance,
@@ -135,7 +197,7 @@ function mountGerantCrmRoutes(app) {
         ORDER BY date DESC, heure_debut DESC
       `, [joueurId, terrainId]);
 
-      const statsRow = queryOne(db, `
+      const statsRow = await queryOne(db, `
         SELECT
           SUM(CASE WHEN statut IN ('match_joue', 'joue') THEN 1 ELSE 0 END) AS matches_joues,
           SUM(CASE WHEN statut = 'confirme' AND date < ? THEN 1 ELSE 0 END) AS no_shows,
@@ -148,7 +210,7 @@ function mountGerantCrmRoutes(app) {
         FROM reservations WHERE joueur_id = ? AND terrain_id = ?
       `, [todayYmd, since30, since30, joueurId, terrainId]);
 
-      const creneauFav = queryOne(db, `
+      const creneauFav = await queryOne(db, `
         SELECT heure_debut, COUNT(*) AS n
         FROM reservations
         WHERE joueur_id = ? AND terrain_id = ? AND statut IN ('match_joue', 'joue')
@@ -157,7 +219,7 @@ function mountGerantCrmRoutes(app) {
         LIMIT 1
       `, [joueurId, terrainId]);
 
-      const paiements = queryAll(db, `
+      const paiements = await queryAll(db, `
         SELECT p.id, p.montant, p.methode, p.statut, p.created_at, p.reservation_id
         FROM paiements p
         JOIN reservations r ON r.id = p.reservation_id
@@ -203,25 +265,25 @@ function mountGerantCrmRoutes(app) {
       const db = await getDb();
       const terrainId = req.user.terrain_id;
       const joueurId = Number(req.params.id);
-      const touch = queryOne(db, 'SELECT id FROM reservations WHERE joueur_id = ? AND terrain_id = ? LIMIT 1', [joueurId, terrainId]);
+      const touch = await queryOne(db, 'SELECT id FROM reservations WHERE joueur_id = ? AND terrain_id = ? LIMIT 1', [joueurId, terrainId]);
       if (!touch) return res.status(404).json({ error: 'Joueur introuvable' });
 
       const notes = req.body?.notes_internes;
       const bannedReason = req.body?.banned_reason;
       if (typeof req.body?.is_banned === 'boolean') {
         if (req.body.is_banned) {
-          runSql(db, `UPDATE users SET is_banned = 1, banned_at = CURRENT_TIMESTAMP, banned_reason = ? WHERE id = ?`, [
+          await runSql(db, `UPDATE users SET is_banned = 1, banned_at = CURRENT_TIMESTAMP, banned_reason = ? WHERE id = ?`, [
             String(bannedReason || 'Banni par le gérant').slice(0, 255),
             joueurId,
           ]);
         } else {
-          runSql(db, `UPDATE users SET is_banned = 0, banned_at = NULL, banned_reason = NULL WHERE id = ?`, [joueurId]);
+          await runSql(db, `UPDATE users SET is_banned = 0, banned_at = NULL, banned_reason = NULL WHERE id = ?`, [joueurId]);
         }
       }
       if (typeof notes === 'string') {
-        runSql(db, 'UPDATE users SET notes_internes = ? WHERE id = ?', [notes.slice(0, 4000), joueurId]);
+        await runSql(db, 'UPDATE users SET notes_internes = ? WHERE id = ?', [notes.slice(0, 4000), joueurId]);
       }
-      const updated = queryOne(db, 'SELECT id, nom, prenom, is_banned, banned_reason, notes_internes FROM users WHERE id = ?', [joueurId]);
+      const updated = await queryOne(db, 'SELECT id, nom, prenom, is_banned, banned_reason, notes_internes FROM users WHERE id = ?', [joueurId]);
       res.json({ joueur: updated });
     } catch (err) {
       console.error(err);
@@ -238,7 +300,7 @@ function mountGerantCrmRoutes(app) {
 
       const phoneDigits = digits(telephone);
       if (phoneDigits) {
-        const existing = queryOne(db, "SELECT id, nom FROM users WHERE REPLACE(REPLACE(telephone, ' ', ''), '+', '') LIKE ? AND COALESCE(role, 'joueur') = 'joueur'", [`%${phoneDigits.slice(-9)}`]);
+        const existing = await queryOne(db, "SELECT id, nom FROM users WHERE REPLACE(REPLACE(telephone, ' ', ''), '+', '') LIKE ? AND COALESCE(role, 'joueur') = 'joueur'", [`%${phoneDigits.slice(-9)}`]);
         if (existing) {
           return res.status(409).json({
             error: 'Un joueur existe déjà avec ce téléphone',
@@ -249,9 +311,9 @@ function mountGerantCrmRoutes(app) {
       }
 
       const email = `walkin.${phoneDigits || "x"}.${Date.now()}@joueur.terrainsn.local`;
-      runSql(db, `INSERT INTO users (nom, email, telephone, role, is_active, telephone_verified)
+      await runSql(db, `INSERT INTO users (nom, email, telephone, role, is_active, telephone_verified)
         VALUES (?, ?, ?, 'joueur', 1, 0)`, [nom, email, telephone || null]);
-      const created = queryOne(db, 'SELECT id, nom, prenom, telephone, email FROM users WHERE email = ?', [email]);
+      const created = await queryOne(db, 'SELECT id, nom, prenom, telephone, email FROM users WHERE email = ?', [email]);
       res.status(201).json({ joueur: created });
     } catch (err) {
       console.error(err);
@@ -264,7 +326,7 @@ function mountGerantCrmRoutes(app) {
       const db = await getDb();
       const terrainId = req.user.terrain_id;
       const reservationId = Number(req.params.id);
-      const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?', [reservationId, terrainId]);
+      const reservation = await queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?', [reservationId, terrainId]);
       if (!reservation) return res.status(404).json({ error: 'Reservation non trouvee' });
 
       let joueurId = Number(req.body?.joueur_id || 0);
@@ -272,19 +334,19 @@ function mountGerantCrmRoutes(app) {
         const nom = String(req.body.nom).trim();
         const telephone = String(req.body.telephone || '').trim();
         const email = `walkin.${digits(telephone) || "x"}.${Date.now()}@joueur.terrainsn.local`;
-        runSql(db, `INSERT INTO users (nom, email, telephone, role, is_active) VALUES (?, ?, ?, 'joueur', 1)`, [
+        await runSql(db, `INSERT INTO users (nom, email, telephone, role, is_active) VALUES (?, ?, ?, 'joueur', 1)`, [
           nom, email, telephone || reservation.joueur_telephone || null,
         ]);
-        const created = queryOne(db, 'SELECT id FROM users WHERE email = ?', [email]);
+        const created = await queryOne(db, 'SELECT id FROM users WHERE email = ?', [email]);
         joueurId = created.id;
       }
       if (!joueurId) return res.status(400).json({ error: 'joueur_id ou nom requis' });
 
-      const joueur = queryOne(db, 'SELECT id, nom, prenom, telephone FROM users WHERE id = ?', [joueurId]);
+      const joueur = await queryOne(db, 'SELECT id, nom, prenom, telephone FROM users WHERE id = ?', [joueurId]);
       if (!joueur) return res.status(404).json({ error: 'Joueur introuvable' });
 
       const label = displayName(joueur);
-      runSql(db, `UPDATE reservations SET joueur_id = ?, joueur_nom = ?, joueur_telephone = COALESCE(?, joueur_telephone) WHERE id = ? AND terrain_id = ?`, [
+      await runSql(db, `UPDATE reservations SET joueur_id = ?, joueur_nom = ?, joueur_telephone = COALESCE(?, joueur_telephone) WHERE id = ? AND terrain_id = ?`, [
         joueurId, label, joueur.telephone, reservationId, terrainId,
       ]);
       res.json({

@@ -1,4 +1,4 @@
-const { queryAll, queryOne } = require('./database');
+const { queryAll, queryOne, runSql } = require('./database');
 
 const GRACE_DAYS = 3;
 
@@ -8,21 +8,21 @@ function prochaineEcheanceMensuelle(from = new Date()) {
   return date.toISOString().slice(0, 10);
 }
 
-function ensurePendingAbonnement(database, terrainId, montant) {
+async function ensurePendingAbonnement(database, terrainId, montant) {
   const amount = Number(montant || 0);
   if (!Number.isFinite(amount) || amount <= 0) return null;
 
-  const existing = queryOne(database, "SELECT * FROM abonnements WHERE terrain_id = ? AND statut != 'paye' ORDER BY date_echeance DESC LIMIT 1", [terrainId]);
+  const existing = await queryOne(database, "SELECT * FROM abonnements WHERE terrain_id = ? AND statut != 'paye' ORDER BY date_echeance DESC LIMIT 1", [terrainId]);
   if (existing) return existing;
 
   const dateEcheance = prochaineEcheanceMensuelle();
-  database.run('INSERT INTO abonnements (terrain_id, montant, date_echeance, statut) VALUES (?, ?, ?, ?)', [terrainId, amount, dateEcheance, 'en_attente']);
-  database.run('UPDATE terrains SET abonnement_prochain_paiement = ? WHERE id = ?', [dateEcheance, terrainId]);
-  return queryOne(database, 'SELECT * FROM abonnements WHERE terrain_id = ? ORDER BY id DESC LIMIT 1', [terrainId]);
+  await runSql(database, 'INSERT INTO abonnements (terrain_id, montant, date_echeance, statut) VALUES (?, ?, ?, ?)', [terrainId, amount, dateEcheance, 'en_attente']);
+  await runSql(database, 'UPDATE terrains SET abonnement_prochain_paiement = ? WHERE id = ?', [dateEcheance, terrainId]);
+  return await queryOne(database, 'SELECT * FROM abonnements WHERE terrain_id = ? ORDER BY id DESC LIMIT 1', [terrainId]);
 }
 
-function marquerAbonnementPaye(database, abonnementId) {
-  const abonnement = queryOne(database, `SELECT a.*, t.modele_revenus, t.abonnement_montant
+async function marquerAbonnementPaye(database, abonnementId) {
+  const abonnement = await queryOne(database, `SELECT a.*, t.modele_revenus, t.abonnement_montant
     FROM abonnements a JOIN terrains t ON t.id = a.terrain_id
     WHERE a.id = ?`, [abonnementId]);
   if (!abonnement) {
@@ -33,19 +33,19 @@ function marquerAbonnementPaye(database, abonnementId) {
   if (abonnement.statut === 'paye') return abonnement;
 
   const nextDueDate = prochaineEcheanceMensuelle();
-  database.run("UPDATE abonnements SET statut = 'paye', paye_le = CURRENT_TIMESTAMP WHERE id = ?", [abonnementId]);
-  database.run('UPDATE terrains SET is_active = 1, abonnement_prochain_paiement = ? WHERE id = ?', [nextDueDate, abonnement.terrain_id]);
+  await runSql(database, "UPDATE abonnements SET statut = 'paye', paye_le = CURRENT_TIMESTAMP WHERE id = ?", [abonnementId]);
+  await runSql(database, 'UPDATE terrains SET is_active = 1, abonnement_prochain_paiement = ? WHERE id = ?', [nextDueDate, abonnement.terrain_id]);
 
   if (abonnement.modele_revenus === 'abonnement') {
     const nextAmount = Number(abonnement.abonnement_montant || abonnement.montant || 0);
-    database.run('INSERT INTO abonnements (terrain_id, montant, date_echeance, statut) VALUES (?, ?, ?, ?)', [abonnement.terrain_id, nextAmount, nextDueDate, 'en_attente']);
+    await runSql(database, 'INSERT INTO abonnements (terrain_id, montant, date_echeance, statut) VALUES (?, ?, ?, ?)', [abonnement.terrain_id, nextAmount, nextDueDate, 'en_attente']);
   }
 
-  return queryOne(database, 'SELECT * FROM abonnements WHERE id = ?', [abonnementId]);
+  return await queryOne(database, 'SELECT * FROM abonnements WHERE id = ?', [abonnementId]);
 }
 
-function marquerAchatDefinitifPaye(database, terrainId, montantPaye = null) {
-  const terrain = queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+async function marquerAchatDefinitifPaye(database, terrainId, montantPaye = null) {
+  const terrain = await queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) {
     const error = new Error('Terrain introuvable');
     error.statusCode = 404;
@@ -57,7 +57,7 @@ function marquerAchatDefinitifPaye(database, terrainId, montantPaye = null) {
     error.statusCode = 400;
     throw error;
   }
-  database.run(`UPDATE terrains
+  await runSql(database, `UPDATE terrains
     SET modele_revenus = 'achat_definitif',
         achat_definitif_montant = ?,
         achat_definitif_paye = 1,
@@ -66,31 +66,31 @@ function marquerAchatDefinitifPaye(database, terrainId, montantPaye = null) {
         abonnement_prochain_paiement = NULL,
         is_active = 1
     WHERE id = ?`, [montant, terrainId]);
-  database.run("UPDATE abonnements SET statut = 'paye', paye_le = COALESCE(paye_le, CURRENT_TIMESTAMP) WHERE terrain_id = ? AND statut != 'paye'", [terrainId]);
-  return queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+  await runSql(database, "UPDATE abonnements SET statut = 'paye', paye_le = COALESCE(paye_le, CURRENT_TIMESTAMP) WHERE terrain_id = ? AND statut != 'paye'", [terrainId]);
+  return await queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
 }
 
-function appliquerSuspensionsAbonnements(database) {
-  database.run(`UPDATE abonnements
+async function appliquerSuspensionsAbonnements(database) {
+  await runSql(database, `UPDATE abonnements
     SET statut = 'en_retard'
-    WHERE statut = 'en_attente' AND date('now') > date(date_echeance)`);
-  database.run(`UPDATE terrains
+    WHERE statut = 'en_attente' AND CURRENT_DATE > date_echeance`);
+  await runSql(database, `UPDATE terrains
     SET is_active = 0
     WHERE modele_revenus = 'abonnement'
       AND id IN (
         SELECT terrain_id FROM abonnements
-        WHERE statut != 'paye' AND date('now') > date(date_echeance, '+${GRACE_DAYS} days')
+        WHERE statut != 'paye' AND CURRENT_DATE > (date_echeance + INTERVAL '${GRACE_DAYS} days')
       )`);
 }
 
-function abonnementsAvecEtat(database) {
-  return queryAll(database, `SELECT a.*, t.nom AS terrain_nom, t.is_active,
+async function abonnementsAvecEtat(database) {
+  return await queryAll(database, `SELECT a.*, t.nom AS terrain_nom, t.is_active,
     CASE
-      WHEN a.statut != 'paye' AND date('now') > date(a.date_echeance, '+${GRACE_DAYS} days') THEN 'suspension_due'
-      WHEN a.statut != 'paye' AND date('now') > date(a.date_echeance) THEN 'grace'
+      WHEN a.statut != 'paye' AND CURRENT_DATE > (a.date_echeance + INTERVAL '${GRACE_DAYS} days') THEN 'suspension_due'
+      WHEN a.statut != 'paye' AND CURRENT_DATE > a.date_echeance THEN 'grace'
       ELSE a.statut
     END AS etat_operationnel,
-    date(a.date_echeance, '+${GRACE_DAYS} days') AS suspension_apres
+    (a.date_echeance + INTERVAL '${GRACE_DAYS} days')::date AS suspension_apres
     FROM abonnements a
     JOIN terrains t ON t.id = a.terrain_id
     ORDER BY a.date_echeance ASC`);

@@ -63,25 +63,26 @@ function mapRegle(row) {
   };
 }
 
-function listRegles(db, terrainId, { actifsUniquement = false } = {}) {
+async function listRegles(db, terrainId, { actifsUniquement = false } = {}) {
   const extra = actifsUniquement ? ' AND actif = 1' : '';
-  return queryAll(
+  const rows = await queryAll(
     db,
     `SELECT * FROM regles_tarifs
       WHERE terrain_id = ?${extra}
       ORDER BY priorite DESC, id DESC`,
     [terrainId],
-  ).map(mapRegle);
+  );
+  return rows.map(mapRegle);
 }
 
-function getPrixActif(db, terrainId, date, heureDebut, jourOverride = null) {
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+async function getPrixActif(db, terrainId, date, heureDebut, jourOverride = null) {
+  const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) {
     return { prix_demi_terrain: 0, prix_terrain_entier: 0, nom_tarif: 'Tarif de base' };
   }
 
   const jour = jourOverride || jourDepuisDate(date);
-  const tarifs = queryAll(
+  const tarifs = await queryAll(
     db,
     `SELECT * FROM regles_tarifs
       WHERE terrain_id = ? AND actif = 1
@@ -102,8 +103,8 @@ function getPrixActif(db, terrainId, date, heureDebut, jourOverride = null) {
   }
 
   const { prixHoraireEffectif, prixBaseTerrain } = require('../pricingService');
-  const prixEntier = prixHoraireEffectif(db, terrain, date, heureDebut, 'entier', jourOverride);
-  const prixMoitie = prixHoraireEffectif(db, terrain, date, heureDebut, 'moitie', jourOverride);
+  const prixEntier = await prixHoraireEffectif(db, terrain, date, heureDebut, 'entier', jourOverride);
+  const prixMoitie = await prixHoraireEffectif(db, terrain, date, heureDebut, 'moitie', jourOverride);
   const baseEntier = prixBaseTerrain(terrain, 'entier');
   const baseMoitie = prixBaseTerrain(terrain, 'moitie');
   const personnalise = Number(prixEntier) !== Number(baseEntier) || Number(prixMoitie) !== Number(baseMoitie);
@@ -128,22 +129,24 @@ function nextDateForWeekday(weekdayName) {
   return `${y}-${m}-${d}`;
 }
 
-function apercuPrix(db, terrainId) {
+async function apercuPrix(db, terrainId) {
   const samples = [
     { quand: 'Ce samedi à 20h', date: nextDateForWeekday('samedi'), heure: '20:00' },
     { quand: 'Ce lundi à 14h', date: nextDateForWeekday('lundi'), heure: '14:00' },
   ];
-  return samples.map((s) => {
-    const prix = getPrixActif(db, terrainId, s.date, s.heure);
-    return {
+  const out = [];
+  for (const s of samples) {
+    const prix = await getPrixActif(db, terrainId, s.date, s.heure);
+    out.push({
       quand: s.quand,
       date: s.date,
       heure: s.heure,
       nom_tarif: prix.nom_tarif,
       prix_demi_terrain: prix.prix_demi_terrain,
       prix_terrain_entier: prix.prix_terrain_entier,
-    };
-  });
+    });
+  }
+  return out;
 }
 
 function assertPayload(body) {
@@ -194,9 +197,9 @@ function assertPayload(body) {
   };
 }
 
-function creerRegle(db, terrainId, body) {
+async function creerRegle(db, terrainId, body) {
   const payload = assertPayload(body);
-  const result = runSql(
+  const result = await runSql(
     db,
     `INSERT INTO regles_tarifs
       (terrain_id, nom, prix_demi_terrain, prix_terrain_entier, type, jours, heure_debut, heure_fin, priorite, actif, source)
@@ -215,18 +218,18 @@ function creerRegle(db, terrainId, body) {
       payload.source,
     ],
   );
-  return queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ?', [result.lastInsertRowid]);
+  return await queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ?', [result.lastInsertRowid]);
 }
 
-function modifierRegle(db, terrainId, regleId, body) {
-  const existing = queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ? AND terrain_id = ?', [regleId, terrainId]);
+async function modifierRegle(db, terrainId, regleId, body) {
+  const existing = await queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ? AND terrain_id = ?', [regleId, terrainId]);
   if (!existing) {
     const err = new Error('Règle introuvable');
     err.statusCode = 404;
     throw err;
   }
   const payload = assertPayload({ ...existing, ...body, jours: body?.jours ?? existing.jours });
-  runSql(
+  await runSql(
     db,
     `UPDATE regles_tarifs SET
       nom = ?, prix_demi_terrain = ?, prix_terrain_entier = ?, type = ?,
@@ -247,29 +250,29 @@ function modifierRegle(db, terrainId, regleId, body) {
       terrainId,
     ],
   );
-  return queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ?', [regleId]);
+  return await queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ?', [regleId]);
 }
 
-function toggleRegle(db, terrainId, regleId, actif) {
-  const existing = queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ? AND terrain_id = ?', [regleId, terrainId]);
+async function toggleRegle(db, terrainId, regleId, actif) {
+  const existing = await queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ? AND terrain_id = ?', [regleId, terrainId]);
   if (!existing) {
     const err = new Error('Règle introuvable');
     err.statusCode = 404;
     throw err;
   }
   const next = actif === undefined ? (Number(existing.actif) ? 0 : 1) : (actif ? 1 : 0);
-  runSql(db, 'UPDATE regles_tarifs SET actif = ? WHERE id = ? AND terrain_id = ?', [next, regleId, terrainId]);
-  return queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ?', [regleId]);
+  await runSql(db, 'UPDATE regles_tarifs SET actif = ? WHERE id = ? AND terrain_id = ?', [next, regleId, terrainId]);
+  return await queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ?', [regleId]);
 }
 
-function supprimerRegle(db, terrainId, regleId) {
-  const existing = queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ? AND terrain_id = ?', [regleId, terrainId]);
+async function supprimerRegle(db, terrainId, regleId) {
+  const existing = await queryOne(db, 'SELECT * FROM regles_tarifs WHERE id = ? AND terrain_id = ?', [regleId, terrainId]);
   if (!existing) {
     const err = new Error('Règle introuvable');
     err.statusCode = 404;
     throw err;
   }
-  runSql(db, 'DELETE FROM regles_tarifs WHERE id = ? AND terrain_id = ?', [regleId, terrainId]);
+  await runSql(db, 'DELETE FROM regles_tarifs WHERE id = ? AND terrain_id = ?', [regleId, terrainId]);
   return { ok: true, id: Number(regleId) };
 }
 
@@ -439,17 +442,20 @@ function grilleFromRegles(regles, base = {}) {
   return grille;
 }
 
-function appliquerGrille(db, terrainId, body, base = {}) {
+async function appliquerGrille(db, terrainId, body, base = {}) {
   const grille = normalizeGrille(body, base);
-  runSql(
+  await runSql(
     db,
     `UPDATE regles_tarifs SET actif = 0
       WHERE terrain_id = ? AND type IN ('semaine', 'weekend', 'soiree')`,
     [terrainId],
   );
-  runSql(db, `DELETE FROM regles_tarifs WHERE terrain_id = ? AND source = 'grille_standard'`, [terrainId]);
-  const created = rulesFromGrille(grille).map((rule) => mapRegle(creerRegle(db, terrainId, rule)));
-  return { grille, regles: created, apercu: apercuPrix(db, terrainId) };
+  await runSql(db, `DELETE FROM regles_tarifs WHERE terrain_id = ? AND source = 'grille_standard'`, [terrainId]);
+  const created = [];
+  for (const rule of rulesFromGrille(grille)) {
+    created.push(mapRegle(await creerRegle(db, terrainId, rule)));
+  }
+  return { grille, regles: created, apercu: await apercuPrix(db, terrainId) };
 }
 
 function parsePayload(raw) {
@@ -477,9 +483,9 @@ function mapProposition(row) {
   };
 }
 
-function getPropositionPending(db, terrainId) {
+async function getPropositionPending(db, terrainId) {
   return mapProposition(
-    queryOne(
+    await queryOne(
       db,
       `SELECT * FROM propositions_grille_tarifs
         WHERE terrain_id = ? AND statut = 'en_attente'
@@ -489,9 +495,9 @@ function getPropositionPending(db, terrainId) {
   );
 }
 
-function proposerGrille(db, terrainId, body, demandeur) {
+async function proposerGrille(db, terrainId, body, demandeur) {
   const grille = normalizeGrille(body);
-  const existing = queryOne(
+  const existing = await queryOne(
     db,
     `SELECT * FROM propositions_grille_tarifs
       WHERE terrain_id = ? AND statut = 'en_attente'
@@ -500,16 +506,16 @@ function proposerGrille(db, terrainId, body, demandeur) {
   );
   const payload = JSON.stringify(grille);
   if (existing) {
-    runSql(
+    await runSql(
       db,
       `UPDATE propositions_grille_tarifs
         SET payload = ?, demandeur_type = ?, demandeur_id = ?, created_at = CURRENT_TIMESTAMP
         WHERE id = ?`,
       [payload, demandeur?.type || null, demandeur?.id || null, existing.id],
     );
-    return mapProposition(queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [existing.id]));
+    return mapProposition(await queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [existing.id]));
   }
-  const result = runSql(
+  const result = await runSql(
     db,
     `INSERT INTO propositions_grille_tarifs
       (terrain_id, demandeur_type, demandeur_id, payload, statut)
@@ -517,11 +523,11 @@ function proposerGrille(db, terrainId, body, demandeur) {
     [terrainId, demandeur?.type || null, demandeur?.id || null, payload],
   );
   return mapProposition(
-    queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [result.lastInsertRowid]),
+    await queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [result.lastInsertRowid]),
   );
 }
 
-function listPropositions(db, { terrainId, statut } = {}) {
+async function listPropositions(db, { terrainId, statut } = {}) {
   const where = [];
   const params = [];
   if (terrainId) {
@@ -535,11 +541,12 @@ function listPropositions(db, { terrainId, statut } = {}) {
   const sql = `SELECT * FROM propositions_grille_tarifs
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY created_at DESC, id DESC`;
-  return queryAll(db, sql, params).map(mapProposition);
+  const rows = await queryAll(db, sql, params);
+  return rows.map(mapProposition);
 }
 
-function validerProposition(db, propositionId, adminId, base = {}) {
-  const row = queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [propositionId]);
+async function validerProposition(db, propositionId, adminId, base = {}) {
+  const row = await queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [propositionId]);
   if (!row) {
     const err = new Error('Proposition introuvable');
     err.statusCode = 404;
@@ -550,8 +557,8 @@ function validerProposition(db, propositionId, adminId, base = {}) {
     err.statusCode = 409;
     throw err;
   }
-  const applied = appliquerGrille(db, row.terrain_id, parsePayload(row.payload), base);
-  runSql(
+  const applied = await appliquerGrille(db, row.terrain_id, parsePayload(row.payload), base);
+  await runSql(
     db,
     `UPDATE propositions_grille_tarifs
       SET statut = 'acceptee', traite_at = CURRENT_TIMESTAMP, traite_par = ?
@@ -560,14 +567,14 @@ function validerProposition(db, propositionId, adminId, base = {}) {
   );
   return {
     proposition: mapProposition(
-      queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [propositionId]),
+      await queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [propositionId]),
     ),
     ...applied,
   };
 }
 
-function refuserProposition(db, propositionId, adminId, commentaire) {
-  const row = queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [propositionId]);
+async function refuserProposition(db, propositionId, adminId, commentaire) {
+  const row = await queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [propositionId]);
   if (!row) {
     const err = new Error('Proposition introuvable');
     err.statusCode = 404;
@@ -578,14 +585,14 @@ function refuserProposition(db, propositionId, adminId, commentaire) {
     err.statusCode = 409;
     throw err;
   }
-  runSql(
+  await runSql(
     db,
     `UPDATE propositions_grille_tarifs
       SET statut = 'refusee', commentaire = ?, traite_at = CURRENT_TIMESTAMP, traite_par = ?
       WHERE id = ?`,
     [commentaire || null, adminId || null, propositionId],
   );
-  return mapProposition(queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [propositionId]));
+  return mapProposition(await queryOne(db, 'SELECT * FROM propositions_grille_tarifs WHERE id = ?', [propositionId]));
 }
 
 module.exports = {

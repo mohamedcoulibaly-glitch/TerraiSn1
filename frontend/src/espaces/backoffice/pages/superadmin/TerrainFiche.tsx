@@ -13,6 +13,7 @@ import PhotoUploadTerrain from "@/espaces/backoffice/components/superadmin/Photo
 import LocalisationTerrain from "@/espaces/backoffice/components/superadmin/LocalisationTerrain";
 import TerrainCommoditesEditor, { type CommoditeToggle } from "@/espaces/backoffice/components/superadmin/TerrainCommoditesEditor";
 import AuditTables, { type AuditCommoditeRow, type AuditPhotoRow } from "@/espaces/backoffice/components/superadmin/AuditTables";
+import GerantsTerrainTab from "@/espaces/backoffice/components/superadmin/GerantsTerrainTab";
 import {
   gerantDuTerrain,
   getContratOverlay,
@@ -26,7 +27,7 @@ const TABS = [
   { id: "contrat", label: "Contrat paiement" },
   { id: "features", label: "Fonctionnalités" },
   { id: "tarifs", label: "Tarifs" },
-  { id: "users", label: "Utilisateurs" },
+  { id: "gerants", label: "Gérants" },
   { id: "audit", label: "Audit" },
   { id: "historique", label: "Historique" },
 ] as const;
@@ -41,7 +42,10 @@ export default function TerrainFiche() {
   const { id } = useParams();
   const terrainId = Number(id);
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = (searchParams.get("tab") as (typeof TABS)[number]["id"]) || "contrat";
+  const tabParam = searchParams.get("tab");
+  const tab = (
+    tabParam === "users" ? "gerants" : (tabParam as (typeof TABS)[number]["id"]) || "contrat"
+  );
   const navigate = useNavigate();
   const { user } = useAuth();
   const [terrain, setTerrain] = useState<any>(null);
@@ -271,7 +275,17 @@ export default function TerrainFiche() {
             </div>
             <div>
               <dt style={{ color: "var(--sa-muted)" }}>Gérant</dt>
-              <dd className="font-medium">{gerant?.nom || "Non assigné"}</dd>
+              <dd className="font-medium flex flex-wrap items-center gap-2">
+                <span>{gerant?.nom || "Non assigné"}</span>
+                <button
+                  type="button"
+                  className="text-[12px] font-semibold underline"
+                  style={{ color: "var(--sa-primary)" }}
+                  onClick={() => setSearchParams({ tab: "gerants" })}
+                >
+                  Gérer les gérants →
+                </button>
+              </dd>
             </div>
             <div>
               <dt style={{ color: "var(--sa-muted)" }}>Taille</dt>
@@ -337,29 +351,8 @@ export default function TerrainFiche() {
         <GrilleTarifaireAdmin terrainId={terrain.id} terrainNom={terrain.nom} onClose={() => navigate(`/backoffice/superadmin/terrains/${terrain.id}?tab=contrat`)} />
       ) : null}
 
-      {tab === "users" ? (
-        <section className="rounded-xl overflow-hidden" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-          <table className="sa-table">
-            <thead>
-              <tr>
-                <th>Nom</th>
-                <th>Rôle</th>
-                <th>Téléphone</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users
-                .filter((u) => (u.role === "gerant" && Number(u.terrain_id) === terrainId) || (u.role === "proprietaire" && Number(u.id) === Number(terrain.proprietaire_id)))
-                .map((u) => (
-                  <tr key={`${u.role}-${u.id}`}>
-                    <td>{u.nom}</td>
-                    <td>{u.role}</td>
-                    <td>{u.telephone || "—"}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </section>
+      {tab === "gerants" ? (
+        <GerantsTerrainTab terrainId={terrainId} terrainNom={terrain.nom || "Terrain"} />
       ) : null}
 
       {tab === "audit" ? (

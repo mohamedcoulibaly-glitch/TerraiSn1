@@ -23,6 +23,7 @@ backend/*.bak
 .wwebjs_cache
 backend/.wwebjs_auth
 backend/.wwebjs_cache
+backend/data/wa-auth
 
 # Editor directories and files
 .vscode/*

@@ -12,14 +12,27 @@
  * affiche les identifiants de connexion de TOUS les rôles présents en base.
  * Si la base est vide, elle exécute `npm run setup` (migrations + seed).
  */
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 const readline = require('readline');
+const net = require('net');
 const bcrypt = require('./backend/node_modules/bcryptjs');
 const { getDb, queryAll } = require('./backend/database');
 
 const ROOT = __dirname;
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD || 'password123';
+const DATABASE_URL =
+  process.env.DATABASE_URL ||
+  'postgresql://terrainsn:terrainsn@localhost:5433/terrainsn';
+let PG_HOST = 'localhost';
+let PG_PORT = 5433;
+try {
+  const u = new URL(DATABASE_URL);
+  if (u.hostname) PG_HOST = u.hostname;
+  if (u.port) PG_PORT = Number(u.port);
+} catch {
+  /* defaults */
+}
 
 const C = {
   reset: '\x1b[0m',
@@ -132,6 +145,50 @@ async function ensureDependencies(spec) {
   if (!hasDependencies(spec.cwd)) await installDependencies(spec);
 }
 
+function waitForPort(host, port, timeoutMs = 60000) {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const tryOnce = () => {
+      const socket = net.connect({ host, port }, () => {
+        socket.end();
+        resolve();
+      });
+      socket.on('error', () => {
+        socket.destroy();
+        if (Date.now() - start > timeoutMs) {
+          reject(new Error(`Postgres non joignable sur ${host}:${port} après ${timeoutMs}ms`));
+          return;
+        }
+        setTimeout(tryOnce, 1000);
+      });
+    };
+    tryOnce();
+  });
+}
+
+async function ensurePostgres() {
+  try {
+    await waitForPort(PG_HOST, PG_PORT, 2000);
+    logLine(C.green, `  ✓ PostgreSQL disponible sur ${PG_HOST}:${PG_PORT}`);
+    return;
+  } catch {
+    /* pas encore up */
+  }
+
+  logLine(C.yellow, '  PostgreSQL indisponible → docker compose up -d…');
+  try {
+    execSync('docker compose up -d', {
+      cwd: ROOT,
+      stdio: 'inherit',
+      shell: true,
+    });
+  } catch (err) {
+    throw new Error(`Impossible de démarrer Postgres via Docker : ${err.message}`);
+  }
+  await waitForPort(PG_HOST, PG_PORT, 90000);
+  logLine(C.green, `  ✓ PostgreSQL prêt sur ${PG_HOST}:${PG_PORT}`);
+}
+
 function shutdown() {
   for (const child of children) {
     try {
@@ -169,17 +226,17 @@ function demoPasswordIfKnown(hash) {
 }
 
 async function countAccounts(db) {
-  const sum = (sql) => Number(queryAll(db, sql)[0].n);
-  const users = sum('SELECT COUNT(*) AS n FROM users');
-  const proprietaires = sum('SELECT COUNT(*) AS n FROM proprietaires');
-  const employes = sum('SELECT COUNT(*) AS n FROM employes');
+  const sum = async (sql) => Number((await queryAll(db, sql))[0].n);
+  const users = await sum('SELECT COUNT(*) AS n FROM users');
+  const proprietaires = await sum('SELECT COUNT(*) AS n FROM proprietaires');
+  const employes = await sum('SELECT COUNT(*) AS n FROM employes');
   return users + proprietaires + employes;
 }
 
 async function loadAccounts(db) {
   const accounts = [];
 
-  const users = queryAll(
+  const users = await queryAll(
     db,
     "SELECT nom, email, telephone, role, password_hash FROM users WHERE is_active = 1 ORDER BY id"
   );
@@ -194,7 +251,7 @@ async function loadAccounts(db) {
     });
   }
 
-  const proprietaires = queryAll(
+  const proprietaires = await queryAll(
     db,
     "SELECT nom, email, telephone, password_hash FROM proprietaires WHERE statut = 'actif' ORDER BY id"
   );
@@ -208,7 +265,7 @@ async function loadAccounts(db) {
     });
   }
 
-  const employes = queryAll(
+  const employes = await queryAll(
     db,
     "SELECT nom, email, telephone, password_hash FROM employes WHERE is_active = 1 ORDER BY id"
   );
@@ -278,6 +335,13 @@ async function main() {
   console.log('');
   logLine(C.green + C.bold, '  🏟️  TerrainSN — Lancement du développement');
   logLine('', '');
+
+  try {
+    await ensurePostgres();
+  } catch (error) {
+    logLine(C.red, `  ${error.message}`);
+    process.exit(1);
+  }
 
   let db;
   try {

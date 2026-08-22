@@ -41,6 +41,24 @@ function removeUser() {
   localStorage.removeItem('terrainsn_user');
 }
 
+const GERANT_TERRAIN_KEY = 'gerant_terrain_actif';
+
+export function getGerantTerrainActif(): number | null {
+  const raw = localStorage.getItem(GERANT_TERRAIN_KEY);
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function setGerantTerrainActif(terrainId: number | string | null) {
+  if (terrainId == null || terrainId === '') {
+    localStorage.removeItem(GERANT_TERRAIN_KEY);
+    return;
+  }
+  localStorage.setItem(GERANT_TERRAIN_KEY, String(terrainId));
+  window.dispatchEvent(new CustomEvent('gerant-terrain-changed', { detail: Number(terrainId) }));
+}
+
 const TECHNICAL_ERROR_RE = /syntaxerror|sql\b|stack|paytech|<html|exception|traceback|econnrefused|errno/i;
 const WHATSAPP_USER_ERROR_RE = /whatsapp non connect|numero whatsapp|envoi whatsapp|lien whatsapp|problème avec whatsapp|paramètres pour le lier/i;
 
@@ -73,7 +91,11 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
     path.includes('/webhook/paytech') ||
     path.includes('simulate');
   const isQrScan = path.includes('/scanner') || path.includes('/scan-qr');
-  const isGerantRoute = path.includes('/gerant/') || path.includes('/renvoyer-lien') || path.includes('/reservations/gerant');
+  const isGerantRoute =
+    path.includes('/gerant/') ||
+    path.includes('/renvoyer-lien') ||
+    path.includes('/renvoyer-confirmation') ||
+    path.includes('/reservations/gerant');
   const isReservation = path.includes('/reservation') && !isQrScan && !isGerantRoute;
 
   if (isPayment) {
@@ -159,6 +181,10 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
+  const terrainActif = getGerantTerrainActif();
+  if (terrainActif && !headers['X-Terrain-Id']) {
+    headers['X-Terrain-Id'] = String(terrainActif);
+  }
 
   let res: Response;
   try {
@@ -212,6 +238,9 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
       match_date?: string;
       match_time?: string;
       qr_code_scanne_at?: string;
+      priorite_reservation_id?: number;
+      priorite_heure?: string;
+      priorite_joueur?: string;
     };
     if (typeof data.code === 'string') err.code = data.code;
     if (typeof data.telephone === 'string') err.telephone = data.telephone;
@@ -220,6 +249,9 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
     if (typeof data.match_date === 'string') err.match_date = data.match_date;
     if (typeof data.match_time === 'string') err.match_time = data.match_time;
     if (typeof data.qr_code_scanne_at === 'string') err.qr_code_scanne_at = data.qr_code_scanne_at;
+    if (typeof data.priorite_reservation_id === 'number') err.priorite_reservation_id = data.priorite_reservation_id;
+    if (typeof data.priorite_heure === 'string') err.priorite_heure = data.priorite_heure;
+    if (typeof data.priorite_joueur === 'string') err.priorite_joueur = data.priorite_joueur;
     err.status = res.status;
     throw err;
   }
@@ -380,8 +412,10 @@ export const terrainsApi = {
     return await request(`/terrains/${id}`);
   },
 
-  async getCreneaux(id: number | string, date: string) {
-    return await request(`/terrains/${id}/creneaux?date=${date}`);
+  async getCreneaux(id: number | string, date: string, opts?: { duree_minutes?: number }) {
+    const q = new URLSearchParams({ date });
+    if (opts?.duree_minutes != null) q.set("duree_minutes", String(opts.duree_minutes));
+    return await request(`/terrains/${id}/creneaux?${q.toString()}`);
   },
 
   async getDevis(
@@ -490,6 +524,29 @@ export const reservationsApi = {
     return await request('/reservations/gerant', { method: 'POST', body: JSON.stringify(data) });
   },
 
+  async verifierDisponibilite(data: {
+    terrain_id: number;
+    date: string;
+    heure_debut: string;
+    heure_fin: string;
+    exclure_reservation_id?: number;
+  }) {
+    return await request('/reservations/verifier-disponibilite', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }) as {
+      disponible: boolean;
+      duree_minutes?: number;
+      duree_label?: string;
+      conflits?: Array<{
+        heure_debut: string;
+        heure_fin: string;
+        duree_minutes?: number;
+        joueur_nom?: string | null;
+      }>;
+    };
+  },
+
   async renvoyerLienWhatsApp(id: number | string) {
     return await request(`/reservations/${id}/renvoyer-lien`, { method: 'POST' });
   },
@@ -500,6 +557,10 @@ export const reservationsApi = {
 
   async annuler(id: number | string) {
     return await request(`/reservations/${id}/annuler`, { method: 'PUT' });
+  },
+
+  async politiqueAnnulation(id: number | string) {
+    return await request(`/reservations/${id}/politique-annulation`);
   },
 
   async annulerGerant(id: number | string) {
@@ -615,6 +676,38 @@ export const employesApi = {
 export const gerantApi = {
   async dashboard() {
     return await request('/gerant/dashboard');
+  },
+
+  async terrains() {
+    return await request('/gerant/terrains') as {
+      terrains: Array<{
+        id: number;
+        nom: string;
+        adresse?: string;
+        ville?: string;
+        est_principal?: number;
+        note?: string | null;
+      }>;
+      terrain_actif: number | null;
+      terrains_ids: number[];
+    };
+  },
+
+  async planning() {
+    return await request('/gerant/planning');
+  },
+
+  async heartbeat(terrainId?: number) {
+    return await request('/gerant/heartbeat', {
+      method: 'POST',
+      body: JSON.stringify(terrainId != null ? { terrain_id: terrainId } : {}),
+    }) as { ok: boolean; autres_gerants?: Array<{ gerant_id: number; prenom?: string; nom?: string }> };
+  },
+
+  async gerantsEnLigne(terrainId: number) {
+    return await request(`/gerant/terrain/${terrainId}/gerants-en-ligne`) as {
+      gerants: Array<{ gerant_id: number; prenom?: string; nom?: string }>;
+    };
   },
 
   async reservationsToday(date?: string) {
@@ -784,10 +877,14 @@ export const gerantApi = {
     form.append('photos', file);
     if (estPrincipale) form.append('est_principale', 'true');
     const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const terrainActif = getGerantTerrainActif();
+    if (terrainActif) headers['X-Terrain-Id'] = String(terrainActif);
     const res = await fetch(`${API_URL}/gerant/terrain/photos`, {
       method: 'POST',
       body: form,
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers,
       credentials: 'include',
       cache: 'no-store',
     });

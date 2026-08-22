@@ -23,6 +23,7 @@ export type FluxReservation = {
   qr_code_scanne_at?: string | null;
   fenetre_retard?: number | null;
   dans_fenetre_checkin?: boolean;
+  mode_paiement?: string | null;
   crm?: CrmGate;
 };
 

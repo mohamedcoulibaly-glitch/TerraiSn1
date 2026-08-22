@@ -6,6 +6,27 @@
 
 const DEFAULT_FENETRE_RETARD_MIN = 30;
 
+/** Normalise une date PG (Date | ISO | YYYY-MM-DD) → YYYY-MM-DD */
+function toYmd(date) {
+  if (date == null) return '';
+  if (date instanceof Date && !Number.isNaN(date.getTime())) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(date).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return s.slice(0, 10);
+}
+
 function toMinutesParts(heure) {
   const [h, m] = String(heure || '00:00').slice(0, 5).split(':').map(Number);
   return { h: h || 0, m: m || 0 };
@@ -13,14 +34,14 @@ function toMinutesParts(heure) {
 
 function creneauStartMs(date, heureDebut) {
   const { h, m } = toMinutesParts(heureDebut);
-  const d = new Date(`${String(date).slice(0, 10)}T00:00:00`);
+  const d = new Date(`${toYmd(date)}T00:00:00`);
   d.setHours(h, m, 0, 0);
   return d.getTime();
 }
 
 function creneauEndMs(date, heureFin) {
   const { h, m } = toMinutesParts(heureFin);
-  const d = new Date(`${String(date).slice(0, 10)}T00:00:00`);
+  const d = new Date(`${toYmd(date)}T00:00:00`);
   d.setHours(h, m, 0, 0);
   return d.getTime();
 }
@@ -43,6 +64,49 @@ function calculerFenetreCheckIn({ date, heure_debut, heure_fin, fenetre_retard }
 function estDansLaFenetreCheckIn(creneau, maintenant = Date.now()) {
   const { debutFenetre, finFenetre } = calculerFenetreCheckIn(creneau);
   return maintenant >= debutFenetre && maintenant <= finFenetre;
+}
+
+/** Clé de tri : le créneau le plus tôt (date + heure) est prioritaire. */
+function prioriteScanKey(row) {
+  const date = toYmd(row.date || row.creneau_date);
+  const heure = String(row.heure_debut || row.creneau_heure_debut || '99:99').slice(0, 5);
+  const id = String(row.id || row.reservation_id || 0).padStart(10, '0');
+  return `${date}|${heure}|${id}`;
+}
+
+function trierParPrioriteScan(rows = []) {
+  return [...rows].sort((a, b) => prioriteScanKey(a).localeCompare(prioriteScanKey(b)));
+}
+
+/**
+ * Parmi les résas déjà dans la fenêtre de validation, seule la plus haute
+ * (heure de début la plus proche / la plus tôt) est scannable.
+ */
+function assertPrioriteScanUnique(reservation, candidatsDansFenetre = []) {
+  const sorted = trierParPrioriteScan(candidatsDansFenetre);
+  if (!sorted.length) return;
+  const premier = sorted[0];
+  const targetId = Number(reservation.id || reservation.reservation_id);
+  const premierId = Number(premier.id || premier.reservation_id);
+  if (premierId && targetId && premierId !== targetId) {
+    const heure = String(premier.heure_debut || premier.creneau_heure_debut || '').slice(0, 5);
+    const qui = premier.joueur_nom || premier.code_reservation || 'le créneau prioritaire';
+    const error = new Error(
+      `Un seul créneau scannable à la fois. Valide d'abord ${heure || 'le créneau précédent'} (${qui}), puis celui-ci.`,
+    );
+    error.statusCode = 409;
+    error.code = 'QR_SCAN_PRIORITY';
+    error.priorite_reservation_id = premierId;
+    error.priorite_heure = heure || null;
+    error.priorite_joueur = premier.joueur_nom || null;
+    throw error;
+  }
+}
+
+function idPrioriteScannable(candidatsDansFenetre = []) {
+  const sorted = trierParPrioriteScan(candidatsDansFenetre);
+  if (!sorted.length) return null;
+  return Number(sorted[0].id || sorted[0].reservation_id) || null;
 }
 
 function assertFenetreScanQr(creneau, maintenant = Date.now()) {
@@ -72,8 +136,13 @@ function assertFenetreScanQr(creneau, maintenant = Date.now()) {
 
 module.exports = {
   DEFAULT_FENETRE_RETARD_MIN,
+  toYmd,
   calculerFenetreCheckIn,
   estDansLaFenetreCheckIn,
   assertFenetreScanQr,
+  assertPrioriteScanUnique,
+  trierParPrioriteScan,
+  prioriteScanKey,
+  idPrioriteScannable,
   normaliserFenetreRetard,
 };

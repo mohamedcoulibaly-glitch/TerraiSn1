@@ -5,27 +5,38 @@ async function seed() {
   console.log('🌱 Démarrage du seeding...');
   const db = await getDb();
 
-  // Vider les tables dans l'ordre (FK)
-  const tables = ['audit_logs', 'notifications', 'avis', 'matchs', 'paiements', 'reservations', 'creneaux', 'blocages_creneaux', 'horaires', 'employes', 'terrains', 'proprietaires', 'users'];
-  for (const t of tables) {
-    db.run(`DELETE FROM ${t}`);
-  }
+  // Vider les tables métier (FK) — conserve commodites / plateforme_settings
+  await runSql(
+    db,
+    `TRUNCATE TABLE
+      audit_logs, notifications, push_subscriptions, push_preferences, reservation_reminders,
+      avis, matchs, paiements, reservations, creneaux,
+      blocages_creneaux, blocages_groupes, encaissements_blocages, horaires,
+      gerants_terrains, planning_garde, sessions_gerant_actives, audit_gerants_terrain,
+      activite_gerant, score_confiance, dettes_commissions, audit_dette,
+      reversements, portefeuille_gerant, abonnements,
+      terrain_photos, terrain_commodites, terrain_features, audit_photos, audit_commodites,
+      tarifs_dynamiques, regles_tarifs, propositions_grille_tarifs,
+      mode_revenu_history, auth_otps,
+      employes, terrains, proprietaires, users
+    RESTART IDENTITY CASCADE`,
+  );
 
   const hash = bcrypt.hashSync('password123', 10);
 
   // --- USERS (joueurs + superadmin) ---
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Abdou Sow', 'abdou@email.com', hash, '+221 77 123 45 67', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Fatou Diallo', 'fatou@email.com', hash, '+221 77 234 56 78', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Moussa Ba', 'moussa@email.com', hash, '+221 77 345 67 89', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Awa Ndiaye', 'awa@email.com', hash, '+221 77 456 78 90', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Ibrahima Fall', 'ibrahima@email.com', hash, '+221 77 567 89 01', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Cheikh Mbaye', 'cheikh@email.com', hash, '+221 77 678 90 12', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Super Admin', 'admin@terrainsn.sn', hash, '+221 70 000 00 00', 'superadmin']);
+  await runSql(db, 'INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Abdou Sow', 'abdou@email.com', hash, '+221 77 123 45 67', 'joueur']);
+  await runSql(db, 'INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Fatou Diallo', 'fatou@email.com', hash, '+221 77 234 56 78', 'joueur']);
+  await runSql(db, 'INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Moussa Ba', 'moussa@email.com', hash, '+221 77 345 67 89', 'joueur']);
+  await runSql(db, 'INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Awa Ndiaye', 'awa@email.com', hash, '+221 77 456 78 90', 'joueur']);
+  await runSql(db, 'INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Ibrahima Fall', 'ibrahima@email.com', hash, '+221 77 567 89 01', 'joueur']);
+  await runSql(db, 'INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Cheikh Mbaye', 'cheikh@email.com', hash, '+221 77 678 90 12', 'joueur']);
+  await runSql(db, 'INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Super Admin', 'admin@terrainsn.sn', hash, '+221 70 000 00 00', 'super_admin']);
 
   // --- PROPRIETAIRES ---
-  db.run("INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['M. Diop', 'diop@terrainsn.sn', hash, '+221 78 100 00 01', 'premium']);
-  db.run("INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['Mme Fall', 'fall@terrainsn.sn', hash, '+221 78 200 00 02', 'free']);
-  db.run("INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['M. Ndiaye', 'ndiaye@terrainsn.sn', hash, '+221 78 300 00 03', 'free']);
+  await runSql(db, "INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['M. Diop', 'diop@terrainsn.sn', hash, '+221 78 100 00 01', 'premium']);
+  await runSql(db, "INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['Mme Fall', 'fall@terrainsn.sn', hash, '+221 78 200 00 02', 'free']);
+  await runSql(db, "INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['M. Ndiaye', 'ndiaye@terrainsn.sn', hash, '+221 78 300 00 03', 'free']);
 
   // --- TERRAINS ---
   const terrainsData = [
@@ -41,7 +52,7 @@ async function seed() {
     [1, 'Obélisque', 'Place de l\'Obélisque, Plateau', 'Dakar', 'foot', '5v5', 8000, 'Terrain très demandé près de l\'Obélisque — réservation anticipée conseillée.', '+221 77 900 11 22', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking', 'toilettes', 'buvette'])],
   ];
   for (const t of terrainsData) {
-    db.run(
+    await runSql(db, 
       'INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       t
     );
@@ -57,7 +68,7 @@ async function seed() {
     [1, 1, 'Mohamed Coulibaly', 'mohamed.gerant@gmail.com', hash, '+221 77 826 12 25', '+221778261225', 1],
   ];
   for (const e of employesData) {
-    db.run('INSERT INTO employes (proprietaire_id, terrain_id, nom, email, password_hash, telephone, whatsapp_number, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', e);
+    await runSql(db, 'INSERT INTO employes (proprietaire_id, terrain_id, nom, email, password_hash, telephone, whatsapp_number, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', e);
   }
 
   // --- HORAIRES (pour chaque terrain, 7 jours) ---
@@ -68,7 +79,7 @@ async function seed() {
       const isWeekend = (jour === 'samedi' || jour === 'dimanche');
       const debut = isWeekend ? '09:00' : '08:00';
       const fin = jour === 'vendredi' || jour === 'samedi' ? '23:00' : jour === 'dimanche' ? '22:00' : '23:00';
-      db.run('INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, debut, fin]);
+      await runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, debut, fin]);
     }
   }
 
@@ -88,7 +99,7 @@ async function seed() {
       for (const hour of [18, 19, 20, 21]) {
         const debut = `${String(hour).padStart(2, '0')}:00`;
         const fin = `${String(hour + 1).padStart(2, '0')}:00`;
-        db.run(
+        await runSql(db, 
           "INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, 'libre')",
           [terrainId, dateStr, debut, fin]
         );
@@ -106,12 +117,12 @@ async function seed() {
     [6, 6, 'Cheikh Mbaye', '2026-04-15', '17:00', '19:00', 7000, 'annulee', null],
   ];
   for (const r of reservationsData) {
-    db.run('INSERT INTO reservations (terrain_id, joueur_id, joueur_nom, date, heure_debut, heure_fin, montant, statut, expire_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', r);
+    await runSql(db, 'INSERT INTO reservations (terrain_id, joueur_id, joueur_nom, date, heure_debut, heure_fin, montant, statut, expire_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', r);
   }
 
   // --- PAIEMENTS ---
-  db.run('INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe) VALUES (?, ?, ?, ?, ?)', [1, 10000, 'wave', 'paye', 'WAV-2026041201']);
-  db.run('INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe) VALUES (?, ?, ?, ?, ?)', [4, 8000, 'orange_money', 'paye', 'OM-2026041001']);
+  await runSql(db, 'INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe) VALUES (?, ?, ?, ?, ?)', [1, 10000, 'wave', 'paye', 'WAV-2026041201']);
+  await runSql(db, 'INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe) VALUES (?, ?, ?, ?, ?)', [4, 8000, 'orange_money', 'paye', 'OM-2026041001']);
 
   // --- AVIS ---
   const avisData = [
@@ -126,17 +137,27 @@ async function seed() {
     [null, 3, 'Moussa Ba', 9, 5, 'On réserve toujours la veille ici.'],
   ];
   for (const a of avisData) {
-    db.run('INSERT INTO avis (reservation_id, joueur_id, joueur_nom, terrain_id, note, commentaire) VALUES (?, ?, ?, ?, ?, ?)', a);
+    await runSql(db, 'INSERT INTO avis (reservation_id, joueur_id, joueur_nom, terrain_id, note, commentaire) VALUES (?, ?, ?, ?, ?, ?)', a);
   }
 
   // --- BLOCAGES CRENEAUX ---
-  db.run('INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)', [1, 1, '2026-04-12', '14:00', '16:00', 'Entretien pelouse']);
-  db.run('INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)', [1, 1, '2026-04-13', '10:00', '12:00', 'Événement privé']);
+  await runSql(db, 'INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)', [1, 1, '2026-04-12', '14:00', '16:00', 'Entretien pelouse']);
+  await runSql(db, 'INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)', [1, 1, '2026-04-13', '10:00', '12:00', 'Événement privé']);
 
   // --- NOTIFICATIONS ---
-  db.run("INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu) VALUES (?, ?, ?, 'whatsapp', ?, ?)", ['user', 1, 'confirmation', 'Votre réservation au Complexe Sportif Pikine le 12 Avr a été confirmée.', 1]);
-  db.run("INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu) VALUES (?, ?, ?, 'whatsapp', ?, ?)", ['user', 2, 'rappel', 'Rappel : vous avez une réservation demain au Terrain Almadies à 10:00.', 0]);
-  db.run("INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu) VALUES (?, ?, ?, 'whatsapp', ?, ?)", ['user', 5, 'confirmation', 'Votre réservation est en attente de validation.', 0]);
+  await runSql(db, "INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu) VALUES (?, ?, ?, 'whatsapp', ?, ?)", ['user', 1, 'confirmation', 'Votre réservation au Complexe Sportif Pikine le 12 Avr a été confirmée.', 1]);
+  await runSql(db, "INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu) VALUES (?, ?, ?, 'whatsapp', ?, ?)", ['user', 2, 'rappel', 'Rappel : vous avez une réservation demain au Terrain Almadies à 10:00.', 0]);
+  await runSql(db, "INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu) VALUES (?, ?, ?, 'whatsapp', ?, ?)", ['user', 5, 'confirmation', 'Votre réservation est en attente de validation.', 0]);
+
+  // Multi-gérants : liaisons depuis employes.terrain_id
+  await runSql(
+    db,
+    `INSERT INTO gerants_terrains (gerant_id, terrain_id, est_principal, actif, date_debut, note)
+     SELECT e.id, e.terrain_id, 1, COALESCE(e.is_active, 1), CURRENT_DATE, 'Seed démo'
+     FROM employes e
+     WHERE e.terrain_id IS NOT NULL
+     ON CONFLICT (gerant_id, terrain_id) DO NOTHING`,
+  );
 
   saveDb();
   console.log('✅ Seeding terminé avec succès !');

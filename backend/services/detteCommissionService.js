@@ -1,18 +1,17 @@
-const { queryAll, queryOne } = require('../database');
+const { queryAll, queryOne, runSql, rowsModified } = require('../database');
 const { calculerCommissionPrelevee } = require('../pricingService');
 const { crediterPortefeuilleGerant } = require('./portefeuilleService');
 const {
   confirmerCreneauxReservation,
   annulerReservationsConcurrentes,
-  rowsModified,
 } = require('../reservationLockService');
 const { calculerFenetreCheckIn } = require('./checkInFenetre');
 const { serializeQrPayload } = require('./qrPayload');
 
-function genererCodeReservation(db) {
+async function genererCodeReservation(db) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const code = `TF-${Math.floor(100000 + Math.random() * 900000)}`;
-    if (!queryOne(db, 'SELECT id FROM reservations WHERE code_reservation = ?', [code])) return code;
+    if (!(await queryOne(db, 'SELECT id FROM reservations WHERE code_reservation = ?', [code]))) return code;
   }
   throw new Error('Impossible de générer un code de réservation unique');
 }
@@ -23,17 +22,14 @@ function periodeCivile(d = new Date()) {
   return `${y}-${m}`;
 }
 
-function lastInsertId(db) {
-  return Number(queryOne(db, 'SELECT last_insert_rowid() AS id')?.id || 0);
-}
-
-function getSetting(db, cle, fallback = '') {
-  const row = queryOne(db, 'SELECT valeur FROM plateforme_settings WHERE cle = ?', [cle]);
+async function getSetting(db, cle, fallback = '') {
+  const row = await queryOne(db, 'SELECT valeur FROM plateforme_settings WHERE cle = ?', [cle]);
   return row?.valeur != null ? String(row.valeur) : fallback;
 }
 
-function setSetting(db, cle, valeur) {
-  db.run(
+async function setSetting(db, cle, valeur) {
+  await runSql(
+    db,
     `INSERT INTO plateforme_settings (cle, valeur, updated_at)
      VALUES (?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(cle) DO UPDATE SET valeur = excluded.valeur, updated_at = CURRENT_TIMESTAMP`,
@@ -41,7 +37,7 @@ function setSetting(db, cle, valeur) {
   );
 }
 
-function instructionsPaiementDette(db) {
+async function instructionsPaiementDette(db) {
   return getSetting(
     db,
     'dette_instructions',
@@ -49,8 +45,8 @@ function instructionsPaiementDette(db) {
   );
 }
 
-function confirmerManuellement(db, { reservationId, gerantId, note }) {
-  const reservation = queryOne(
+async function confirmerManuellement(db, { reservationId, gerantId, note }) {
+  const reservation = await queryOne(
     db,
     `SELECT r.*, t.commission_pourcentage, t.pourcentage_avance, t.modele_revenus, t.commission,
             t.acompte, t.montant_acompte
@@ -67,7 +63,7 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
     throw error;
   }
 
-  const existingDette = queryOne(db, 'SELECT id FROM dettes_commissions WHERE reservation_id = ?', [reservationId]);
+  const existingDette = await queryOne(db, 'SELECT id FROM dettes_commissions WHERE reservation_id = ?', [reservationId]);
   if (existingDette) {
     const error = new Error('Cette réservation a déjà une commission en dette.');
     error.statusCode = 409;
@@ -80,10 +76,10 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
   const noteGerant = note ? String(note).slice(0, 500) : null;
 
   let code = reservation.code_reservation;
-  if (!code) code = genererCodeReservation(db);
+  if (!code) code = await genererCodeReservation(db);
 
   const retardRow = reservation.creneau_id
-    ? queryOne(db, 'SELECT fenetre_retard FROM creneaux WHERE id = ?', [reservation.creneau_id])
+    ? await queryOne(db, 'SELECT fenetre_retard FROM creneaux WHERE id = ?', [reservation.creneau_id])
     : null;
   const fenetre = calculerFenetreCheckIn({
     date: reservation.date,
@@ -99,7 +95,8 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
     expire_at: Math.floor(fenetre.finFenetre / 1000),
   });
 
-  db.run(
+  await runSql(
+    db,
     `UPDATE reservations SET
        statut = 'confirme',
        code_reservation = ?,
@@ -118,25 +115,27 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
     throw error;
   }
 
-  const confirmedCount = confirmerCreneauxReservation(db, reservation);
+  const confirmedCount = await confirmerCreneauxReservation(db, reservation);
   if (confirmedCount < 1) {
-    db.run("UPDATE reservations SET statut = 'en_attente', mode_paiement = 'en_ligne' WHERE id = ?", [reservationId]);
+    await runSql(db, "UPDATE reservations SET statut = 'en_attente', mode_paiement = 'en_ligne' WHERE id = ?", [reservationId]);
     const error = new Error('Créneau indisponible — confirmation manuelle impossible.');
     error.statusCode = 409;
     throw error;
   }
 
-  const loserIds = annulerReservationsConcurrentes(db, { ...reservation, id: reservationId });
+  const loserIds = await annulerReservationsConcurrentes(db, { ...reservation, id: reservationId });
 
-  db.run(
+  const detteResult = await runSql(
+    db,
     `INSERT INTO dettes_commissions
        (terrain_id, gerant_id, reservation_id, montant_commission, montant_avance_manuelle, statut, periode, note)
      VALUES (?, ?, ?, ?, ?, 'en_attente', ?, ?)`,
     [reservation.terrain_id, gerantId, reservationId, commission, montantAvance, periode, noteGerant],
   );
-  const detteId = lastInsertId(db);
+  const detteId = Number(detteResult.lastInsertRowid || 0);
 
-  db.run(
+  await runSql(
+    db,
     `INSERT INTO audit_dette
        (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
      VALUES (?, ?, 'creation', ?, ?, 'gerant', ?)`,
@@ -149,14 +148,15 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
     ],
   );
 
-  db.run(
+  await runSql(
+    db,
     `INSERT INTO paiements
        (reservation_id, montant, methode, statut, reference_externe, montant_acompte, montant_commission, montant_reverse, statut_reversement)
      VALUES (?, ?, 'manuel', 'paye', ?, ?, 0, ?, 'effectue')`,
     [reservationId, montantAvance, `MANUEL-GERANT-${reservationId}-${Date.now()}`, montantAvance, montantAvance],
   );
 
-  crediterPortefeuilleGerant(db, {
+  await crediterPortefeuilleGerant(db, {
     gerantId,
     terrainId: reservation.terrain_id,
     reservationId,
@@ -167,9 +167,9 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
   return { code, commission, montantAvance, terrainId: reservation.terrain_id, loserIds };
 }
 
-function resumeGerant(db, gerantId, periode) {
+async function resumeGerant(db, gerantId, periode) {
   const p = periode || periodeCivile();
-  const resume = queryOne(
+  const resume = (await queryOne(
     db,
     `SELECT COUNT(*) as nb_reservations_manuelles,
             COALESCE(SUM(montant_commission), 0) as total_dette,
@@ -178,8 +178,8 @@ function resumeGerant(db, gerantId, periode) {
      FROM dettes_commissions
      WHERE gerant_id = ? AND periode = ?`,
     [gerantId, p],
-  ) || {};
-  const detail = queryAll(
+  )) || {};
+  const detail = await queryAll(
     db,
     `SELECT d.*, r.code_reservation, r.created_at as resa_date, r.note_gerant,
             r.date as match_date, r.heure_debut,
@@ -191,7 +191,7 @@ function resumeGerant(db, gerantId, periode) {
      ORDER BY d.created_at DESC`,
     [gerantId, p],
   );
-  const historique = queryAll(
+  const historique = await queryAll(
     db,
     `SELECT periode,
             COALESCE(SUM(montant_commission), 0) AS total,
@@ -213,20 +213,20 @@ function resumeGerant(db, gerantId, periode) {
     detail,
     historique,
     periode: p,
-    instructions: instructionsPaiementDette(db),
+    instructions: await instructionsPaiementDette(db),
   };
 }
 
-function resumeSuperadminMois(db, periode) {
+async function resumeSuperadminMois(db, periode) {
   const p = periode || periodeCivile();
-  const row = queryOne(
+  const row = (await queryOne(
     db,
     `SELECT COALESCE(SUM(montant_commission), 0) AS total,
             COUNT(DISTINCT terrain_id) AS terrains
      FROM dettes_commissions
      WHERE statut = 'en_attente' AND periode = ?`,
     [p],
-  ) || {};
+  )) || {};
   return {
     periode: p,
     total_en_attente: Number(row.total || 0),
@@ -234,7 +234,7 @@ function resumeSuperadminMois(db, periode) {
   };
 }
 
-function listDettesAdmin(db, { periode, terrainId, statut }) {
+async function listDettesAdmin(db, { periode, terrainId, statut }) {
   const p = periode || periodeCivile();
   const params = [p];
   let where = 'd.periode = ?';
@@ -247,7 +247,7 @@ function listDettesAdmin(db, { periode, terrainId, statut }) {
     params.push(statut);
   }
 
-  const parTerrain = queryAll(
+  const parTerrain = await queryAll(
     db,
     `SELECT d.terrain_id, t.nom AS terrain_nom, t.ville,
             d.gerant_id, e.nom AS gerant_nom, e.prenom AS gerant_prenom, e.telephone AS gerant_telephone,
@@ -272,7 +272,7 @@ function listDettesAdmin(db, { periode, terrainId, statut }) {
     params,
   );
 
-  const lignes = queryAll(
+  const lignes = await queryAll(
     db,
     `SELECT d.*, r.code_reservation, r.date AS match_date, r.heure_debut, r.note_gerant,
             COALESCE(u.prenom, r.joueur_nom) AS joueur_nom,
@@ -286,7 +286,7 @@ function listDettesAdmin(db, { periode, terrainId, statut }) {
     params,
   );
 
-  const audit = queryAll(
+  const audit = await queryAll(
     db,
     `SELECT a.*, t.nom AS terrain_nom,
             COALESCE(u.nom, e.nom) AS fait_par_nom
@@ -300,17 +300,17 @@ function listDettesAdmin(db, { periode, terrainId, statut }) {
 
   return {
     periode: p,
-    resume: resumeSuperadminMois(db, p),
+    resume: await resumeSuperadminMois(db, p),
     par_terrain: parTerrain,
     lignes,
     audit,
-    instructions: instructionsPaiementDette(db),
+    instructions: await instructionsPaiementDette(db),
   };
 }
 
-function remiseAZero(db, { terrainId, superAdminId, note, montantRecu, periode }) {
+async function remiseAZero(db, { terrainId, superAdminId, note, montantRecu, periode }) {
   const p = periode || periodeCivile();
-  const pending = queryOne(
+  const pending = await queryOne(
     db,
     `SELECT COUNT(*) AS nb, COALESCE(SUM(montant_commission), 0) AS total
      FROM dettes_commissions
@@ -324,7 +324,8 @@ function remiseAZero(db, { terrainId, superAdminId, note, montantRecu, periode }
   }
 
   const noteFinale = note ? String(note).slice(0, 500) : null;
-  db.run(
+  await runSql(
+    db,
     `UPDATE dettes_commissions SET
        statut = 'payee',
        payee_at = CURRENT_TIMESTAMP,
@@ -335,7 +336,8 @@ function remiseAZero(db, { terrainId, superAdminId, note, montantRecu, periode }
     [superAdminId, noteFinale, terrainId, p],
   );
 
-  db.run(
+  await runSql(
+    db,
     `INSERT INTO audit_dette
        (terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
      VALUES (?, 'remise_a_zero', ?, ?, 'super_admin', ?)`,
@@ -350,20 +352,20 @@ function remiseAZero(db, { terrainId, superAdminId, note, montantRecu, periode }
   return { success: true, periode: p, montant: Number(pending.total || 0) };
 }
 
-function confirmationsManuellesProprio(db, terrainIds, periode) {
+async function confirmationsManuellesProprio(db, terrainIds, periode) {
   const ids = (terrainIds || []).map(Number).filter((n) => n > 0);
   if (!ids.length) {
     return { nb_confirmations_manuelles: 0, avances_manuelles: 0, periode: periode || periodeCivile() };
   }
   const p = periode || periodeCivile();
   const placeholders = ids.map(() => '?').join(',');
-  const row = queryOne(
+  const row = (await queryOne(
     db,
     `SELECT COUNT(*) AS nb, COALESCE(SUM(montant_avance_manuelle), 0) AS avances
      FROM dettes_commissions
      WHERE terrain_id IN (${placeholders}) AND periode = ?`,
     [...ids, p],
-  ) || {};
+  )) || {};
   return {
     nb_confirmations_manuelles: Number(row.nb || 0),
     avances_manuelles: Number(row.avances || 0),

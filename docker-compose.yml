@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: terrainsn-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: terrainsn
+      POSTGRES_PASSWORD: terrainsn
+      POSTGRES_DB: terrainsn
+    ports:
+      - "5433:5432"
+    volumes:
+      - terrainsn_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U terrainsn -d terrainsn"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  terrainsn_pg:

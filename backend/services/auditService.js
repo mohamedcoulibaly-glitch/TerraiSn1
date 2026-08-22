@@ -21,7 +21,7 @@ async function logActivite({ gerant_id, terrain_id, action, reservation_id = nul
   if (!gerant_id || !terrain_id) return null;
 
   const db = await getDb();
-  return runSql(db, `
+  return await runSql(db, `
     INSERT INTO activite_gerant
       (gerant_id, terrain_id, action, reservation_id, details)
     VALUES (?, ?, ?, ?, ?)

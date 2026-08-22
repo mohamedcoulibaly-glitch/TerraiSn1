@@ -55,7 +55,7 @@ export function HeroResponsive(props: HeroSharedProps) {
             className="font-sans text-lg font-extrabold tracking-tight text-white"
             style={{ filter: "drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6))" }}
           >
-            TERRAIN<span className="text-emerald-400">.SN</span>
+            TERRAIN<span className="text-[var(--primary-light)]">.SN</span>
           </span>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -87,7 +87,7 @@ export function HeroResponsive(props: HeroSharedProps) {
           >
             Trouve ton terrain, réserve ton{" "}
             <span
-              className="font-extrabold not-italic text-emerald-400"
+              className="font-extrabold not-italic text-[var(--primary-light)]"
               style={{ fontFamily: "inherit" }}
             >
               match.

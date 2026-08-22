@@ -11,6 +11,8 @@
     "seed:mohamed": "node scripts/seed-mohamed.js",
     "migrate": "node scripts/migrate.js",
     "setup": "node scripts/migrate.js && node seed.js",
+    "db:up": "docker compose -f ../docker-compose.yml up -d",
+    "db:down": "docker compose -f ../docker-compose.yml down",
     "whatsapp:test": "node scripts/test-whatsapp.js"
   },
   "keywords": [],
@@ -18,15 +20,20 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.2.0",
     "node-cron": "^4.6.0",
+    "nodemailer": "^9.0.5",
+    "pg": "^8.23.0",
+    "pino": "^10.3.1",
     "qrcode": "^1.5.4",
-    "sql.js": "^1.11.0",
+    "sharp": "^0.35.3",
     "web-push": "^3.6.7"
   },
   "devDependencies": {

@@ -1,6 +1,7 @@
-const { queryAll, queryOne } = require('./database');
+const { queryAll, queryOne, runSql } = require('./database');
 const { hourlySlots, parseHour, veilleJour, jourDepuisDate } = require('./scheduleService');
 const { bornesHorairesSemaine } = require('./scheduleService');
+const { dureeMinutesOf, hhmm, addMinutesHhmm, timeToMinutes } = require('./services/creneauService');
 
 const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 
@@ -11,34 +12,75 @@ function prixBaseTerrain(terrain, format = 'entier') {
   return Number(terrain.prix_entier || terrain.prix_heure || 0);
 }
 
-function overridePour(database, terrainId, jour, heure) {
-  return queryOne(
+async function overridePour(database, terrainId, jour, heure) {
+  return await queryOne(
     database,
     'SELECT * FROM tarifs_dynamiques WHERE terrain_id = ? AND jour = ? AND heure = ?',
     [terrainId, jour, heure],
   );
 }
 
-function prixHoraireEffectif(database, terrain, date, heureDebut, format = 'entier', jourOverride = null) {
+async function prixHoraireEffectif(database, terrain, date, heureDebut, format = 'entier', jourOverride = null) {
   const heure = parseHour(heureDebut);
   let jour = jourOverride || jourDepuisDate(date);
   // Vendredi 00h (= Jeudi minuit) → grille tarifaire de la veille
   if (jourOverride == null && (heure === 0 || heure === 24)) {
     jour = veilleJour(jourDepuisDate(date));
   }
-  const override = overridePour(database, terrain.id, jour, heure === 24 ? 0 : heure);
+  const override = await overridePour(database, terrain.id, jour, heure === 24 ? 0 : heure);
   if (override) {
     return format === 'moitie' ? Number(override.prix_moitie) : Number(override.prix_entier);
   }
   return prixBaseTerrain(terrain, format);
 }
 
-function calculerPrixReservation(database, terrain, date, heureDebut, heureFin, format = 'entier') {
-  const slots = hourlySlots(heureDebut, heureFin);
-  return slots.reduce(
-    (sum, slot) => sum + prixHoraireEffectif(database, terrain, date, slot.heure_debut, format),
-    0,
-  );
+async function prixDepuisRegleOuGrille(database, terrain, date, heureDebut, format = 'entier', jourOverride = null) {
+  const { getPrixActif } = require('./services/tarifService');
+  const actif = await getPrixActif(database, terrain.id, date, heureDebut, jourOverride);
+  return format === 'moitie' ? Number(actif.prix_demi_terrain || 0) : Number(actif.prix_terrain_entier || 0);
+}
+
+/** Découpe une plage en segments horaires (dernier segment peut être partiel). */
+function rangeHourSegments(heureDebut, heureFin) {
+  const debut = hhmm(heureDebut);
+  const fin = hhmm(heureFin);
+  const total = dureeMinutesOf(debut, fin);
+  if (!(total > 0)) return [];
+  const segments = [];
+  let cursor = debut;
+  let remaining = total;
+  while (remaining > 0) {
+    const chunk = Math.min(60, remaining);
+    const next = addMinutesHhmm(cursor, chunk);
+    segments.push({
+      heure_debut: cursor,
+      heure_fin: next,
+      minutes: chunk,
+      fraction: chunk / 60,
+    });
+    cursor = next;
+    remaining -= chunk;
+    if (segments.length > 48) break;
+  }
+  return segments;
+}
+
+async function calculerPrixReservation(database, terrain, date, heureDebut, heureFin, format = 'entier') {
+  const segments = rangeHourSegments(heureDebut, heureFin);
+  if (!segments.length) {
+    const slots = hourlySlots(heureDebut, heureFin);
+    let sum = 0;
+    for (const slot of slots) {
+      sum += await prixDepuisRegleOuGrille(database, terrain, date, slot.heure_debut, format);
+    }
+    return sum;
+  }
+  let sum = 0;
+  for (const seg of segments) {
+    const prixH = await prixDepuisRegleOuGrille(database, terrain, date, seg.heure_debut, format);
+    sum += Math.round(prixH * seg.fraction);
+  }
+  return sum;
 }
 
 function calculerMontantAvance(terrain, prixChoisi) {
@@ -50,42 +92,53 @@ function calculerMontantAvance(terrain, prixChoisi) {
   return Math.min(montant, Number(terrain?.acompte || terrain?.montant_acompte || 5000));
 }
 
-function calculerDevis(database, terrain, { date, heure_debut, heure_fin, format_terrain = 'entier' }) {
+async function calculerDevis(database, terrain, { date, heure_debut, heure_fin, format_terrain = 'entier' }) {
   const format = format_terrain === 'moitie' ? 'moitie' : 'entier';
-  const slots = hourlySlots(heure_debut, heure_fin);
-  if (!slots.length) {
+  const segments = rangeHourSegments(heure_debut, heure_fin);
+  if (!segments.length) {
     const err = new Error('Créneau invalide');
     err.statusCode = 400;
     throw err;
   }
-  const detail = slots.map((slot) => ({
-    heure: slot.heure_debut,
-    heure_fin: slot.heure_fin,
-    prix: prixHoraireEffectif(database, terrain, date, slot.heure_debut, format),
-  }));
+  const { getPrixActif } = require('./services/tarifService');
+  const detail = [];
+  for (const seg of segments) {
+    const actif = await getPrixActif(database, terrain.id, date, seg.heure_debut);
+    const prixH = format === 'moitie' ? Number(actif.prix_demi_terrain || 0) : Number(actif.prix_terrain_entier || 0);
+    const prix = Math.round(prixH * seg.fraction);
+    detail.push({
+      heure: seg.heure_debut,
+      heure_fin: seg.heure_fin,
+      prix,
+      minutes: seg.minutes,
+      nom_tarif: actif.nom_tarif,
+    });
+  }
   const montant = detail.reduce((sum, row) => sum + Number(row.prix || 0), 0);
   const montant_avance = calculerMontantAvance(terrain, montant);
   return {
     terrain_id: terrain.id,
     date,
-    heure_debut: slots[0].heure_debut,
-    heure_fin: slots[slots.length - 1].heure_fin,
+    heure_debut: segments[0].heure_debut,
+    heure_fin: segments[segments.length - 1].heure_fin,
     format_terrain: format,
+    duree_minutes: dureeMinutesOf(heure_debut, heure_fin),
     montant,
     montant_avance,
     montant_restant: Math.max(0, montant - montant_avance),
-    pourcentage_avance: Number(terrain.pourcentage_avance || 12.5),
+    montant_commission: calculerCommissionPrelevee(terrain, montant_avance),
+    commission_pourcentage: Number(terrain.commission_pourcentage || 0),
     detail,
   };
 }
 
-function grilleTarifs(database, terrain, heureMin = null, heureMax = null) {
-  const horaires = queryAll(database, 'SELECT * FROM horaires WHERE terrain_id = ?', [terrain.id]);
+async function grilleTarifs(database, terrain, heureMin = null, heureMax = null) {
+  const horaires = await queryAll(database, 'SELECT * FROM horaires WHERE terrain_id = ?', [terrain.id]);
   const bornes = bornesHorairesSemaine(horaires);
   const minH = heureMin == null ? bornes.heure_min : heureMin;
   const maxH = heureMax == null ? bornes.heure_max : heureMax;
 
-  const overrides = queryAll(
+  const overrides = await queryAll(
     database,
     'SELECT jour, heure, prix_entier, prix_moitie FROM tarifs_dynamiques WHERE terrain_id = ?',
     [terrain.id],
@@ -128,8 +181,8 @@ function grilleTarifs(database, terrain, heureMin = null, heureMax = null) {
 /**
  * Remplace / met à jour la grille. Les cellules égales au tarif de base sont retirées (pas d'override inutile).
  */
-function sauvegarderGrille(database, terrainId, payload) {
-  const terrain = queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+async function sauvegarderGrille(database, terrainId, payload) {
+  const terrain = await queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) {
     const err = new Error('Terrain non trouvé');
     err.statusCode = 404;
@@ -144,7 +197,8 @@ function sauvegarderGrille(database, terrainId, payload) {
     throw err;
   }
 
-  database.run(
+  await runSql(
+    database,
     `UPDATE terrains SET prix_heure = ?, prix_entier = ?, prix_moitie = ?,
       montant_acompte = ROUND(? * COALESCE(pourcentage_avance, 12.5) / 100.0),
       acompte = ROUND(? * COALESCE(pourcentage_avance, 12.5) / 100.0)
@@ -153,7 +207,7 @@ function sauvegarderGrille(database, terrainId, payload) {
   );
 
   const cellules = Array.isArray(payload.cellules) ? payload.cellules : [];
-  database.run('DELETE FROM tarifs_dynamiques WHERE terrain_id = ?', [terrainId]);
+  await runSql(database, 'DELETE FROM tarifs_dynamiques WHERE terrain_id = ?', [terrainId]);
 
   for (const cell of cellules) {
     const jour = String(cell.jour || '').toLowerCase();
@@ -164,14 +218,16 @@ function sauvegarderGrille(database, terrainId, payload) {
     if (!(pe > 0) || !(pm > 0)) continue;
     const sameAsBase = pe === prixEntierBase && pm === prixMoitieBase;
     if (sameAsBase) continue;
-    database.run(
+    await runSql(
+      database,
       `INSERT INTO tarifs_dynamiques (terrain_id, jour, heure, prix_entier, prix_moitie)
        VALUES (?, ?, ?, ?, ?)`,
       [terrainId, jour, heure, pe, pm],
     );
   }
 
-  return grilleTarifs(database, queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+  const updated = await queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+  return grilleTarifs(database, updated);
 }
 
 function calculerCommissionPrelevee(terrain, montantAvance) {
@@ -195,4 +251,3 @@ module.exports = {
   grilleTarifs,
   sauvegarderGrille,
 };
-

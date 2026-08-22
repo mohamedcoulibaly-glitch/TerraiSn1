@@ -18,7 +18,7 @@ import { localYmd } from "@/lib/localDate";
 const statusConfig: Record<string, { label: string; className: string }> = {
   en_attente: {
     label: "En attente de paiement",
-    className: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
+    className: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
   },
   confirme: {
     label: "Réservé ✓",
@@ -133,7 +133,7 @@ const ManagerCalendar = () => {
         r.date === dateStr &&
         time >= r.heure_debut &&
         time < r.heure_fin &&
-        ["en_attente", "confirme", "acceptee", "joue", "match_joue"].includes(r.statut)
+        ["confirme", "acceptee", "joue", "match_joue"].includes(r.statut)
     );
     if (reservation) return { status: "reserved" as const, data: reservation };
 

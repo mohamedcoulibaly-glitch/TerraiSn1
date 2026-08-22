@@ -175,7 +175,7 @@ export default function JoueurProfil({ embedded = false }: { embedded?: boolean 
                 <p className="text-lg font-semibold mt-1">{fcfa(stats.solde_ouvert)}</p>
               </div>
               <div className="rounded-[var(--radius-sm)] bg-[var(--color-surface-2)] p-3">
-                <p className="text-xs text-[var(--color-text-muted)]">CA terrain</p>
+                <p className="text-xs text-[var(--color-text-muted)]">Total encaissé</p>
                 <p className="text-lg font-semibold mt-1">{fcfa(stats.ca_total)}</p>
               </div>
             </div>

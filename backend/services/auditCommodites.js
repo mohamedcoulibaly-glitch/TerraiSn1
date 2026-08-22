@@ -1,8 +1,9 @@
-const { queryAll, queryOne } = require('../database');
+const { queryAll, runSql } = require('../database');
 const { nomActeur } = require('./auditPhotos');
 
-function logCommoditeAction(database, { terrain_id, commodite_id, action, fait_par, role, detail }) {
-  database.run(
+async function logCommoditeAction(database, { terrain_id, commodite_id, action, fait_par, role, detail }) {
+  await runSql(
+    database,
     `INSERT INTO audit_commodites (terrain_id, commodite_id, action, fait_par, role_fait_par, detail, created_at)
      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
@@ -16,7 +17,7 @@ function logCommoditeAction(database, { terrain_id, commodite_id, action, fait_p
   );
 }
 
-function listAuditCommodites(database, { terrain_id, role, action, depuis, jusqua, limit = 200, offset = 0 } = {}) {
+async function listAuditCommodites(database, { terrain_id, role, action, depuis, jusqua, limit = 200, offset = 0 } = {}) {
   let sql = `SELECT a.*, t.nom AS terrain_nom, c.cle AS commodite_cle, c.label_fr AS commodite_label, c.icone AS commodite_icone
     FROM audit_commodites a
     LEFT JOIN terrains t ON t.id = a.terrain_id
@@ -30,10 +31,15 @@ function listAuditCommodites(database, { terrain_id, role, action, depuis, jusqu
   if (jusqua) { sql += ' AND a.created_at <= ?'; params.push(jusqua); }
   sql += ' ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?';
   params.push(Number(limit), Number(offset));
-  return queryAll(database, sql, params).map((row) => ({
-    ...row,
-    fait_par_nom: nomActeur(database, row.fait_par, row.role_fait_par),
-  }));
+  const rows = await queryAll(database, sql, params);
+  const out = [];
+  for (const row of rows) {
+    out.push({
+      ...row,
+      fait_par_nom: await nomActeur(database, row.fait_par, row.role_fait_par),
+    });
+  }
+  return out;
 }
 
 module.exports = { logCommoditeAction, listAuditCommodites };

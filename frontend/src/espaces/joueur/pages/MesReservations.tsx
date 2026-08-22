@@ -111,6 +111,15 @@ const Reservations = () => {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [cancelId, setCancelId] = useState<number | null>(null);
+  const [cancelPolitique, setCancelPolitique] = useState<{
+    titre?: string;
+    message?: string;
+    type_annulation?: string;
+    eligible?: boolean;
+    delai_heures?: number;
+  } | null>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [reviewReservation, setReviewReservation] = useState<any>(null);
   const [reviewNote, setReviewNote] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
@@ -151,14 +160,45 @@ const Reservations = () => {
     return true;
   });
 
-  const handleCancel = async (id: number) => {
+  const openCancel = async (reservation: any) => {
+    setCancelId(reservation.id);
+    setCancelPolitique(reservation.politique_remboursement || null);
+    setCancelLoading(true);
     try {
-      await reservationsApi.annuler(id);
+      const data = (await reservationsApi.politiqueAnnulation(reservation.id)) as {
+        politique_remboursement?: typeof cancelPolitique;
+      };
+      if (data?.politique_remboursement) setCancelPolitique(data.politique_remboursement);
+    } catch {
+      /* garde la politique déjà connue sur la carte */
+    } finally {
+      setCancelLoading(false);
+    }
+  };
+
+  const closeCancel = () => {
+    setCancelId(null);
+    setCancelPolitique(null);
+  };
+
+  const handleCancel = async (id: number) => {
+    setCancelling(true);
+    try {
+      const result = (await reservationsApi.annuler(id)) as {
+        rembourse?: boolean;
+        politique?: { titre?: string; type_annulation?: string };
+      };
       setReservations((prev) => prev.map((r) => (r.id === id ? { ...r, statut: "annule" } : r)));
-      setCancelId(null);
-      toast.success("Réservation annulée avec succès");
+      closeCancel();
+      toast.success(
+        result?.rembourse || result?.politique?.type_annulation === "avec_remboursement"
+          ? "Réservation annulée — remboursement en cours (WhatsApp envoyé)"
+          : "Réservation annulée sans remboursement — créneau libéré (WhatsApp envoyé)",
+      );
     } catch (err: any) {
       toast.error(err.message || "Erreur lors de l'annulation");
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -319,7 +359,7 @@ const Reservations = () => {
                           {canCancel && (
                             <button
                               type="button"
-                              onClick={() => setCancelId(r.id)}
+                              onClick={() => void openCancel(r)}
                               className="text-[var(--color-danger)] text-[12px] font-medium min-h-10"
                             >
                               Annuler
@@ -367,20 +407,45 @@ const Reservations = () => {
         )}
       </div>
 
-      <Dialog open={!!cancelId} onOpenChange={() => setCancelId(null)}>
+      <Dialog open={!!cancelId} onOpenChange={(open) => !open && closeCancel()}>
         <DialogContent className="max-w-sm mx-4">
           <DialogHeader>
-            <DialogTitle>Annuler la réservation</DialogTitle>
-            <DialogDescription>
-              Êtes-vous sûr de vouloir annuler cette réservation ? Cette action est irréversible.
+            <DialogTitle>
+              {cancelPolitique?.titre || "Annuler la réservation"}
+            </DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
+                {cancelLoading ? (
+                  <p>Vérification de la politique du terrain…</p>
+                ) : (
+                  <>
+                    <p className="font-medium text-[var(--color-text-primary)]">
+                      {cancelPolitique?.type_annulation === "avec_remboursement"
+                        ? "Avec remboursement"
+                        : "Sans remboursement"}
+                      {cancelPolitique?.delai_heures != null && cancelPolitique.delai_heures > 0
+                        ? ` · délai terrain ${cancelPolitique.delai_heures} h`
+                        : ""}
+                    </p>
+                    <p>
+                      {cancelPolitique?.message ||
+                        "Cette action est irréversible. Le créneau sera libéré et une notification WhatsApp sera envoyée."}
+                    </p>
+                  </>
+                )}
+              </div>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex gap-2">
-            <Button variant="outline" onClick={() => setCancelId(null)}>
+            <Button variant="outline" onClick={closeCancel} disabled={cancelling}>
               Non, garder
             </Button>
-            <Button variant="destructive" onClick={() => cancelId && handleCancel(cancelId)}>
-              Oui, annuler
+            <Button
+              variant="destructive"
+              disabled={!cancelId || cancelling || cancelLoading}
+              onClick={() => cancelId && void handleCancel(cancelId)}
+            >
+              {cancelling ? "Annulation…" : "Oui, annuler"}
             </Button>
           </DialogFooter>
         </DialogContent>

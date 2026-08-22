@@ -68,11 +68,11 @@ export default function ProfilJoueur() {
     }
   };
 
-  if (loading) return <SkeletonProfil />;
-  if (error || !data) return <ProfileError message={error || "Profil joueur introuvable"} />;
+  if (loading) return <div className="joueur-app"><SkeletonProfil /></div>;
+  if (error || !data) return <div className="joueur-app"><ProfileError message={error || "Profil joueur introuvable"} /></div>;
 
   return (
-    <ProfileShell account={data.account} roleLabel="Joueur">
+    <ProfileShell account={data.account} roleLabel="Joueur" className="joueur-app">
       <form
         onSubmit={submit}
         className="mt-8 t-card rounded-[var(--radius-lg)] border border-[var(--border)] p-4 space-y-3"

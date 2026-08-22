@@ -11,7 +11,7 @@ async function main() {
   const hash = bcrypt.hashSync(PASSWORD, 10);
 
   // Préférer Complexe Sportif Pikine s'il n'a pas déjà un gérant actif
-  let terrain = queryOne(
+  let terrain = await queryOne(
     db,
     `SELECT t.id, t.nom, t.proprietaire_id
      FROM terrains t
@@ -23,7 +23,7 @@ async function main() {
   );
 
   if (!terrain) {
-    terrain = queryOne(
+    terrain = await queryOne(
       db,
       `SELECT t.id, t.nom, t.proprietaire_id
        FROM terrains t
@@ -38,7 +38,7 @@ async function main() {
   }
 
   if (!terrain) {
-    terrain = queryOne(
+    terrain = await queryOne(
       db,
       'SELECT id, nom, proprietaire_id FROM terrains WHERE COALESCE(is_active, 1) = 1 ORDER BY id LIMIT 1',
     );
@@ -49,7 +49,7 @@ async function main() {
     process.exit(1);
   }
 
-  const existing = queryOne(
+  const existing = await queryOne(
     db,
     `SELECT id FROM employes
      WHERE email = ?
@@ -59,7 +59,7 @@ async function main() {
   );
 
   if (existing) {
-    runSql(
+    await runSql(
       db,
       `UPDATE employes SET
          proprietaire_id = ?, terrain_id = ?, nom = ?, prenom = ?, email = ?,
@@ -79,7 +79,7 @@ async function main() {
     );
     console.log('updated id', existing.id);
   } else {
-    const result = runSql(
+    const result = await runSql(
       db,
       `INSERT INTO employes
          (proprietaire_id, terrain_id, nom, prenom, email, password_hash, telephone, whatsapp_number, is_active)
@@ -100,7 +100,7 @@ async function main() {
 
   saveDb();
 
-  const row = queryOne(
+  const row = await queryOne(
     db,
     `SELECT e.id, e.nom, e.prenom, e.email, e.telephone, e.whatsapp_number,
             e.terrain_id, e.is_active, t.nom AS terrain_nom

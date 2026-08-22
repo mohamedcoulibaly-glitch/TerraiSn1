@@ -125,17 +125,19 @@ export function ProfileShell({
   roleLabel,
   subtitle,
   children,
+  className,
 }: {
   account?: ProfileAccount | null;
   roleLabel: string;
   subtitle?: string;
   children: ReactNode;
+  className?: string;
 }) {
   const [photoUrl, setPhotoUrl] = useState(account?.photo_url || "");
   const displayName = [account?.prenom, account?.nom].filter(Boolean).join(" ").trim() || account?.nom || "Utilisateur";
 
   return (
-    <main className="min-h-screen bg-[var(--color-bg)] page-enter">
+    <main className={`min-h-screen bg-[var(--color-bg)] page-enter ${className || ""}`}>
       <div className="relative h-[180px] bg-[var(--color-primary)] overflow-hidden">
         <img
           src={fieldImageForId(1)}

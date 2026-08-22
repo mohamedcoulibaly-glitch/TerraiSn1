@@ -49,7 +49,7 @@ function montantLienPaiement(reservation = {}) {
  */
 async function creerPaiement({ reservationId, terrainId, prixChoisi }) {
   const db = await getDb();
-  const terrain = queryOne(
+  const terrain = await queryOne(
     db,
     'SELECT id, nom, pourcentage_avance FROM terrains WHERE id = ?',
     [terrainId]
@@ -65,7 +65,7 @@ async function creerPaiement({ reservationId, terrainId, prixChoisi }) {
   const montantRestant = Math.max(0, prix - montantAvance);
 
   // Synchroniser les colonnes réservation (sans renommer montant_acompte / acompte legacy)
-  runSql(
+  await runSql(
     db,
     `UPDATE reservations SET
       montant_avance = ?,

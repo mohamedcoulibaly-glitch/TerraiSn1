@@ -34,7 +34,7 @@ function nextWeekday(targetDow /* 0=dim .. 4=jeu .. */) {
 
 async function main() {
   const db = await getDb();
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [TERRAIN_ID]);
+  const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [TERRAIN_ID]);
   if (!terrain) {
     console.error(`Terrain ${TERRAIN_ID} introuvable. Lance d'abord: node seed.js`);
     process.exit(1);
@@ -51,7 +51,7 @@ async function main() {
   console.log(`Terrain: ${terrain.nom} (#${TERRAIN_ID})`);
   console.log(`Jeudi cible: ${jeudi} → minuit culturel = ${vendredi} 00:00 (${labelHeureSenegal(vendredi, '00:00')})`);
 
-  transaction(db, () => {
+  await transaction(db, async () => {
     // 1) Horaires flexibles
     const plages = {
       lundi: ['06:00', '23:00'],
@@ -63,14 +63,14 @@ async function main() {
       dimanche: ['09:00', '20:00'],
     };
     for (const [jour, [debut, fin]] of Object.entries(plages)) {
-      const row = queryOne(db, 'SELECT id FROM horaires WHERE terrain_id = ? AND jour = ?', [TERRAIN_ID, jour]);
+      const row = await queryOne(db, 'SELECT id FROM horaires WHERE terrain_id = ? AND jour = ?', [TERRAIN_ID, jour]);
       if (row) {
-        db.run(
+        await runSql(db, 
           'UPDATE horaires SET heure_debut = ?, heure_fin = ?, est_ouvert = 1 WHERE terrain_id = ? AND jour = ?',
           [debut, fin, TERRAIN_ID, jour],
         );
       } else {
-        db.run(
+        await runSql(db, 
           'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)',
           [TERRAIN_ID, jour, debut, fin],
         );
@@ -78,7 +78,7 @@ async function main() {
     }
 
     // 2) Tarifs dynamiques
-    db.run('DELETE FROM tarifs_dynamiques WHERE terrain_id = ?', [TERRAIN_ID]);
+    await runSql(db, 'DELETE FROM tarifs_dynamiques WHERE terrain_id = ?', [TERRAIN_ID]);
 
     const inserts = [];
     // Soirée semaine 18–22 : +30%
@@ -122,7 +122,7 @@ async function main() {
     inserts.push([TERRAIN_ID, 'samedi', 0, Math.round(baseEntier * 1.5), Math.round(baseMoitie * 1.5)]);
 
     for (const row of inserts) {
-      db.run(
+      await runSql(db, 
         `INSERT INTO tarifs_dynamiques (terrain_id, jour, heure, prix_entier, prix_moitie)
          VALUES (?, ?, ?, ?, ?)`,
         row,
@@ -133,30 +133,30 @@ async function main() {
     for (let h = 18; h <= 23; h += 1) {
       const debut = `${String(h).padStart(2, '0')}:00`;
       const fin = h === 23 ? '00:00' : `${String(h + 1).padStart(2, '0')}:00`;
-      const exists = queryOne(
+      const exists = await queryOne(
         db,
         'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
         [TERRAIN_ID, jeudi, debut, fin],
       );
       if (!exists) {
-        db.run(
+        await runSql(db, 
           'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
           [TERRAIN_ID, jeudi, debut, fin, 'libre'],
         );
       }
     }
     // Vendredi 00:00–01:00 = Jeudi minuit
-    let midnight = queryOne(
+    let midnight = await queryOne(
       db,
       'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
       [TERRAIN_ID, vendredi, '00:00', '01:00'],
     );
     if (!midnight) {
-      db.run(
+      await runSql(db, 
         'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
         [TERRAIN_ID, vendredi, '00:00', '01:00', 'libre'],
       );
-      midnight = queryOne(
+      midnight = await queryOne(
         db,
         'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
         [TERRAIN_ID, vendredi, '00:00', '01:00'],
@@ -170,7 +170,7 @@ async function main() {
     const avanceSoir = Math.round(prixSoir * 0.125);
 
     // Annuler anciennes démos seedées par ce script
-    const oldDemo = queryAll(
+    const oldDemo = await queryAll(
       db,
       `SELECT id, creneau_id FROM reservations
         WHERE terrain_id = ? AND code_reservation LIKE 'TF-DEMO-%'`,
@@ -178,13 +178,13 @@ async function main() {
     );
     for (const r of oldDemo) {
       if (r.creneau_id) {
-        db.run("UPDATE creneaux SET statut = 'libre' WHERE id = ?", [r.creneau_id]);
+        await runSql(db, "UPDATE creneaux SET statut = 'libre' WHERE id = ?", [r.creneau_id]);
       }
-      db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [r.id]);
+      await runSql(db, "UPDATE reservations SET statut = 'annule' WHERE id = ?", [r.id]);
     }
 
     // Résa 1 : Jeudi minuit (calendaire vendredi 00:00)
-    db.run(
+    await runSql(db, 
       `INSERT INTO reservations
         (terrain_id, creneau_id, joueur_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin,
          montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain,
@@ -208,27 +208,27 @@ async function main() {
       ],
     );
     if (midnight?.id) {
-      db.run("UPDATE creneaux SET statut = 'reserve' WHERE id = ?", [midnight.id]);
+      await runSql(db, "UPDATE creneaux SET statut = 'reserve' WHERE id = ?", [midnight.id]);
     }
 
     // Résa 2 : jeudi 20:00–21:00 tarif soirée
-    let slot20 = queryOne(
+    let slot20 = await queryOne(
       db,
       'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
       [TERRAIN_ID, jeudi, '20:00', '21:00'],
     );
     if (!slot20) {
-      db.run(
+      await runSql(db, 
         'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
         [TERRAIN_ID, jeudi, '20:00', '21:00', 'libre'],
       );
-      slot20 = queryOne(
+      slot20 = await queryOne(
         db,
         'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
         [TERRAIN_ID, jeudi, '20:00', '21:00'],
       );
     }
-    db.run(
+    await runSql(db, 
       `INSERT INTO reservations
         (terrain_id, creneau_id, joueur_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin,
          montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain,
@@ -252,32 +252,32 @@ async function main() {
       ],
     );
     if (slot20?.id) {
-      db.run("UPDATE creneaux SET statut = 'reserve' WHERE id = ?", [slot20.id]);
+      await runSql(db, "UPDATE creneaux SET statut = 'reserve' WHERE id = ?", [slot20.id]);
     }
 
     // Résa 3 : samedi après-midi en_attente (verrou paiement)
-    let slotSat = queryOne(
+    let slotSat = await queryOne(
       db,
       'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
       [TERRAIN_ID, samedi, '16:00', '17:00'],
     );
     if (!slotSat) {
-      db.run(
+      await runSql(db, 
         'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
         [TERRAIN_ID, samedi, '16:00', '17:00', 'en_attente_paiement'],
       );
-      slotSat = queryOne(
+      slotSat = await queryOne(
         db,
         'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
         [TERRAIN_ID, samedi, '16:00', '17:00'],
       );
     } else {
-      db.run("UPDATE creneaux SET statut = 'en_attente_paiement' WHERE id = ?", [slotSat.id]);
+      await runSql(db, "UPDATE creneaux SET statut = 'en_attente_paiement' WHERE id = ?", [slotSat.id]);
     }
     const prixWeekend = Math.round(baseEntier * 1.2);
     const avanceWeekend = Math.round(prixWeekend * 0.125);
     const verrou = Date.now() + 2 * 60 * 60 * 1000;
-    db.run(
+    await runSql(db, 
       `INSERT INTO reservations
         (terrain_id, creneau_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin,
          montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain,
@@ -304,7 +304,7 @@ async function main() {
 
     // Activité gérant (actions autorisées par CHECK)
     if (GERANT_ID) {
-      db.run(
+      await runSql(db, 
         `INSERT INTO activite_gerant (gerant_id, terrain_id, action, details)
          VALUES (?, ?, 'creneau_cree', ?)`,
         [
@@ -324,8 +324,8 @@ async function main() {
 
   saveDb();
 
-  const nTarifs = queryOne(db, 'SELECT COUNT(*) AS n FROM tarifs_dynamiques WHERE terrain_id = ?', [TERRAIN_ID]);
-  const demos = queryAll(
+  const nTarifs = await queryOne(db, 'SELECT COUNT(*) AS n FROM tarifs_dynamiques WHERE terrain_id = ?', [TERRAIN_ID]);
+  const demos = await queryAll(
     db,
     `SELECT code_reservation, date, heure_debut, heure_fin, statut, montant, format_terrain
      FROM reservations WHERE terrain_id = ? AND code_reservation LIKE 'TF-DEMO-%'

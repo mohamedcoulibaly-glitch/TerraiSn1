@@ -6,6 +6,7 @@ import type { FluxReservation } from "../types";
 import KanbanBoard from "./KanbanBoard";
 import FluxMobile from "./FluxMobile";
 import LierJoueurModal from "../../crm/ui/LierJoueurModal";
+import { useTerrainEvents } from "@/hooks/useTerrainEvents";
 
 export default function FluxPage() {
   const date = localYmd();
@@ -19,6 +20,12 @@ export default function FluxPage() {
     weekday: "short",
     day: "numeric",
     month: "short",
+  });
+
+  useTerrainEvents(data?.terrain_id, (ev) => {
+    if (["reservation", "encaissement", "blocage"].includes(String(ev.type))) {
+      void refetch();
+    }
   });
 
   return (

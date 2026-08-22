@@ -38,12 +38,12 @@ export default function HeroSearchBar({
       <button
         type="button"
         onClick={onFilterClick}
-        className="relative mr-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-white shadow-[0_4px_14px_rgba(16,185,129,0.35)] transition-transform active:scale-95"
+        className="relative mr-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--primary)] text-white shadow-[0_4px_14px_rgba(30,64,175,0.35)] transition-transform active:scale-95"
         aria-label="Filtres"
       >
         <SlidersHorizontal className="h-[18px] w-[18px]" strokeWidth={2.25} />
         {activeFilterCount > 0 && (
-          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-emerald-100 bg-white text-[10px] font-bold text-emerald-600">
+          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white bg-white text-[10px] font-bold text-[var(--primary)]">
             {activeFilterCount}
           </span>
         )}

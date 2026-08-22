@@ -57,7 +57,7 @@ function fakePhone(suffix) {
 
 (async () => {
   const db = await getDb();
-  const gerant = queryOne(db, 'SELECT id, terrain_id, nom FROM employes WHERE email = ?', [GERANT_EMAIL]);
+  const gerant = await queryOne(db, 'SELECT id, terrain_id, nom FROM employes WHERE email = ?', [GERANT_EMAIL]);
   if (!gerant?.terrain_id) {
     console.error('Gérant introuvable:', GERANT_EMAIL);
     process.exit(1);
@@ -66,18 +66,18 @@ function fakePhone(suffix) {
   const gerantId = gerant.id;
   console.log(`Terrain #${terrainId} · gérant #${gerantId} ${gerant.nom}`);
 
-  const demoUsers = queryAll(db, "SELECT id FROM users WHERE email LIKE 'demo.flux.%@joueur.terrainsn.local'");
+  const demoUsers = await queryAll(db, "SELECT id FROM users WHERE email LIKE 'demo.flux.%@joueur.terrainsn.local'");
   const demoIds = demoUsers.map((u) => u.id);
   if (demoIds.length) {
     const placeholders = demoIds.map(() => '?').join(',');
-    runSql(db, `DELETE FROM paiements WHERE reservation_id IN (SELECT id FROM reservations WHERE joueur_id IN (${placeholders}) OR code_reservation LIKE 'TF-DEMO-%')`, demoIds);
-    runSql(db, `DELETE FROM matchs WHERE reservation_id IN (SELECT id FROM reservations WHERE terrain_id = ? AND (code_reservation LIKE 'TF-DEMO-%' OR joueur_id IN (${placeholders})))`, [terrainId, ...demoIds]);
-    runSql(db, `DELETE FROM reservations WHERE terrain_id = ? AND (code_reservation LIKE 'TF-DEMO-%' OR joueur_id IN (${placeholders}))`, [terrainId, ...demoIds]);
-    runSql(db, `DELETE FROM users WHERE id IN (${placeholders})`, demoIds);
+    await runSql(db, `DELETE FROM paiements WHERE reservation_id IN (SELECT id FROM reservations WHERE joueur_id IN (${placeholders}) OR code_reservation LIKE 'TF-DEMO-%')`, demoIds);
+    await runSql(db, `DELETE FROM matchs WHERE reservation_id IN (SELECT id FROM reservations WHERE terrain_id = ? AND (code_reservation LIKE 'TF-DEMO-%' OR joueur_id IN (${placeholders})))`, [terrainId, ...demoIds]);
+    await runSql(db, `DELETE FROM reservations WHERE terrain_id = ? AND (code_reservation LIKE 'TF-DEMO-%' OR joueur_id IN (${placeholders}))`, [terrainId, ...demoIds]);
+    await runSql(db, `DELETE FROM users WHERE id IN (${placeholders})`, demoIds);
   } else {
-    runSql(db, "DELETE FROM paiements WHERE reservation_id IN (SELECT id FROM reservations WHERE code_reservation LIKE 'TF-DEMO-%')");
-    runSql(db, "DELETE FROM matchs WHERE reservation_id IN (SELECT id FROM reservations WHERE code_reservation LIKE 'TF-DEMO-%')");
-    runSql(db, "DELETE FROM reservations WHERE code_reservation LIKE 'TF-DEMO-%'");
+    await runSql(db, "DELETE FROM paiements WHERE reservation_id IN (SELECT id FROM reservations WHERE code_reservation LIKE 'TF-DEMO-%')");
+    await runSql(db, "DELETE FROM matchs WHERE reservation_id IN (SELECT id FROM reservations WHERE code_reservation LIKE 'TF-DEMO-%')");
+    await runSql(db, "DELETE FROM reservations WHERE code_reservation LIKE 'TF-DEMO-%'");
   }
 
   const playerIds = [];
@@ -85,28 +85,28 @@ function fakePhone(suffix) {
     const email = `demo.flux.${suffix}@joueur.terrainsn.local`;
     const telephone = fakePhone(suffix);
     const fullName = `${prenom} ${nom}`;
-    runSql(
+    await runSql(
       db,
       `INSERT INTO users (nom, prenom, email, telephone, role, is_active, telephone_verified, quartier)
        VALUES (?, ?, ?, ?, 'joueur', 1, 0, 'Parcelles Assainies')`,
       [fullName, prenom, email, telephone],
     );
-    const row = queryOne(db, 'SELECT id FROM users WHERE email = ?', [email]);
+    const row = await queryOne(db, 'SELECT id FROM users WHERE email = ?', [email]);
     playerIds.push({ id: row.id, prenom, nom, fullName, telephone, suffix });
   }
 
   const banned = [playerIds[22], playerIds[23]];
   for (const p of banned) {
-    runSql(db, `UPDATE users SET is_banned = 1, banned_at = CURRENT_TIMESTAMP, banned_reason = 'Démo — comportement' WHERE id = ?`, [p.id]);
+    await runSql(db, `UPDATE users SET is_banned = 1, banned_at = CURRENT_TIMESTAMP, banned_reason = 'Démo — comportement' WHERE id = ?`, [p.id]);
   }
-  runSql(db, `UPDATE users SET notes_internes = 'Client régulier du vendredi soir.' WHERE id = ?`, [playerIds[0].id]);
-  runSql(db, `UPDATE users SET notes_internes = 'Toujours en retard de 10 min.' WHERE id = ?`, [playerIds[4].id]);
+  await runSql(db, `UPDATE users SET notes_internes = 'Client régulier du vendredi soir.' WHERE id = ?`, [playerIds[0].id]);
+  await runSql(db, `UPDATE users SET notes_internes = 'Toujours en retard de 10 min.' WHERE id = ?`, [playerIds[4].id]);
 
   const now = new Date();
   const today = ymd(now);
   let codeSeq = 100;
 
-  function insertResa({
+  async function insertResa({
     player,
     date,
     hStart,
@@ -126,7 +126,7 @@ function fakePhone(suffix) {
     const joueurId = walkIn ? null : player.id;
     const nom = walkIn ? 'Walk-in démo' : player.fullName;
     const tel = walkIn ? '+221000000099' : player.telephone;
-    runSql(
+    await runSql(
       db,
       `INSERT INTO reservations (
         terrain_id, joueur_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin,
@@ -156,9 +156,9 @@ function fakePhone(suffix) {
         scanned ? `${date} ${hh(hStart)}:08` : null,
       ],
     );
-    const resa = queryOne(db, 'SELECT id FROM reservations WHERE code_reservation = ?', [code]);
+    const resa = await queryOne(db, 'SELECT id FROM reservations WHERE code_reservation = ?', [code]);
     if (avance > 0) {
-      runSql(
+      await runSql(
         db,
         `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, montant_acompte)
          VALUES (?, ?, 'wave', 'paye', ?, ?)`,
@@ -170,24 +170,24 @@ function fakePhone(suffix) {
 
   // --- Aujourd'hui : remplir les 4 colonnes Kanban ---
   const hour = now.getHours();
-  insertResa({ player: playerIds[0], date: today, hStart: Math.max(0, hour - 3), hEnd: Math.max(1, hour - 2), statut: 'match_joue', stage: 'closed', restant: 0, checkedIn: true, checkout: true, scanned: true });
-  insertResa({ player: playerIds[1], date: today, hStart: Math.max(0, hour - 2), hEnd: Math.max(1, hour - 1), statut: 'confirme', stage: 'checkout', restant: 6000, checkedIn: true, scanned: true });
-  insertResa({ player: playerIds[2], date: today, hStart: hour, hEnd: Math.min(23, hour + 1), statut: 'confirme', stage: 'match', restant: 6000, checkedIn: true });
-  insertResa({ player: playerIds[3], date: today, hStart: hour, hEnd: Math.min(23, hour + 1), statut: 'confirme', stage: 'checkin', restant: 0 });
-  insertResa({ player: playerIds[4], date: today, hStart: Math.min(22, hour + 1), hEnd: Math.min(23, hour + 2), statut: 'confirme', stage: 'checkin', restant: 8000 });
-  insertResa({ player: playerIds[5], date: today, hStart: Math.min(21, hour + 2), hEnd: Math.min(23, hour + 3), statut: 'confirme', stage: 'reserved' });
-  insertResa({ player: playerIds[6], date: today, hStart: 16, hEnd: 17, statut: 'confirme', stage: 'reserved' });
-  insertResa({ player: playerIds[7], date: today, hStart: 17, hEnd: 18, statut: 'confirme', stage: 'reserved', restant: 9000 });
-  insertResa({ player: playerIds[8], date: today, hStart: 18, hEnd: 19, statut: 'confirme', stage: 'reserved' });
-  insertResa({ player: playerIds[9], date: today, hStart: 19, hEnd: 20, statut: 'confirme', stage: 'reserved' });
-  insertResa({ player: playerIds[10], date: today, hStart: 20, hEnd: 21, statut: 'confirme', stage: 'reserved' });
-  insertResa({ player: playerIds[11], date: today, hStart: 21, hEnd: 22, statut: 'confirme', stage: 'reserved', restant: 0 });
-  insertResa({ player: null, date: today, hStart: 15, hEnd: 16, statut: 'confirme', stage: 'reserved', walkIn: true });
-  insertResa({ player: null, date: today, hStart: 22, hEnd: 23, statut: 'confirme', stage: 'reserved', walkIn: true, restant: 11000, avance: 0 });
-  insertResa({ player: banned[0], date: today, hStart: 14, hEnd: 15, statut: 'confirme', stage: 'reserved', restant: 6000 });
-  insertResa({ player: playerIds[12], date: today, hStart: Math.max(0, hour - 1), hEnd: hour, statut: 'confirme', stage: 'checkout', restant: 4500, checkedIn: true });
-  insertResa({ player: playerIds[13], date: today, hStart: 10, hEnd: 11, statut: 'match_joue', stage: 'closed', restant: 0, checkedIn: true, checkout: true, scanned: true });
-  insertResa({ player: playerIds[14], date: today, hStart: 11, hEnd: 12, statut: 'confirme', stage: 'match', restant: 6000, checkedIn: true });
+  await insertResa({ player: playerIds[0], date: today, hStart: Math.max(0, hour - 3), hEnd: Math.max(1, hour - 2), statut: 'match_joue', stage: 'closed', restant: 0, checkedIn: true, checkout: true, scanned: true });
+  await insertResa({ player: playerIds[1], date: today, hStart: Math.max(0, hour - 2), hEnd: Math.max(1, hour - 1), statut: 'confirme', stage: 'checkout', restant: 6000, checkedIn: true, scanned: true });
+  await insertResa({ player: playerIds[2], date: today, hStart: hour, hEnd: Math.min(23, hour + 1), statut: 'confirme', stage: 'match', restant: 6000, checkedIn: true });
+  await insertResa({ player: playerIds[3], date: today, hStart: hour, hEnd: Math.min(23, hour + 1), statut: 'confirme', stage: 'checkin', restant: 0 });
+  await insertResa({ player: playerIds[4], date: today, hStart: Math.min(22, hour + 1), hEnd: Math.min(23, hour + 2), statut: 'confirme', stage: 'checkin', restant: 8000 });
+  await insertResa({ player: playerIds[5], date: today, hStart: Math.min(21, hour + 2), hEnd: Math.min(23, hour + 3), statut: 'confirme', stage: 'reserved' });
+  await insertResa({ player: playerIds[6], date: today, hStart: 16, hEnd: 17, statut: 'confirme', stage: 'reserved' });
+  await insertResa({ player: playerIds[7], date: today, hStart: 17, hEnd: 18, statut: 'confirme', stage: 'reserved', restant: 9000 });
+  await insertResa({ player: playerIds[8], date: today, hStart: 18, hEnd: 19, statut: 'confirme', stage: 'reserved' });
+  await insertResa({ player: playerIds[9], date: today, hStart: 19, hEnd: 20, statut: 'confirme', stage: 'reserved' });
+  await insertResa({ player: playerIds[10], date: today, hStart: 20, hEnd: 21, statut: 'confirme', stage: 'reserved' });
+  await insertResa({ player: playerIds[11], date: today, hStart: 21, hEnd: 22, statut: 'confirme', stage: 'reserved', restant: 0 });
+  await insertResa({ player: null, date: today, hStart: 15, hEnd: 16, statut: 'confirme', stage: 'reserved', walkIn: true });
+  await insertResa({ player: null, date: today, hStart: 22, hEnd: 23, statut: 'confirme', stage: 'reserved', walkIn: true, restant: 11000, avance: 0 });
+  await insertResa({ player: banned[0], date: today, hStart: 14, hEnd: 15, statut: 'confirme', stage: 'reserved', restant: 6000 });
+  await insertResa({ player: playerIds[12], date: today, hStart: Math.max(0, hour - 1), hEnd: hour, statut: 'confirme', stage: 'checkout', restant: 4500, checkedIn: true });
+  await insertResa({ player: playerIds[13], date: today, hStart: 10, hEnd: 11, statut: 'match_joue', stage: 'closed', restant: 0, checkedIn: true, checkout: true, scanned: true });
+  await insertResa({ player: playerIds[14], date: today, hStart: 11, hEnd: 12, statut: 'confirme', stage: 'match', restant: 6000, checkedIn: true });
 
   // --- Historique CRM (30-90 jours) ---
   let hist = 0;
@@ -198,7 +198,7 @@ function fakePhone(suffix) {
       const d = ymd(addDays(now, -(4 + i * 2 + m * 3)));
       const startH = 16 + (m % 5);
       const played = m !== 0 || i % 7 !== 0;
-      insertResa({
+      await insertResa({
         player: p,
         date: d,
         hStart: startH,
@@ -215,8 +215,8 @@ function fakePhone(suffix) {
   }
 
   saveDb(db);
-  const todayCount = queryOne(db, `SELECT COUNT(*) AS n FROM reservations WHERE terrain_id = ? AND date = ? AND statut IN ('confirme','match_joue','joue')`, [terrainId, today]);
-  const crmCount = queryOne(db, `SELECT COUNT(DISTINCT joueur_id) AS n FROM reservations WHERE terrain_id = ? AND joueur_id IS NOT NULL`, [terrainId]);
+  const todayCount = await queryOne(db, `SELECT COUNT(*) AS n FROM reservations WHERE terrain_id = ? AND date = ? AND statut IN ('confirme','match_joue','joue')`, [terrainId, today]);
+  const crmCount = await queryOne(db, `SELECT COUNT(DISTINCT joueur_id) AS n FROM reservations WHERE terrain_id = ? AND joueur_id IS NOT NULL`, [terrainId]);
   console.log(`OK · ${playerIds.length} joueurs démo · ${todayCount.n} cartes du jour · ${crmCount.n} fiches CRM · ${hist} matchs historiques`);
   console.log('Téléphones factices : +221000000000 … +221000000024');
   console.log('Compte : mohamed.gerant@gmail.com → Flux du jour + Joueurs');

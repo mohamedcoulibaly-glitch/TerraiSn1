@@ -36,10 +36,11 @@ const BottomNav = () => {
 
   return (
     <nav
-      className="bottom-nav md:hidden border-t border-[var(--nav-border)] bg-[var(--nav-bg)] pt-2 backdrop-blur-xl pb-[max(1.25rem,env(safe-area-inset-bottom,0px))]"
+      className="md:hidden fixed bottom-0 inset-x-0 z-40 pb-[env(safe-area-inset-bottom)]"
+      style={{ background: "var(--nav-bg)", borderTop: "1px solid var(--nav-border)" }}
       aria-label="Navigation principale"
     >
-      <div className="mx-auto grid h-[52px] max-w-xl grid-cols-4 items-center px-1">
+      <div className="grid grid-cols-4 max-w-lg mx-auto">
         {navItems.map((item) => {
           const isActive = item.match(location.pathname);
           return (
@@ -47,14 +48,13 @@ const BottomNav = () => {
               key={item.label}
               type="button"
               onClick={() => handleNav(item.path)}
-              className={`flex h-full w-full flex-col items-center justify-center gap-1 px-1 ${
-                isActive ? "text-[var(--primary)]" : "text-[var(--text-muted)]"
-              }`}
+              className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 text-[11px] font-medium"
+              style={{ color: isActive ? "var(--primary)" : "var(--text-muted)" }}
               aria-label={item.label}
               aria-current={isActive ? "page" : undefined}
             >
               <item.icon className="h-5 w-5 shrink-0" strokeWidth={isActive ? 2.4 : 2} />
-              <span className="text-[10px] font-medium leading-none">{item.label}</span>
+              {item.label}
             </button>
           );
         })}

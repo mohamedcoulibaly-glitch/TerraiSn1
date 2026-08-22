@@ -1,4 +1,6 @@
 import { COMMODITE_GROUPS, COMMODITES_CATALOG, type CommoditeId } from "@/lib/commodites";
+import { LucideByName } from "@/lib/lucideByName";
+import { getCommoditeIconName } from "@/constants/commoditesIcons";
 
 type Props = {
   value: CommoditeId[];
@@ -36,7 +38,7 @@ export default function CommoditesPicker({ value, onChange, className = "" }: Pr
                         : "bg-[var(--surface)] text-[var(--color-text-secondary)] border-[var(--color-border)]"
                     }`}
                   >
-                    <span aria-hidden>{c.icon}</span>
+                    <LucideByName name={getCommoditeIconName(c.id, c.icon)} className="w-3.5 h-3.5" />
                     {c.label}
                   </button>
                 );

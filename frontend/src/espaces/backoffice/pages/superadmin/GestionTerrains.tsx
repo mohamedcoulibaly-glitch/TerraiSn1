@@ -273,7 +273,11 @@ export default function GestionTerrains() {
           {rows.map(({ t, c, du, statut, remb }) => {
             const st = statutBadge(statut);
             return (
-              <article key={t.id} className="sa-card p-4">
+              <article
+                key={t.id}
+                className="sa-card p-4 cursor-pointer"
+                onClick={() => navigate(`/backoffice/superadmin/terrains/${t.id}`)}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="text-[13px] font-semibold">{t.nom}</p>
@@ -283,7 +287,16 @@ export default function GestionTerrains() {
                 </div>
                 <p className="mt-3 text-[12px]" style={{ color: "var(--sa-text-3)" }}>Dû {fcfa(du)} · Avance {Number(t.pourcentage_avance || 0)}%</p>
                 <p className="mt-1 text-[11px]" style={{ color: st.color }}>{st.label}{remb ? " · fenêtre remb." : ""}</p>
-                <SaButton className="mt-3 w-full" variant="secondary" onClick={() => navigate(`/backoffice/superadmin/terrains/${t.id}`)}>Gérer</SaButton>
+                <SaButton
+                  className="mt-3 w-full"
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`/backoffice/superadmin/terrains/${t.id}`);
+                  }}
+                >
+                  Gérer
+                </SaButton>
               </article>
             );
           })}
@@ -310,15 +323,29 @@ export default function GestionTerrains() {
             {rows.map(({ t, c, du, statut, remb }) => {
               const st = statutBadge(statut);
               const duPill = du <= 0 ? { label: "0", color: "var(--sa-muted)", bg: "var(--sa-surface-2)" } : remb ? { label: "En fenêtre", color: "var(--sa-warning)", bg: "var(--sa-warning-bg)" } : { label: "Payable", color: "var(--sa-success)", bg: "var(--sa-success-bg)" };
+              const openFiche = () => navigate(`/backoffice/superadmin/terrains/${t.id}`);
               return (
-                <tr key={t.id}>
+                <tr
+                  key={t.id}
+                  className="cursor-pointer"
+                  onClick={openFiche}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      openFiche();
+                    }
+                  }}
+                  tabIndex={0}
+                  role="link"
+                  aria-label={`Ouvrir la fiche de ${t.nom}`}
+                >
                   <td>
                     <div className="sa-cell-stack">
                     <p className="sa-cell-title">{t.nom}</p>
                     <p className="sa-cell-sub">{t.adresse_theorique || t.adresse || t.quartier || "—"}{t.ville ? ` · ${t.ville}` : ""}</p>
                     </div>
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     <LocalisationCell terrain={t} onConfigurer={() => navigate(`/backoffice/superadmin/terrains/${t.id}?tab=localisation`)} />
                   </td>
                   <td>
@@ -358,11 +385,12 @@ export default function GestionTerrains() {
                       return <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: essai.bg, color: essai.color }}>{essai.label}</span>;
                     })()}
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-2">
-                      <button type="button" onClick={() => navigate(`/backoffice/superadmin/terrains/${t.id}`)} className="sa-btn sa-btn-sm sa-btn-secondary">Voir</button>
+                      <button type="button" onClick={openFiche} className="sa-btn sa-btn-sm sa-btn-secondary">Voir</button>
                       <SaDropdown items={[
                         { label: "Modifier", onClick: () => navigate(`/backoffice/superadmin/terrains/${t.id}?tab=infos`) },
+                        { label: "Gérer les gérants", onClick: () => navigate(`/backoffice/superadmin/gerants?terrain=${t.id}`) },
                         { label: "Changer le mode", onClick: () => navigate(`/backoffice/superadmin/abonnements`) },
                         { label: t.is_active ? "Suspendre" : "Activer", danger: Boolean(t.is_active), onClick: async () => {
                           try {
@@ -388,7 +416,12 @@ export default function GestionTerrains() {
         {rows.map(({ t, c, du, statut, remb }) => {
           const st = statutBadge(statut);
           return (
-            <article key={t.id} className="rounded-xl p-4" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
+            <article
+              key={t.id}
+              className="rounded-xl p-4 cursor-pointer"
+              style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}
+              onClick={() => navigate(`/backoffice/superadmin/terrains/${t.id}`)}
+            >
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="text-[13px] font-semibold">{t.nom}</p>
@@ -401,7 +434,7 @@ export default function GestionTerrains() {
                 return <span className="mt-2 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: essai.bg, color: essai.color }}>{essai.label}</span>;
               })()}
               <p className="mt-2 text-[12px]" style={{ color: "var(--sa-text-2)" }}>Avance {Number(t.pourcentage_avance || 0)}% · Com. {Number(t.commission_pourcentage || 0)}%</p>
-              <div className="mt-2">
+              <div className="mt-2" onClick={(e) => e.stopPropagation()}>
                 <LocalisationCell terrain={t} onConfigurer={() => navigate(`/backoffice/superadmin/terrains/${t.id}?tab=localisation`)} />
               </div>
               <div className="mt-2 flex flex-wrap gap-1">
@@ -412,7 +445,15 @@ export default function GestionTerrains() {
                 <span className="rounded-full px-2 py-0.5 text-[11px]" style={{ background: remb ? "var(--sa-warning-bg)" : "var(--sa-absent-bg)", color: remb ? "var(--sa-warning)" : "var(--sa-danger)" }}>{remb ? `${t.delai_remboursement_heures} h` : "Remb. non"}</span>
               </div>
               <p className="mt-2 text-[13px] font-semibold">{fcfa(du)}</p>
-              <button type="button" onClick={() => navigate(`/backoffice/superadmin/terrains/${t.id}?tab=contrat`)} className="mt-3 w-full h-10 rounded-lg text-[12px] font-semibold" style={{ background: "var(--sa-primary-glow)", color: "var(--sa-primary)" }}>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/backoffice/superadmin/terrains/${t.id}?tab=contrat`);
+                }}
+                className="mt-3 w-full h-10 rounded-lg text-[12px] font-semibold"
+                style={{ background: "var(--sa-primary-glow)", color: "var(--sa-primary)" }}
+              >
                 Contrat
               </button>
             </article>

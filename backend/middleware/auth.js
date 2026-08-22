@@ -51,6 +51,78 @@ function isPasswordChangeAllowedPath(req) {
   );
 }
 
+function isGerantUser(user) {
+  if (!user) return false;
+  const role = user.role === 'superadmin' ? 'super_admin' : user.role;
+  return role === 'gerant' || user.accountType === 'employe';
+}
+
+/**
+ * Enrichit req.user pour les gérants multi-terrains.
+ * - terrains_ids : terrains accessibles
+ * - terrain_id_principal : premier / défaut
+ * - terrain_id : terrain actif (header X-Terrain-Id ou JWT si valide)
+ */
+async function enrichirGerant(req) {
+  if (!isGerantUser(req.user)) return;
+
+  const { getDb, queryAll, queryOne } = require('../database');
+  const db = await getDb();
+  const gerantId = Number(req.user.id);
+
+  let terrains = await queryAll(db, `
+    SELECT terrain_id FROM gerants_terrains
+    WHERE gerant_id = ? AND actif = 1
+    ORDER BY est_principal DESC, id ASC
+  `, [gerantId]);
+
+  if (!terrains.length && req.user.terrain_id) {
+    terrains = [{ terrain_id: req.user.terrain_id }];
+  }
+  if (!terrains.length) {
+    const emp = await queryOne(db, 'SELECT terrain_id FROM employes WHERE id = ?', [gerantId]);
+    if (emp?.terrain_id) terrains = [{ terrain_id: emp.terrain_id }];
+  }
+
+  req.user.terrains_ids = terrains.map((t) => Number(t.terrain_id)).filter(Boolean);
+  req.user.terrain_id_principal = req.user.terrains_ids[0] || null;
+
+  const headerRaw = req.headers['x-terrain-id'] || req.query?.terrain_id;
+  const requested = headerRaw != null && headerRaw !== '' ? Number(headerRaw) : null;
+
+  if (requested && req.user.terrains_ids.includes(requested)) {
+    req.user.terrain_id = requested;
+  } else if (req.user.terrain_id && req.user.terrains_ids.includes(Number(req.user.terrain_id))) {
+    req.user.terrain_id = Number(req.user.terrain_id);
+  } else {
+    req.user.terrain_id = req.user.terrain_id_principal;
+  }
+}
+
+function verifierTerrainGerant(terrain_id, req) {
+  const tid = Number(terrain_id);
+  if (!Number.isFinite(tid)) return false;
+  if (Array.isArray(req.user?.terrains_ids) && req.user.terrains_ids.length) {
+    return req.user.terrains_ids.includes(tid);
+  }
+  return Number(req.user?.terrain_id) === tid;
+}
+
+/** Résout le terrain actif pour une route gérant (params / body / principal). */
+function resolveTerrainGerant(req, explicitTerrainId = null) {
+  const candidate = explicitTerrainId
+    ?? req.params?.terrain_id
+    ?? req.body?.terrain_id
+    ?? req.query?.terrain_id
+    ?? req.user?.terrain_id
+    ?? req.user?.terrain_id_principal;
+  const tid = Number(candidate);
+  if (!Number.isFinite(tid) || !verifierTerrainGerant(tid, req)) {
+    return null;
+  }
+  return tid;
+}
+
 async function middlewareAuth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Non authentifié' });
@@ -68,21 +140,21 @@ async function middlewareAuth(req, res, next) {
     const table = profileTableFor(req.user.accountType || 'user');
 
     if (table === 'users') {
-      const user = queryOne(db, 'SELECT statut, is_active FROM users WHERE id = ?', [req.user.id]);
+      const user = await queryOne(db, 'SELECT statut, is_active FROM users WHERE id = ?', [req.user.id]);
       if (!user || Number(user.is_active) === 0 || isBlockedStatut(user.statut)) {
         return res.status(403).json({
           error: 'Ton compte a été suspendu. Contacte le support.',
         });
       }
     } else if (table === 'proprietaires') {
-      const user = queryOne(db, 'SELECT statut FROM proprietaires WHERE id = ?', [req.user.id]);
+      const user = await queryOne(db, 'SELECT statut FROM proprietaires WHERE id = ?', [req.user.id]);
       if (!user || isBlockedStatut(user.statut) || String(user.statut || '').toLowerCase() === 'inactif') {
         return res.status(403).json({
           error: 'Ton compte a été suspendu. Contacte le support.',
         });
       }
     } else if (table === 'employes') {
-      const user = queryOne(db, 'SELECT is_active FROM employes WHERE id = ?', [req.user.id]);
+      const user = await queryOne(db, 'SELECT is_active FROM employes WHERE id = ?', [req.user.id]);
       if (!user || Number(user.is_active) === 0) {
         return res.status(403).json({
           error: 'Ton compte a été suspendu. Contacte le support.',
@@ -90,6 +162,7 @@ async function middlewareAuth(req, res, next) {
       }
     }
 
+    await enrichirGerant(req);
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
@@ -121,6 +194,10 @@ module.exports = {
   hashRefreshToken,
   profileTableFor,
   isBlockedStatut,
+  enrichirGerant,
+  verifierTerrainGerant,
+  resolveTerrainGerant,
+  isGerantUser,
   JWT_SECRET,
   JWT_REFRESH_SECRET,
 };

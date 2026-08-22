@@ -35,7 +35,7 @@ async function upsertSubscription(userId, subscription, userAgent = '') {
     throw new Error('Subscription Web Push invalide');
   }
 
-  runSql(db, `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent)
+  await runSql(db, `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(endpoint) DO UPDATE SET
       user_id = excluded.user_id,
@@ -49,17 +49,17 @@ async function upsertSubscription(userId, subscription, userAgent = '') {
     userAgent.slice(0, 255),
   ]);
 
-  runSql(db, `INSERT OR IGNORE INTO push_preferences (user_id) VALUES (?)`, [userId]);
+  await runSql(db, `INSERT INTO push_preferences (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING`, [userId]);
 }
 
 async function removeSubscription(userId, endpoint) {
   const db = await getDb();
-  runSql(db, 'DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', [userId, endpoint]);
+  await runSql(db, 'DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', [userId, endpoint]);
 }
 
 async function getPreferences(userId) {
   const db = await getDb();
-  const prefs = queryOne(db, 'SELECT * FROM push_preferences WHERE user_id = ?', [userId]);
+  const prefs = await queryOne(db, 'SELECT * FROM push_preferences WHERE user_id = ?', [userId]);
   if (!prefs) {
     return {
       reservation_confirmation: true,
@@ -80,7 +80,7 @@ async function getPreferences(userId) {
 
 async function updatePreferences(userId, prefs) {
   const db = await getDb();
-  runSql(db, `INSERT INTO push_preferences (user_id, reservation_confirmation, rappel_reservation, promotion, nouveau_message, avis_reponse)
+  await runSql(db, `INSERT INTO push_preferences (user_id, reservation_confirmation, rappel_reservation, promotion, nouveau_message, avis_reponse)
     VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET
       reservation_confirmation = excluded.reservation_confirmation,
@@ -100,7 +100,7 @@ async function updatePreferences(userId, prefs) {
 
 async function getSubscriptionsForUser(userId) {
   const db = await getDb();
-  return queryAll(db, 'SELECT * FROM push_subscriptions WHERE user_id = ?', [userId]);
+  return await queryAll(db, 'SELECT * FROM push_subscriptions WHERE user_id = ?', [userId]);
 }
 
 async function sendToUser(userId, payload, preferenceKey = null) {
@@ -129,7 +129,7 @@ async function sendToUser(userId, payload, preferenceKey = null) {
       failed++;
       if (err.statusCode === 404 || err.statusCode === 410) {
         const db = await getDb();
-        runSql(db, 'DELETE FROM push_subscriptions WHERE id = ?', [sub.id]);
+        await runSql(db, 'DELETE FROM push_subscriptions WHERE id = ?', [sub.id]);
       }
       logger.error('pushService', `Envoi push echoue (user ${userId})`, err);
     }
@@ -140,7 +140,7 @@ async function sendToUser(userId, payload, preferenceKey = null) {
 
 async function envoyerConfirmationPush(reservationId) {
   const db = await getDb();
-  const reservation = queryOne(db, `SELECT r.*, t.nom AS terrain_nom
+  const reservation = await queryOne(db, `SELECT r.*, t.nom AS terrain_nom
     FROM reservations r JOIN terrains t ON t.id = r.terrain_id WHERE r.id = ?`, [reservationId]);
   if (!reservation?.joueur_id) return;
 
@@ -152,7 +152,7 @@ async function envoyerConfirmationPush(reservationId) {
     type: 'reservation_confirmation',
   }, 'reservation_confirmation');
 
-  runSql(db, `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
+  await runSql(db, `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
     VALUES ('user', ?, 'confirmation', 'push', ?, 0)`, [
     reservation.joueur_id,
     `Réservation confirmée : ${reservation.terrain_nom} le ${reservation.date} à ${reservation.heure_debut}`,
@@ -173,7 +173,7 @@ async function envoyerRappelsReservations() {
   const windowStart = new Date(now.getTime() + 45 * 60 * 1000);
   const windowEnd = new Date(now.getTime() + 75 * 60 * 1000);
 
-  const reservations = queryAll(db, `
+  const reservations = await queryAll(db, `
     SELECT r.*, t.nom AS terrain_nom
     FROM reservations r
     JOIN terrains t ON t.id = r.terrain_id
@@ -181,7 +181,7 @@ async function envoyerRappelsReservations() {
     WHERE r.statut IN ('confirme', 'acceptee')
       AND r.joueur_id IS NOT NULL
       AND rr.id IS NULL
-      AND r.date >= date('now')
+      AND r.date >= CURRENT_DATE
   `);
 
   let processed = 0;
@@ -203,8 +203,8 @@ async function envoyerRappelsReservations() {
     }, 'rappel_reservation');
 
     if (result.sent > 0) {
-      runSql(db, 'INSERT INTO reservation_reminders (reservation_id) VALUES (?)', [reservation.id]);
-      runSql(db, `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
+      await runSql(db, 'INSERT INTO reservation_reminders (reservation_id) VALUES (?)', [reservation.id]);
+      await runSql(db, `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
         VALUES ('user', ?, 'rappel', 'push', ?, 0)`, [
         reservation.joueur_id,
         `Rappel : match au ${reservation.terrain_nom} dans 1h`,

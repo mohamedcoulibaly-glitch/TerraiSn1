@@ -33,13 +33,27 @@ const sessions = new Map();
  * @property {string|null} waState
  */
 
+const USER_INFRA_ERROR =
+  "Y'a un problème avec WhatsApp. Contactez le développeur immédiatement.";
+
+const STARTING_STATES = new Set(['created', 'initializing', 'qr_ready', 'authenticating', 'starting']);
+const LIVE_STATES = new Set(['initializing', 'qr_ready', 'authenticating', 'ready']);
+
+let startLocks = new Map();
+/** OpenWA pour envoi distant si déjà prêt ; l’appairage QR utilise Baileys local par défaut (OpenWA distant reste souvent bloqué en qr_ready). */
+const engineName = String(process.env.WHATSAPP_ENGINE || (apiKey ? 'openwa' : 'baileys')).toLowerCase();
+const linkEngine = String(process.env.WHATSAPP_LINK_ENGINE || 'baileys').toLowerCase();
+const allowBaileysFallback =
+  String(process.env.WHATSAPP_FALLBACK_BAILEYS || 'true').toLowerCase() === 'true';
+let preferBaileys = engineName === 'baileys' || engineName === 'local' || linkEngine === 'baileys' || linkEngine === 'local';
+let healthCache = { at: 0, value: null };
+
 function requireConfig() {
   if (mockMode) return;
   if (!apiKey) {
-    const err = new Error(
-      'OPENWA_API_KEY manquant dans backend/.env — WhatsApp ne fonctionne que via OpenWA.'
-    );
+    const err = new Error(USER_INFRA_ERROR);
     err.statusCode = 503;
+    err.causeMessage = 'OPENWA_API_KEY manquant';
     throw err;
   }
 }
@@ -91,7 +105,10 @@ function createSessionState(key) {
     pairingCode: null,
     pairingPhone: null,
     waState: null,
+    transport: 'openwa',
     pinned: Boolean(pinnedId),
+    recreateAttempted: false,
+    startPromise: null,
   };
 }
 
@@ -103,27 +120,53 @@ function getOrCreateState(key) {
   return sessions.get(sessionKey);
 }
 
-function publicStatus(state) {
+function isChromiumLaunchFailure(raw) {
+  return /Failed to launch the browser|puppeteer|Permission denied|pthread_create|Resource temporarily unavailable|n’arrive pas à lancer Chromium|ENGINE_TYPE=baileys/i.test(
+    String(raw || ''),
+  );
+}
+
+function isInfraFailure(raw) {
+  return (
+    isChromiumLaunchFailure(raw) ||
+    /OpenWA |OPENWA_|ECONN|ETIMEDOUT|fetch failed|AbortError|HTTP 5\d\d|API_KEY manquant|n’arrive pas à lancer/i.test(
+      String(raw || ''),
+    )
+  );
+}
+
+function publicError(state) {
+  if (state.mock) return USER_INFRA_ERROR;
+  if (state.transport === 'baileys' && (state.ready || state.lastQrDataUrl || state.pairingCode)) return null;
+  if (!apiKey && state.transport !== 'baileys') return USER_INFRA_ERROR;
+  if (String(state.waState || '').toLowerCase() === 'failed' && state.transport !== 'baileys') return USER_INFRA_ERROR;
+  if (isInfraFailure(state.lastError) && state.transport !== 'baileys') return USER_INFRA_ERROR;
+  return null;
+}
+
+function publicStatus(state, health = null) {
+  const infraOk = health ? Boolean(health.ok) : publicError(state) == null && !state.mock && Boolean(apiKey);
   return {
     session: state.key,
     connected: state.ready,
     mock: state.mock,
     hasQr: Boolean(state.lastQrDataUrl),
     initializing: state.initializing,
-    error: state.lastError,
+    error: infraOk || state.transport === 'baileys' ? publicError(state) : USER_INFRA_ERROR,
+    infra_ok: infraOk || state.transport === 'baileys',
     phone: state.connectedPhone,
     pairingCode: state.pairingCode,
     pairingPhone: state.pairingPhone,
     waState: state.waState || null,
-    provider: 'openwa',
+    provider: state.transport || 'openwa',
     openwaSessionId: state.openwaId,
     openwaSessionName: state.openwaName,
-    qrPage: state.key === 'platform' ? '/whatsapp-qr' : '/backoffice/gerant',
+    qrPage: state.key === 'platform' ? '/whatsapp-qr' : '/backoffice/gerant/parametres',
   };
 }
 
 function applyRemoteSession(state, remote) {
-  if (!remote) return;
+  if (!remote || state.transport === 'baileys') return;
   state.openwaId = remote.id || state.openwaId;
   const status = String(remote.status || '').toLowerCase();
   state.waState = status || null;
@@ -137,35 +180,51 @@ function applyRemoteSession(state, remote) {
     state.lastQrDataUrl = null;
     state.pairingCode = null;
     state.lastError = null;
+  } else if (status === 'authenticating') {
+    // Ne plus afficher un QR périmé pendant la validation téléphone
+    state.lastQrDataUrl = null;
+    state.lastError = null;
   } else if (remote.lastError) {
     const raw = String(remote.lastError);
-    if (/Failed to launch the browser|puppeteer|Permission denied/i.test(raw)) {
-      state.lastError =
-        'OpenWA ne peut pas démarrer Chromium sur le serveur. Passez ENGINE_TYPE=baileys, ou définissez OPENWA_SHARED_SESSION_ID avec une session déjà connectée.';
-    } else {
-      state.lastError = raw.slice(0, 500);
-    }
+    state.lastError = raw.slice(0, 500);
   }
-  const bootstrapping = ['initializing', 'qr_ready', 'authenticating', 'starting'].includes(status);
-  if (bootstrapping) state.initializing = true;
-  if (['ready', 'failed', 'disconnected', 'stopped', 'created', 'logged_out'].includes(status)) {
-    state.initializing = false;
-  }
+  state.initializing = STARTING_STATES.has(status) && status !== 'created' && !state.ready;
+  if (status === 'created') state.initializing = Boolean(state.startPromise);
 }
 
-async function openwaRequest(method, apiPath, body) {
+function openwaCreateBody(name) {
+  return {
+    name,
+    // Baileys côté serveur OpenWA : moins de Chromium, appairage plus stable
+    config: { engineType: 'baileys' },
+  };
+}
+
+async function openwaRequest(method, apiPath, body, opts = {}) {
   requireConfig();
   const url = `${baseUrl}/api${apiPath.startsWith('/') ? apiPath : `/${apiPath}`}`;
   const headers = {
     'X-API-Key': apiKey,
     Accept: 'application/json',
   };
+  const timeoutMs = opts.timeoutMs === 0 ? 0 : (opts.timeoutMs || 20000);
   const init = { method, headers };
+  if (timeoutMs > 0) init.signal = AbortSignal.timeout(timeoutMs);
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(url, init);
+  let res;
+  try {
+    res = await fetch(url, init);
+  } catch (err) {
+    const fail = new Error(USER_INFRA_ERROR);
+    fail.statusCode = 503;
+    fail.causeMessage = err.name === 'TimeoutError' || err.name === 'AbortError'
+      ? 'OpenWA timeout'
+      : err.message;
+    throw fail;
+  }
   const text = await res.text();
   let data = null;
   if (text) {
@@ -179,8 +238,10 @@ async function openwaRequest(method, apiPath, body) {
     const msg =
       (data && (data.message || data.error || data.code)) ||
       `OpenWA ${method} ${apiPath} → HTTP ${res.status}`;
-    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-    err.statusCode = res.status;
+    const technical = typeof msg === 'string' ? msg : JSON.stringify(msg);
+    const err = new Error(USER_INFRA_ERROR);
+    err.statusCode = res.status >= 500 ? 503 : res.status;
+    err.causeMessage = `OpenWA ${method} ${apiPath} → HTTP ${res.status}: ${technical}`;
     err.payload = data;
     throw err;
   }
@@ -200,7 +261,7 @@ async function findRemoteByName(name) {
   return all.find((s) => s && s.name === name) || null;
 }
 
-async function ensureRemoteSession(state) {
+async function peekRemoteSession(state) {
   if (state.pinned && state.openwaId) {
     const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
     applyRemoteSession(state, remote);
@@ -216,11 +277,16 @@ async function ensureRemoteSession(state) {
       state.openwaId = null;
     }
   }
-  let remote = await findRemoteByName(state.openwaName);
-  if (!remote) {
-    remote = await openwaRequest('POST', '/sessions', { name: state.openwaName });
-    console.log(`🆕 OpenWA session créée [${state.key}] name=${state.openwaName} id=${remote.id}`);
-  }
+  const remote = await findRemoteByName(state.openwaName);
+  if (remote) applyRemoteSession(state, remote);
+  return remote || null;
+}
+
+async function ensureRemoteSession(state) {
+  const existing = await peekRemoteSession(state);
+  if (existing) return existing;
+  const remote = await openwaRequest('POST', '/sessions', openwaCreateBody(state.openwaName));
+  console.log(`🆕 OpenWA session créée [${state.key}] name=${state.openwaName} id=${remote.id}`);
   applyRemoteSession(state, remote);
   return remote;
 }
@@ -259,7 +325,7 @@ async function requestPairingCode(state, phoneRaw) {
     if (result?.status) state.waState = String(result.status);
     return state.pairingCode;
   } catch (err) {
-    console.warn(`⚠️ Pairing OpenWA [${state.key}]:`, err.message);
+    console.warn(`⚠️ Pairing OpenWA [${state.key}]:`, err.causeMessage || err.message);
     return null;
   }
 }
@@ -287,56 +353,101 @@ async function recreateRemoteSession(state) {
   state.ready = false;
   state.lastQrDataUrl = null;
   state.pairingCode = null;
-  const remote = await openwaRequest('POST', '/sessions', { name: state.openwaName });
+  state.pairingPhone = null;
+  state.waState = null;
+  const remote = await openwaRequest('POST', '/sessions', openwaCreateBody(state.openwaName));
   applyRemoteSession(state, remote);
   console.log(`♻️ OpenWA session recréée [${state.key}] id=${remote.id}`);
   return remote;
 }
 
+async function infraFail(state, technical) {
+  if (technical) {
+    state.lastError = String(technical).slice(0, 500);
+    console.error(`❌ OpenWA [${state.key}]:`, technical);
+  }
+  const err = new Error(USER_INFRA_ERROR);
+  err.statusCode = 503;
+  err.causeMessage = technical;
+  return err;
+}
+
+function kickStart(state) {
+  if (!state.openwaId) return Promise.resolve(null);
+  if (state.startPromise) return state.startPromise;
+  const url = `${baseUrl}/api/sessions/${state.openwaId}/start`;
+  // Ne jamais abort /start : un AbortSignal coupe Chromium à mi-boot (pas de QR).
+  state.startPromise = fetch(url, {
+    method: 'POST',
+    headers: { 'X-API-Key': apiKey, Accept: 'application/json' },
+  })
+    .then(async (res) => {
+      const text = await res.text();
+      let data = null;
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { raw: text };
+        }
+      }
+      if (data && data.id) applyRemoteSession(state, data);
+      if (!res.ok) {
+        await peekRemoteSession(state).catch(() => null);
+        if (LIVE_STATES.has(String(state.waState || '').toLowerCase())) return data;
+        const err = new Error(USER_INFRA_ERROR);
+        err.statusCode = res.status >= 500 ? 503 : res.status;
+        err.causeMessage = `OpenWA POST /start → HTTP ${res.status}`;
+        throw err;
+      }
+      return data;
+    })
+    .finally(() => {
+      state.startPromise = null;
+    });
+  return state.startPromise;
+}
+
 async function startRemote(state) {
   if (!state.openwaId) await ensureRemoteSession(state);
-  let status = String(state.waState || '').toLowerCase();
+  await peekRemoteSession(state).catch(() => null);
+  const status = String(state.waState || '').toLowerCase();
   if (status === 'ready') return;
   if (['initializing', 'qr_ready', 'authenticating'].includes(status)) return;
 
-  if (['failed', 'logged_out'].includes(status)) {
-    await recreateRemoteSession(state);
-    status = String(state.waState || '').toLowerCase();
+  if (status === 'failed' || status === 'logged_out' || status === 'disconnected' || status === 'stopped') {
+    try {
+      await openwaRequest('POST', `/sessions/${state.openwaId}/force-kill`);
+    } catch {
+      /* pas d'engine vivant */
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    await peekRemoteSession(state).catch(() => null);
   }
 
-  try {
-    const remote = await openwaRequest('POST', `/sessions/${state.openwaId}/start`);
-    applyRemoteSession(state, remote);
-  } catch (err) {
-    // Déjà démarrée ou zombie → vérifier / recréer si failed
-    if (err.statusCode === 400 || err.statusCode === 409) {
-      const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
-      applyRemoteSession(state, remote);
-      if (['failed', 'logged_out'].includes(String(remote.status || '').toLowerCase())) {
-        await recreateRemoteSession(state);
-        const restarted = await openwaRequest('POST', `/sessions/${state.openwaId}/start`);
-        applyRemoteSession(state, restarted);
-      }
-      return;
-    }
-    throw err;
-  }
+  kickStart(state).catch((err) => {
+    console.error(`❌ OpenWA start [${state.key}]:`, err.causeMessage || err.message);
+  });
+  await new Promise((r) => setTimeout(r, 400));
+  await peekRemoteSession(state).catch(() => null);
 }
 
-async function waitForQrOrReady(state, ms = 45000) {
+async function waitForQrOrReady(state, ms = 90000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     try {
       const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
       applyRemoteSession(state, remote);
     } catch (err) {
-      state.lastError = err.message;
+      state.lastError = err.causeMessage || err.message;
     }
     if (state.ready) return;
     await fetchQr(state).catch(() => null);
     if (state.lastQrDataUrl || state.pairingCode) return;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 1200));
+    if (String(state.waState || '').toLowerCase() === 'failed' && !state.startPromise) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
   }
 }
 
@@ -348,128 +459,202 @@ async function ensureStarted(key = 'platform', opts = {}) {
   const state = getOrCreateState(key);
   if (state.mock) return { mock: true, ready: false, session: state.key, provider: 'openwa' };
 
-  requireConfig();
+  const lockKey = state.key;
+  if (startLocks.has(lockKey) && !opts.force) {
+    return startLocks.get(lockKey);
+  }
 
+  const run = ensureStartedOnce(state, opts);
+  startLocks.set(lockKey, run);
+  try {
+    return await run;
+  } finally {
+    if (startLocks.get(lockKey) === run) startLocks.delete(lockKey);
+  }
+}
+
+async function ensureStartedOnce(state, opts = {}) {
   if (state.ready && !opts.force) {
     return {
       mock: false,
       ready: true,
       session: state.key,
       phone: state.connectedPhone,
-      provider: 'openwa',
+      provider: state.transport || 'openwa',
     };
   }
 
-  if (state.initializing && !opts.force) {
-    await waitForQrOrReady(state, 30000);
-    if (opts.phoneNumber && !state.ready) {
-      await requestPairingCode(state, opts.phoneNumber);
-    }
+  if (state.transport === 'baileys' && (state.ready || state.lastQrDataUrl || state.pairingCode) && !opts.force) {
     return {
       mock: false,
       ready: state.ready,
       session: state.key,
       phone: state.connectedPhone,
-      initializing: state.initializing,
-      error: state.lastError,
+      initializing: Boolean(state.lastQrDataUrl || state.pairingCode) && !state.ready,
+      error: publicError(state),
       pairingCode: state.pairingCode,
-      provider: 'openwa',
+      dataUrl: state.lastQrDataUrl,
+      hasQr: Boolean(state.lastQrDataUrl),
+      provider: 'baileys',
     };
   }
 
-  state.initializing = true;
-  state.lastError = null;
+  const baileys = require('./whatsappBaileys');
+  const openWaLink = linkEngine === 'openwa' && Boolean(apiKey) && !preferBaileys;
+  const hadOpenWaQr = Boolean(state.lastQrDataUrl || state.pairingCode) && state.transport === 'openwa';
 
-  try {
-    await ensureRemoteSession(state);
-
-    if (opts.force) {
-      state.lastQrDataUrl = null;
-      state.pairingCode = null;
-      state.pairingPhone = null;
-      state.ready = false;
-      try {
-        await openwaRequest('POST', `/sessions/${state.openwaId}/logout`);
-      } catch {
-        try {
-          await openwaRequest('POST', `/sessions/${state.openwaId}/stop`);
-        } catch {
-          /* ignore */
-        }
-      }
-      // Recréer si session dead
-      try {
-        const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
-        applyRemoteSession(state, remote);
-        if (['failed', 'logged_out'].includes(String(remote.status || '').toLowerCase())) {
-          try {
-            await openwaRequest('DELETE', `/sessions/${state.openwaId}`);
-          } catch {
-            /* ignore */
-          }
-          state.openwaId = null;
-          await ensureRemoteSession(state);
-        }
-      } catch {
-        state.openwaId = null;
+  // OpenWA distant : QR souvent affiché mais jamais "ready" → Baileys local pour l’appairage.
+  // On ne tente OpenWA en linking que si WHATSAPP_LINK_ENGINE=openwa explicitement.
+  if (openWaLink) {
+    requireConfig();
+    state.transport = 'openwa';
+    state.initializing = true;
+    state.lastError = null;
+    try {
+      if (opts.force) {
+        await recreateRemoteSession(state);
+      } else {
         await ensureRemoteSession(state);
       }
-    }
-
-    await startRemote(state);
-    await waitForQrOrReady(state, 45000);
-
-    if (opts.phoneNumber && !state.ready) {
-      await requestPairingCode(state, opts.phoneNumber);
-    }
-
-    if (state.ready) {
-      console.log(
-        `✅ WhatsApp OpenWA connecté [${state.key}]${state.connectedPhone ? ` ${state.connectedPhone}` : ''}`
-      );
-    } else if (state.lastQrDataUrl) {
-      if (state.key === 'platform') {
-        console.log(
-          `📱 QR WhatsApp plateforme (OpenWA) : http://localhost:${process.env.PORT || 3001}/whatsapp-qr`
-        );
-      } else {
-        console.log(`📱 QR WhatsApp OpenWA [${state.key}] prêt (espace gérant)`);
+      await startRemote(state);
+      await waitForQrOrReady(state, opts.force ? 45000 : 25000);
+      if (opts.phoneNumber && !state.ready) {
+        await requestPairingCode(state, opts.phoneNumber);
       }
+    } catch (error) {
+      const technical = error.causeMessage || error.message || String(error);
+      state.lastError = technical;
+      console.error(`❌ OpenWA ensureStarted [${state.key}]:`, technical);
     }
-  } catch (error) {
-    state.lastError = error.message || String(error);
-    console.error(`❌ OpenWA ensureStarted [${state.key}]:`, state.lastError);
-  } finally {
-    state.initializing = false;
   }
+
+  const openWaStuck =
+    openWaLink &&
+    !state.ready &&
+    (opts.force || hadOpenWaQr) &&
+    allowBaileysFallback;
+
+  const needLocal =
+    preferBaileys ||
+    linkEngine === 'baileys' ||
+    linkEngine === 'local' ||
+    openWaStuck ||
+    (allowBaileysFallback && !state.mock && !state.ready && !state.lastQrDataUrl && !state.pairingCode);
+
+  if (needLocal && !state.mock && (!state.ready || opts.force)) {
+    if (state.transport === 'openwa' && !state.ready) {
+      // Abandonner le QR OpenWA mort pour un vrai appairage local
+      state.lastQrDataUrl = null;
+      state.pairingCode = null;
+      state.openwaId = state.pinned ? state.openwaId : state.openwaId;
+    }
+    try {
+      console.log(`↪️ WhatsApp Baileys (appairage local) [${state.key}]`);
+      await baileys.ensure(state, {
+        force: Boolean(opts.force || openWaStuck || state.transport === 'openwa'),
+        phoneNumber: opts.phoneNumber || null,
+      });
+    } catch (err) {
+      console.error(`❌ Baileys [${state.key}]:`, err.message || err);
+    }
+  }
+
+  state.initializing = Boolean(state.lastQrDataUrl || state.pairingCode) && !state.ready;
 
   return {
     mock: false,
     ready: state.ready,
     session: state.key,
     phone: state.connectedPhone,
-    error: state.lastError,
+    initializing: state.initializing,
+    error: publicError(state),
     pairingCode: state.pairingCode,
-    provider: 'openwa',
+    dataUrl: state.lastQrDataUrl,
+    hasQr: Boolean(state.lastQrDataUrl),
+    provider: state.transport || 'openwa',
   };
+}
+
+async function getHealth() {
+  if (healthCache.value && Date.now() - healthCache.at < 8000) {
+    return healthCache.value;
+  }
+  let value;
+  if (preferBaileys) {
+    const platform = getOrCreateState('platform');
+    value = {
+      ok: true,
+      mock: false,
+      engine: 'baileys',
+      connected: Boolean(platform.ready),
+      message: null,
+    };
+  } else if (mockMode) {
+    value = { ok: false, mock: true, connected: false, message: USER_INFRA_ERROR };
+  } else if (!apiKey) {
+    value = { ok: false, mock: false, connected: false, message: USER_INFRA_ERROR };
+  } else {
+    try {
+      const probe = await fetch(`${baseUrl}/api/infra/health`, {
+        headers: { 'X-API-Key': apiKey, Accept: 'application/json' },
+        signal: AbortSignal.timeout(8000),
+      });
+      const platform = getOrCreateState('platform');
+      await peekRemoteSession(platform).catch(() => null);
+      if (!probe.ok) {
+        value = {
+          ok: false,
+          mock: false,
+          engine: 'openwa',
+          connected: Boolean(platform.ready),
+          message: USER_INFRA_ERROR,
+        };
+      } else {
+        value = {
+          ok: true,
+          mock: false,
+          engine: 'openwa',
+          connected: Boolean(platform.ready),
+          message: null,
+        };
+      }
+    } catch (err) {
+      console.error('❌ OpenWA health:', err.causeMessage || err.message);
+      value = { ok: false, mock: false, engine: 'openwa', connected: false, message: USER_INFRA_ERROR };
+    }
+  }
+  healthCache = { at: Date.now(), value };
+  if (value && value.ok === false && !value.mock) {
+    try {
+      const bugAlert = require('./services/bugAlertService');
+      bugAlert
+        .notifyWhatsappInfra(value.message || 'OpenWA/WhatsApp health KO', {
+          engine: value.engine,
+          connected: value.connected,
+        })
+        .catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+  return value;
 }
 
 async function refreshState(key = 'platform') {
   const state = getOrCreateState(key);
-  if (state.mock) return publicStatus(state);
-  if (!apiKey) {
-    state.lastError = 'OPENWA_API_KEY manquant';
-    return publicStatus(state);
-  }
+  const health = await getHealth();
+  if (state.mock) return publicStatus(state, health);
+  if (state.transport === 'baileys' || preferBaileys) return publicStatus(state, health);
+  if (!apiKey) return publicStatus(state, health);
   try {
-    await ensureRemoteSession(state);
+    await peekRemoteSession(state);
     if (!state.ready && state.openwaId) {
       await fetchQr(state).catch(() => null);
     }
   } catch (err) {
-    state.lastError = err.message;
+    state.lastError = err.causeMessage || err.message;
   }
-  return publicStatus(state);
+  return publicStatus(state, health);
 }
 
 async function getStatus(key = 'platform') {
@@ -478,47 +663,57 @@ async function getStatus(key = 'platform') {
 
 async function getQrPayload(key = 'platform') {
   const state = getOrCreateState(key);
-  if (!state.mock && apiKey) {
+  const health = await getHealth();
+  // Ne pas renvoyer un QR OpenWA « mort » quand l’appairage est en Baileys local
+  if (state.transport !== 'baileys' && !preferBaileys && !state.mock && apiKey) {
     try {
-      await ensureRemoteSession(state);
+      await peekRemoteSession(state);
       if (!state.ready) await fetchQr(state).catch(() => null);
     } catch (err) {
-      state.lastError = err.message;
+      state.lastError = err.causeMessage || err.message;
     }
   }
   return {
+    ...publicStatus(state, health),
     qr: null,
     dataUrl: state.lastQrDataUrl,
-    connected: state.ready,
-    mock: state.mock,
-    phone: state.connectedPhone,
-    session: state.key,
-    initializing: state.initializing,
-    error: state.lastError,
-    pairingCode: state.pairingCode,
-    pairingPhone: state.pairingPhone,
-    waState: state.waState || null,
-    provider: 'openwa',
   };
+}
+
+function notConnectedError(key, healthOk) {
+  const err = new Error(
+    healthOk
+      ? (key === 'platform'
+        ? 'WhatsApp n’est pas connecté. Contactez le développeur.'
+        : 'WhatsApp n’est pas connecté. Allez dans Paramètres pour le lier.')
+      : USER_INFRA_ERROR,
+  );
+  err.statusCode = 503;
+  return err;
 }
 
 async function sendTextForSession(key, chatId, text) {
   const state = getOrCreateState(key);
   if (state.mock) return { mock: true };
-  if (!state.ready) await ensureStarted(key);
-  if (!state.ready || !state.openwaId) {
-    const err = new Error(
-      key === 'platform'
-        ? 'WhatsApp plateforme non connecté. Ouvrez /whatsapp-qr.'
-        : 'WhatsApp du gérant non connecté. Scannez le QR dans l’espace gérant.'
-    );
-    err.statusCode = 503;
-    throw err;
+  if (state.transport === 'baileys') {
+    const baileys = require('./whatsappBaileys');
+    if (!state.ready) await baileys.ensure(state);
+    if (!state.ready) throw notConnectedError(key, true);
+    await baileys.sendText(state.key, chatId, text);
+    return { mock: false, phone: state.connectedPhone, session: state.key, provider: 'baileys' };
   }
-  await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-text`, {
-    chatId,
-    text: String(text || ''),
-  });
+  const health = await getHealth();
+  if (!health.ok) throw notConnectedError(key, false);
+  if (!state.ready) await ensureStarted(key);
+  if (!state.ready || !state.openwaId) throw notConnectedError(key, health.ok);
+  try {
+    await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-text`, {
+      chatId,
+      text: String(text || ''),
+    });
+  } catch (err) {
+    throw notConnectedError(key, false);
+  }
   return { mock: false, phone: state.connectedPhone, session: state.key, provider: 'openwa' };
 }
 
@@ -530,16 +725,17 @@ async function sendTextForSession(key, chatId, text) {
 async function sendImageForSession(key, chatId, media = {}) {
   const state = getOrCreateState(key);
   if (state.mock) return { mock: true };
-  if (!state.ready) await ensureStarted(key);
-  if (!state.ready || !state.openwaId) {
-    const err = new Error(
-      key === 'platform'
-        ? 'WhatsApp plateforme non connecté. Ouvrez /whatsapp-qr.'
-        : 'WhatsApp du gérant non connecté. Scannez le QR dans l’espace gérant.'
-    );
-    err.statusCode = 503;
-    throw err;
+  if (state.transport === 'baileys') {
+    const baileys = require('./whatsappBaileys');
+    if (!state.ready) await baileys.ensure(state);
+    if (!state.ready) throw notConnectedError(key, true);
+    await baileys.sendImage(state.key, chatId, media);
+    return { mock: false, phone: state.connectedPhone, session: state.key, provider: 'baileys' };
   }
+  const health = await getHealth();
+  if (!health.ok) throw notConnectedError(key, false);
+  if (!state.ready) await ensureStarted(key);
+  if (!state.ready || !state.openwaId) throw notConnectedError(key, health.ok);
 
   const body = { chatId, caption: media.caption || '' };
   if (media.filePath && fs.existsSync(media.filePath)) {
@@ -557,7 +753,11 @@ async function sendImageForSession(key, chatId, media = {}) {
     throw new Error('Image WhatsApp: url, base64 ou filePath requis');
   }
 
-  await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-image`, body);
+  try {
+    await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-image`, body);
+  } catch {
+    throw notConnectedError(key, false);
+  }
   return { mock: false, phone: state.connectedPhone, session: state.key, provider: 'openwa' };
 }
 
@@ -596,9 +796,12 @@ async function sendMessageForSession(key, chatId, content, options) {
 
 async function logoutSession(key) {
   const state = getOrCreateState(key);
-  if (!state.mock && apiKey) {
+  if (state.transport === 'baileys') {
+    const baileys = require('./whatsappBaileys');
+    await baileys.logout(state.key).catch(() => null);
+  } else if (!state.mock && apiKey) {
     try {
-      await ensureRemoteSession(state);
+      await peekRemoteSession(state);
       if (state.openwaId) {
         try {
           await openwaRequest('POST', `/sessions/${state.openwaId}/logout`);
@@ -620,6 +823,7 @@ async function logoutSession(key) {
   state.pairingCode = null;
   state.pairingPhone = null;
   state.waState = 'logged_out';
+  state.transport = 'openwa';
   return publicStatus(state);
 }
 
@@ -627,13 +831,16 @@ const platform = getOrCreateState('platform');
 
 if (mockMode) {
   console.log('[WHATSAPP MOCK] Client simulé (OpenWA désactivé), aucun QR requis.');
+} else if (preferBaileys || linkEngine === 'baileys' || linkEngine === 'local') {
+  console.log(
+    `📡 WhatsApp appairage via Baileys local (WHATSAPP_LINK_ENGINE=${linkEngine}, moteur=${engineName})`,
+  );
 } else if (!apiKey) {
   console.warn('⚠️ OPENWA_API_KEY manquant — WhatsApp OpenWA inactif jusqu’à configuration.');
 } else {
-  console.log(`📡 WhatsApp via OpenWA → ${baseUrl}`);
-  setTimeout(() => {
-    ensureStarted('platform').catch((err) => console.error('❌ OpenWA platform start:', err.message));
-  }, 3000);
+  console.log(
+    `📡 WhatsApp via OpenWA → ${baseUrl} (moteur=${engineName}, link=${linkEngine}, fallback Baileys=${allowBaileysFallback})`,
+  );
 }
 
 const facade = {
@@ -656,6 +863,8 @@ module.exports.sendImageForSession = sendImageForSession;
 module.exports.gerantSessionKey = gerantSessionKey;
 module.exports.logoutSession = logoutSession;
 module.exports.toWaIntlDigits = toWaIntlDigits;
+module.exports.getHealth = getHealth;
+module.exports.USER_INFRA_ERROR = USER_INFRA_ERROR;
 module.exports._state = platform;
 module.exports._sessions = sessions;
 module.exports.OPENWA_BASE_URL = baseUrl;

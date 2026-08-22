@@ -1,37 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  Calendar,
-  CheckCircle2,
-  PlusCircle,
-  ShieldCheck,
-  Trash2,
-  XCircle,
-} from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { proprietaireApi } from "@/lib/api";
+import { useOwnerRealtime } from "@/hooks/useOwnerRealtime";
+import ProprioEmptyState from "@/espaces/backoffice/components/ProprioEmptyState";
+import {
+  activityFilterGroup,
+  activityMeta,
+  relativeTime,
+  scorePhrase,
+  scoreTone,
+} from "@/espaces/backoffice/proprietaire/proprioUtils";
 
-type Terrain = {
-  id: number;
-  nom: string;
-};
-
+type Terrain = { id: number; nom: string };
 type ReservationNonScannee = {
   id?: number;
   joueur_nom?: string;
@@ -41,57 +22,29 @@ type ReservationNonScannee = {
   code?: string;
   code_reservation?: string;
 };
-
-type HistoriqueScore = {
-  periode: string;
-  score: number;
-};
-
-type ActiviteRecente = {
-  action: string;
-  reservation_id?: number;
-  created_at?: string;
-};
-
+type ActiviteRecente = { action: string; reservation_id?: number; created_at?: string };
 type SanteTerrain = {
   score_confiance: number;
-  couleur: "vert" | "orange" | "rouge";
+  couleur?: "vert" | "orange" | "rouge";
   taux_scan: number;
   matchs_scannes: number;
   total_confirmes: number;
   matchs_non_scannes: number;
   annulations_total: number;
-  historique_scores: HistoriqueScore[];
+  historique_scores: Array<{ periode: string; score: number }>;
   activite_recente: ActiviteRecente[];
   reservations_non_scannees?: ReservationNonScannee[];
   reservations_non_scannes?: ReservationNonScannee[];
 };
 
-const COLORS = {
-  vert: "var(--color-success)",
-  orange: "var(--color-warning)",
-  rouge: "var(--color-danger)",
-  neutre: "var(--color-text-muted)",
+const TONE_COLOR = {
+  vert: "var(--p-optimal)",
+  orange: "var(--p-attention)",
+  rouge: "var(--p-verifier)",
 };
 
 function clampScore(value: number) {
   return Math.max(0, Math.min(100, Number(value || 0)));
-}
-
-function scoreTone(score: number): SanteTerrain["couleur"] {
-  if (score > 75) return "vert";
-  if (score >= 50) return "orange";
-  return "rouge";
-}
-
-function colorForScore(score: number) {
-  return COLORS[scoreTone(score)];
-}
-
-function scorePhrase(color: SanteTerrain["couleur"]) {
-  if (color === "vert") return "Tout va bien 👍";
-  if (color === "orange") return "Pense à en parler avec ton gérant 😊";
-  return "On te conseille de contacter ton gérant";
 }
 
 function formatMonth(periode: string) {
@@ -102,65 +55,27 @@ function formatMonth(periode: string) {
 
 function formatDate(value?: string) {
   if (!value) return "-";
-  return new Date(`${value}T00:00:00`).toLocaleDateString("fr-FR", {
-    day: "2-digit",
-    month: "short",
-  });
+  return new Date(`${value}T00:00:00`).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" });
 }
 
-function formatDateTime(value?: string) {
-  if (!value) return "-";
-  return new Date(value).toLocaleString("fr-FR", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function activityMeta(action: string) {
-  if (action === "reservation_creee") {
-    return { label: "Réservation créée", Icon: Calendar, color: "text-[var(--color-success)]" };
-  }
-  if (action === "reservation_annulee") {
-    return { label: "Réservation annulée", Icon: XCircle, color: "text-[var(--color-warning)]" };
-  }
-  if (action === "qr_scanne") {
-    return { label: "Match validé ✅", Icon: CheckCircle2, color: "text-[var(--color-success)]" };
-  }
-  if (action === "creneau_cree") {
-    return { label: "Créneau ajouté", Icon: PlusCircle, color: "text-[var(--color-info)]" };
-  }
-  if (action === "creneau_supprime") {
-    return { label: "Créneau supprimé", Icon: Trash2, color: "text-[var(--color-warning)]" };
-  }
-  return { label: "Activité mise à jour", Icon: ShieldCheck, color: "text-[var(--color-primary)]" };
-}
-
-function ScoreCircle({ health }: { health: SanteTerrain }) {
-  const score = clampScore(health.score_confiance);
+function ScoreCircle({ score }: { score: number }) {
+  const safe = clampScore(score);
   const radius = 58;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
+  const offset = circumference - (safe / 100) * circumference;
+  const tone = scoreTone(safe);
 
   return (
-    <section className="bg-white rounded-[var(--radius-lg)] border border-[var(--color-border)] p-6 shadow-sm text-center">
+    <section className="rounded-2xl p-6 text-center" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
       <div className="relative mx-auto h-40 w-40">
         <svg viewBox="0 0 140 140" className="h-full w-full -rotate-90">
+          <circle cx="70" cy="70" r={radius} fill="none" stroke="var(--p-surface-2)" strokeWidth="12" />
           <circle
             cx="70"
             cy="70"
             r={radius}
             fill="none"
-            stroke="var(--color-surface-2)"
-            strokeWidth="12"
-          />
-          <circle
-            cx="70"
-            cy="70"
-            r={radius}
-            fill="none"
-            stroke={COLORS[health.couleur]}
+            stroke={TONE_COLOR[tone]}
             strokeLinecap="round"
             strokeWidth="12"
             strokeDasharray={circumference}
@@ -169,78 +84,47 @@ function ScoreCircle({ health }: { health: SanteTerrain }) {
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <p
-            className="text-5xl font-bold text-[var(--color-text-primary)] leading-none"
-            style={{ fontFamily: "var(--font-display)" }}
-          >
-            {score}
+          <p className="text-5xl font-bold leading-none" style={{ fontFamily: "var(--font-display)", color: "var(--p-text)" }}>
+            {safe}
           </p>
-          <p className="text-sm text-[var(--color-text-muted)]">/ 100</p>
+          <p className="text-sm" style={{ color: "var(--p-muted)" }}>/100</p>
         </div>
       </div>
-      <p className="mt-4 text-sm font-semibold text-[var(--color-text-primary)]">
+      <p className="mt-4 text-sm font-semibold" style={{ color: "var(--p-text)" }}>
         Score de confiance de ton gérant
       </p>
-      <p className="mt-2 text-sm text-[var(--color-text-secondary)]">{scorePhrase(health.couleur)}</p>
+      <p className="mt-2 text-sm" style={{ color: "var(--p-text-2)" }}>{scorePhrase(safe)}</p>
     </section>
   );
 }
 
-function StatCard({
-  title,
-  value,
-  subtitle,
-  color = "var(--color-text-primary)",
-  children,
-}: {
-  title: string;
-  value: string | number;
-  subtitle?: string;
-  color?: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <article className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 shadow-sm">
-      <p className="text-xs text-[var(--color-text-secondary)]">{title}</p>
-      <p
-        className="mt-2 text-3xl font-bold"
-        style={{ color, fontFamily: "var(--font-display)" }}
-      >
-        {value}
-      </p>
-      {subtitle && <p className="mt-1 text-xs text-[var(--color-text-muted)]">{subtitle}</p>}
-      {children}
-    </article>
-  );
-}
-
-function LoadingState() {
-  return (
-    <div className="space-y-5 max-w-5xl mx-auto">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-2">
-          <Skeleton className="h-7 w-56" />
-          <Skeleton className="h-4 w-72" />
-        </div>
-        <Skeleton className="h-10 w-44" />
-      </div>
-      <Skeleton className="h-72 w-full rounded-[var(--radius-lg)]" />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <Skeleton className="h-32 rounded-[var(--radius-md)]" />
-        <Skeleton className="h-32 rounded-[var(--radius-md)]" />
-        <Skeleton className="h-32 rounded-[var(--radius-md)]" />
-      </div>
-      <Skeleton className="h-72 rounded-[var(--radius-md)]" />
-      <Skeleton className="h-56 rounded-[var(--radius-md)]" />
-    </div>
-  );
-}
-
 export default function SanteProprietaire() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [terrains, setTerrains] = useState<Terrain[]>([]);
-  const [selectedTerrainId, setSelectedTerrainId] = useState<string>("");
+  const [selectedTerrainId, setSelectedTerrainId] = useState<string>(searchParams.get("terrain") || "");
   const [health, setHealth] = useState<SanteTerrain | null>(null);
   const [loading, setLoading] = useState(true);
+  const [feedFilter, setFeedFilter] = useState<"all" | "scans" | "reservations" | "creneaux">("all");
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [freshKeys, setFreshKeys] = useState<Set<string>>(new Set());
+  const refreshTimer = useRef<number | null>(null);
+
+  const loadHealth = useCallback(async (terrainId: string, quiet = false) => {
+    if (!terrainId) {
+      setHealth(null);
+      return;
+    }
+    if (!quiet) setLoading(true);
+    try {
+      const data = await proprietaireApi.santeTerrain(terrainId);
+      setHealth(data);
+    } catch {
+      setHealth(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -248,31 +132,14 @@ export default function SanteProprietaire() {
       .terrains()
       .then((data: Terrain[]) => {
         if (!mounted) return;
-        setTerrains(data || []);
-        if (data?.length) setSelectedTerrainId(String(data[0].id));
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!selectedTerrainId) {
-      setHealth(null);
-      return;
-    }
-    let mounted = true;
-    setLoading(true);
-    proprietaireApi
-      .santeTerrain(selectedTerrainId)
-      .then((data: SanteTerrain) => {
-        if (mounted) setHealth(data);
+        const list = Array.isArray(data) ? data : [];
+        setTerrains(list);
+        const fromUrl = searchParams.get("terrain");
+        const next = fromUrl && list.some((t) => String(t.id) === fromUrl) ? fromUrl : list[0] ? String(list[0].id) : "";
+        setSelectedTerrainId(next);
       })
       .catch(() => {
-        if (mounted) setHealth(null);
+        if (mounted) setTerrains([]);
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -280,176 +147,174 @@ export default function SanteProprietaire() {
     return () => {
       mounted = false;
     };
-  }, [selectedTerrainId]);
+  }, [searchParams]);
+
+  useEffect(() => {
+    loadHealth(selectedTerrainId);
+    setPage(1);
+  }, [selectedTerrainId, loadHealth]);
+
+  const scheduleRefresh = useCallback(() => {
+    if (!selectedTerrainId) return;
+    if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
+    refreshTimer.current = window.setTimeout(() => {
+      const prev = health?.activite_recente?.[0];
+      loadHealth(selectedTerrainId, true).then(() => {
+        if (prev) setFreshKeys(new Set([`${prev.action}-${prev.created_at}`]));
+      });
+    }, 400);
+  }, [loadHealth, selectedTerrainId, health]);
+
+  const live = useOwnerRealtime(
+    terrains.map((t) => t.id),
+    (ev) => {
+      if (
+        ["reservation", "encaissement", "sante", "score", "statut"].includes(String(ev.type)) &&
+        (!ev.terrain_id || String(ev.terrain_id) === selectedTerrainId)
+      ) {
+        scheduleRefresh();
+      }
+    },
+  );
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
+    };
+  }, []);
 
   const selectedTerrain = terrains.find((terrain) => String(terrain.id) === selectedTerrainId);
   const nonScannees = useMemo(
     () => health?.reservations_non_scannees || health?.reservations_non_scannes || [],
-    [health]
+    [health],
   );
   const history = useMemo(
     () => (health?.historique_scores || []).map((item) => ({ ...item, mois: formatMonth(item.periode) })),
-    [health]
+    [health],
   );
+  const feed = useMemo(() => {
+    const rows = health?.activite_recente || [];
+    if (feedFilter === "all") return rows;
+    return rows.filter((a) => activityFilterGroup(a.action) === feedFilter);
+  }, [health, feedFilter]);
+  const visibleFeed = feed.slice(0, page * 20);
 
-  if (loading && !health) return <LoadingState />;
-
-  if (!terrains.length) {
+  if (loading && !health) {
     return (
-      <div className="max-w-xl mx-auto py-16 text-center">
-        <div className="mx-auto h-16 w-16 rounded-full bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] flex items-center justify-center">
-          <ShieldCheck className="h-7 w-7 text-[var(--color-primary)]" />
-        </div>
-        <h1 className="mt-4 text-xl font-bold" style={{ fontFamily: "var(--font-display)" }}>
-          Pas encore assez de données 😊
-        </h1>
-        <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-          Le tableau de bord se remplit au fur et à mesure des réservations.
-        </p>
+      <div className="space-y-4 max-w-5xl mx-auto animate-pulse">
+        <div className="h-8 w-56 rounded-lg" style={{ background: "var(--p-surface-2)" }} />
+        <div className="h-56 rounded-2xl" style={{ background: "var(--p-surface-2)" }} />
       </div>
     );
   }
 
-  if (!health) {
+  if (!terrains.length || !health) {
     return (
-      <div className="max-w-xl mx-auto py-16 text-center">
-        <div className="mx-auto h-16 w-16 rounded-full bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] flex items-center justify-center">
-          <ShieldCheck className="h-7 w-7 text-[var(--color-primary)]" />
-        </div>
-        <h1 className="mt-4 text-xl font-bold" style={{ fontFamily: "var(--font-display)" }}>
-          Pas encore assez de données 😊
-        </h1>
-        <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-          Le tableau de bord se remplit au fur et à mesure des réservations.
-        </p>
-      </div>
+      <ProprioEmptyState
+        title="Pas encore assez de données 😊"
+        subtitle="Le tableau de bord se remplit au fur et à mesure des réservations."
+      />
     );
   }
 
-  const tauxColor = colorForScore(health.taux_scan);
+  const scanTone = scoreTone(health.taux_scan);
+  const score = clampScore(health.score_confiance);
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="space-y-4 max-w-5xl mx-auto">
+      <header className="flex flex-col gap-2">
         <div>
-          <h1
-            className="text-2xl font-bold text-[var(--color-text-primary)]"
-            style={{ fontFamily: "var(--font-display)" }}
-          >
-            Santé de ton terrain
+          <h1 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)", color: "var(--p-text)" }}>
+            Santé opérationnelle
           </h1>
-          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-            Mis à jour automatiquement chaque semaine
-          </p>
+          <p className="mt-0.5 text-xs" style={{ color: "var(--p-muted)" }}>Basé sur les 60 derniers jours</p>
         </div>
         {terrains.length > 1 && (
-          <select
-            value={selectedTerrainId}
-            onChange={(event) => setSelectedTerrainId(event.target.value)}
-            className="min-h-[44px] rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-3 text-sm"
-            aria-label="Choisir un terrain"
-          >
-            {terrains.map((terrain) => (
-              <option key={terrain.id} value={terrain.id}>
-                {terrain.nom}
-              </option>
-            ))}
-          </select>
+          <div className="overflow-x-auto">
+            <div className="flex gap-1.5 min-w-max">
+              {terrains.map((terrain) => {
+                const active = selectedTerrainId === String(terrain.id);
+                return (
+                  <button
+                    key={terrain.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedTerrainId(String(terrain.id));
+                      setSearchParams({ terrain: String(terrain.id) });
+                    }}
+                    className="shrink-0 min-h-[36px] px-3 rounded-full text-[11px] font-semibold max-w-[160px] truncate"
+                    style={{
+                      background: active ? "var(--p-primary)" : "var(--p-surface-2)",
+                      color: active ? "#fff" : "var(--p-muted)",
+                    }}
+                  >
+                    {terrain.nom}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
       </header>
 
       {selectedTerrain && (
-        <p className="text-sm font-semibold text-[var(--color-primary)]">{selectedTerrain.nom}</p>
+        <p className="text-sm font-semibold" style={{ color: "var(--p-primary)" }}>{selectedTerrain.nom}</p>
       )}
 
-      <ScoreCircle health={health} />
+      <ScoreCircle score={score} />
 
       <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <StatCard
-          title="Matchs validés"
-          value={`${health.matchs_scannes} sur ${health.total_confirmes}`}
-          subtitle="Matchs scannés ce mois"
-        >
-          <div className="mt-4 h-2 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
-            <div
-              className="h-full transition-all duration-500"
-              style={{ width: `${clampScore(health.taux_scan)}%`, backgroundColor: tauxColor }}
-            />
+        <article className="rounded-2xl p-4" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
+          <p className="text-xs" style={{ color: "var(--p-muted)" }}>Matchs validés</p>
+          <p className="mt-2 text-2xl font-bold" style={{ fontFamily: "var(--font-display)", color: "var(--p-text)" }}>
+            {health.matchs_scannes} sur {health.total_confirmes}
+          </p>
+          <p className="mt-1 text-xs" style={{ color: "var(--p-muted)" }}>Matchs scannés ce mois</p>
+          <div className="mt-4 h-2 rounded-full overflow-hidden" style={{ background: "var(--p-surface-2)" }}>
+            <div className="h-full" style={{ width: `${clampScore(health.taux_scan)}%`, background: TONE_COLOR[scanTone] }} />
           </div>
-        </StatCard>
+        </article>
 
-        <StatCard
-          title="Matchs non scannés"
-          value={health.matchs_non_scannes}
-          color={health.matchs_non_scannes > 0 ? COLORS.orange : COLORS.vert}
-          subtitle="Matchs confirmés mais pas encore joués"
-        >
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button type="button" variant="outline" className="mt-4 w-full">
-                Voir le détail
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Réservations en attente de validation</DialogTitle>
-              </DialogHeader>
-              <div className="mt-2 max-h-[60vh] overflow-auto space-y-2">
-                {nonScannees.length === 0 ? (
-                  <p className="text-sm text-[var(--color-text-secondary)]">Aucune réservation en attente.</p>
-                ) : (
-                  nonScannees.map((reservation, index) => (
-                    <div
-                      key={reservation.id || index}
-                      className="rounded-[var(--radius-sm)] border border-[var(--color-border)] p-3 text-sm"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="font-semibold text-[var(--color-text-primary)]">
-                          {reservation.joueur_nom || "Joueur"}
-                        </p>
-                        <p className="text-xs text-[var(--color-text-muted)]">
-                          {reservation.code || reservation.code_reservation || "-"}
-                        </p>
-                      </div>
-                      <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
-                        {formatDate(reservation.date)} · {String(reservation.heure || reservation.heure_debut || "-").slice(0, 5)}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
-        </StatCard>
+        <article className="rounded-2xl p-4" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
+          <p className="text-xs" style={{ color: "var(--p-muted)" }}>Matchs non scannés</p>
+          <p className="mt-2 text-2xl font-bold" style={{ fontFamily: "var(--font-display)", color: health.matchs_non_scannes > 0 ? "var(--p-attention)" : "var(--p-optimal)" }}>
+            {health.matchs_non_scannes}
+          </p>
+          <button
+            type="button"
+            onClick={() => setSheetOpen(true)}
+            className="mt-4 w-full min-h-[44px] rounded-xl text-sm font-semibold border"
+            style={{ borderColor: "var(--p-border)", color: "var(--p-text)" }}
+          >
+            Voir la liste
+          </button>
+        </article>
 
-        <StatCard
-          title="Annulations ce mois"
-          value={health.annulations_total}
-          color={COLORS.neutre}
-          subtitle="Sur les 60 derniers jours"
-        />
+        <article className="rounded-2xl p-4" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
+          <p className="text-xs" style={{ color: "var(--p-muted)" }}>Annulations</p>
+          <p className="mt-2 text-2xl font-bold" style={{ fontFamily: "var(--font-display)", color: "var(--p-muted)" }}>
+            {health.annulations_total}
+          </p>
+          <p className="mt-1 text-xs" style={{ color: "var(--p-muted)" }}>Sur les 60 derniers jours</p>
+        </article>
       </section>
 
-      <section className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 shadow-sm">
-        <h2 className="section-title">Évolution du score</h2>
-        <div className="mt-4 h-72">
-          {history.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-sm text-[var(--color-text-secondary)]">
-              Pas encore assez de données 😊
+      <section className="rounded-2xl p-4" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--p-text)" }}>Évolution du score</h2>
+        <div className="mt-4 h-64">
+          {history.length < 2 ? (
+            <div className="h-full flex items-center justify-center text-sm text-center px-4" style={{ color: "var(--p-text-2)" }}>
+              Le graphique sera disponible après 2 mois d'activité 😊
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={history} margin={{ left: -24, right: 8, top: 12, bottom: 0 }}>
-                <XAxis dataKey="mois" tickLine={false} axisLine={false} fontSize={12} />
-                <YAxis domain={[0, 100]} tickLine={false} axisLine={false} fontSize={12} />
-                <Tooltip
-                  cursor={{ fill: "var(--color-surface-2)" }}
-                  formatter={(value) => [`${value} / 100`, "Score"]}
-                  labelFormatter={(label) => `Mois : ${label}`}
-                />
+                <XAxis dataKey="mois" tickLine={false} axisLine={false} fontSize={12} tick={{ fill: "var(--p-muted)" }} />
+                <YAxis domain={[0, 100]} tickLine={false} axisLine={false} fontSize={12} tick={{ fill: "var(--p-muted)" }} />
+                <Tooltip formatter={(value) => [`${value} / 100`, "Score"]} labelFormatter={(label) => `Mois : ${label}`} />
                 <Bar dataKey="score" radius={[8, 8, 0, 0]}>
                   {history.map((entry) => (
-                    <Cell key={entry.periode} fill={colorForScore(entry.score)} />
+                    <Cell key={entry.periode} fill={TONE_COLOR[scoreTone(entry.score)]} />
                   ))}
                 </Bar>
               </BarChart>
@@ -458,36 +323,103 @@ export default function SanteProprietaire() {
         </div>
       </section>
 
-      <section className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 shadow-sm">
-        <h2 className="section-title">Activité récente de ton gérant</h2>
-        <div className="mt-4 divide-y divide-[var(--color-border)]">
-          {health.activite_recente.length === 0 ? (
-            <p className="py-8 text-center text-sm text-[var(--color-text-secondary)]">
-              Pas encore assez de données 😊
+      <section className="rounded-2xl p-4" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold" style={{ color: "var(--p-text)" }}>Ce que fait ton gérant</h2>
+            <p className="text-[11px] mt-0.5 inline-flex items-center gap-1.5" style={{ color: "var(--p-muted)" }}>
+              Activité en temps réel
+              <span className={`w-1.5 h-1.5 rounded-full ${live ? "animate-pulse" : ""}`} style={{ background: live ? "var(--p-live)" : "var(--p-verifier)" }} />
             </p>
+          </div>
+        </div>
+        <div className="mt-3 flex gap-1.5 overflow-x-auto">
+          {([
+            ["all", "Tout"],
+            ["scans", "Scans QR"],
+            ["reservations", "Réservations"],
+            ["creneaux", "Créneaux"],
+          ] as const).map(([id, label]) => {
+            const active = feedFilter === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setFeedFilter(id);
+                  setPage(1);
+                }}
+                className="shrink-0 min-h-[36px] px-3 rounded-full text-[11px] font-semibold"
+                style={{
+                  background: active ? "var(--p-primary)" : "var(--p-surface-2)",
+                  color: active ? "#fff" : "var(--p-muted)",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-3 divide-y" style={{ borderColor: "var(--p-border)" }}>
+          {visibleFeed.length === 0 ? (
+            <p className="py-8 text-center text-sm" style={{ color: "var(--p-text-2)" }}>Pas encore assez de données</p>
           ) : (
-            health.activite_recente.map((activity, index) => {
+            visibleFeed.map((activity, index) => {
               const meta = activityMeta(activity.action);
+              const key = `${activity.action}-${activity.created_at}-${index}`;
+              const fresh = freshKeys.has(`${activity.action}-${activity.created_at}`);
               return (
-                <div key={`${activity.action}-${activity.created_at}-${index}`} className="py-3 flex items-center gap-3">
-                  <span className="h-9 w-9 rounded-full bg-[var(--color-surface-2)] inline-flex items-center justify-center">
-                    <meta.Icon className={`h-4 w-4 ${meta.color}`} />
+                <div key={key} className={`py-3 flex items-center gap-3 ${fresh ? "p-fade-slide-down" : ""}`}>
+                  <span className="h-9 w-9 rounded-full inline-flex items-center justify-center" style={{ background: "var(--p-surface-2)" }}>
+                    <meta.Icon className="h-4 w-4" style={{ color: meta.color }} />
                   </span>
-                  <p className="flex-1 min-w-0 text-sm font-medium text-[var(--color-text-primary)]">
-                    {meta.label}
-                  </p>
-                  <p className="text-xs text-[var(--color-text-muted)]">
-                    {formatDateTime(activity.created_at)}
-                  </p>
+                  <p className="flex-1 min-w-0 text-sm font-medium" style={{ color: "var(--p-text)" }}>{meta.label}</p>
+                  <p className="text-xs" style={{ color: "var(--p-muted)" }}>{relativeTime(activity.created_at)}</p>
                 </div>
               );
             })
           )}
         </div>
-        <Button type="button" variant="outline" className="mt-4 w-full" disabled={health.activite_recente.length === 0}>
-          Voir tout l'historique
-        </Button>
+        {visibleFeed.length < feed.length && (
+          <button
+            type="button"
+            onClick={() => setPage((n) => n + 1)}
+            className="w-full min-h-[44px] mt-2 rounded-xl text-sm font-semibold"
+            style={{ background: "var(--p-surface-2)", color: "var(--p-primary)" }}
+          >
+            Voir plus
+          </button>
+        )}
       </section>
+
+      {sheetOpen && (
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center">
+          <button type="button" className="absolute inset-0 bg-black/40" aria-label="Fermer" onClick={() => setSheetOpen(false)} />
+          <div
+            className="relative w-full max-w-lg rounded-t-2xl md:rounded-2xl p-4 max-h-[70vh] overflow-auto"
+            style={{ background: "var(--p-surface)" }}
+          >
+            <h3 className="text-sm font-semibold" style={{ color: "var(--p-text)" }}>Réservations en attente de validation</h3>
+            <div className="mt-3 space-y-2">
+              {nonScannees.length === 0 ? (
+                <p className="text-sm" style={{ color: "var(--p-text-2)" }}>Aucune réservation en attente.</p>
+              ) : (
+                nonScannees.map((reservation, index) => (
+                  <div key={reservation.id || index} className="rounded-xl p-3 text-sm" style={{ border: "1px solid var(--p-border)" }}>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-semibold" style={{ color: "var(--p-text)" }}>{reservation.joueur_nom || "Joueur"}</p>
+                      <p className="text-xs" style={{ color: "var(--p-muted)" }}>{reservation.code || reservation.code_reservation || "-"}</p>
+                    </div>
+                    <p className="mt-1 text-xs" style={{ color: "var(--p-text-2)" }}>
+                      {formatDate(reservation.date)} · {String(reservation.heure || reservation.heure_debut || "-").slice(0, 5)}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

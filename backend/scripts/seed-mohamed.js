@@ -13,7 +13,7 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 
 const { seed, MOHAMED_PHONE_RAW, DEMO_PASSWORD } = require('../seed');
-const { getDb, queryAll, queryOne, saveDb } = require('../database');
+const { getDb, queryAll, queryOne, runSql, saveDb } = require('../database');
 
 const SEND_WA = process.argv.includes('--send-wa');
 
@@ -116,14 +116,14 @@ async function sendWhatsAppBurst() {
 
   // Trace en base : messages "envoyés" + une réponse "reçue" simulée
   const db = await getDb();
-  const joueur = queryOne(db, "SELECT id FROM users WHERE email = 'mohamed.joueur@gmail.com'");
+  const joueur = await queryOne(db, "SELECT id FROM users WHERE email = 'mohamed.joueur@gmail.com'");
   if (joueur) {
-    db.run(
+    await runSql(db, 
       `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
        VALUES ('user', ?, 'message_envoye', 'whatsapp', ?, 1)`,
       [joueur.id, `📤 Burst WA seed : ${sent} messages envoyés à ${MOHAMED_PHONE_RAW}`]
     );
-    db.run(
+    await runSql(db, 
       `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
        VALUES ('user', ?, 'message_recu', 'whatsapp', ?, 0)`,
       [
@@ -140,15 +140,15 @@ async function sendWhatsAppBurst() {
 async function printSummary() {
   const db = await getDb();
   const accounts = [
-    ...queryAll(db, `SELECT 'user/' || role AS role, email, telephone FROM users WHERE email LIKE 'mohamed.%'`),
-    ...queryAll(db, `SELECT 'proprietaire' AS role, email, telephone FROM proprietaires WHERE email LIKE 'mohamed.%'`),
-    ...queryAll(db, `SELECT 'gerant' AS role, email, telephone FROM employes WHERE email LIKE 'mohamed.%'`),
+    ...(await queryAll(db, `SELECT 'user/' || role AS role, email, telephone FROM users WHERE email LIKE 'mohamed.%'`)),
+    ...(await queryAll(db, `SELECT 'proprietaire' AS role, email, telephone FROM proprietaires WHERE email LIKE 'mohamed.%'`)),
+    ...(await queryAll(db, `SELECT 'gerant' AS role, email, telephone FROM employes WHERE email LIKE 'mohamed.%'`)),
   ];
-  const notifs = queryOne(db, 'SELECT COUNT(*) AS n FROM notifications')?.n;
-  const todayResa = queryOne(
+  const notifs = (await queryOne(db, 'SELECT COUNT(*) AS n FROM notifications'))?.n;
+  const todayResa = (await queryOne(
     db,
-    `SELECT COUNT(*) AS n FROM reservations WHERE date = date('now','localtime') AND terrain_id = 9`
-  )?.n;
+    `SELECT COUNT(*) AS n FROM reservations WHERE date = CURRENT_DATE AND terrain_id = 9`
+  ))?.n;
 
   console.log('\n═══════════════ RÉCAP MOHAMED ═══════════════');
   for (const a of accounts) {

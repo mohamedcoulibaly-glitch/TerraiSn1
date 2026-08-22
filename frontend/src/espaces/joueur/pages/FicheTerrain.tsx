@@ -1,14 +1,16 @@
 import { calculerMontantAvance } from "@/lib/avance";
 import SkeletonFicheTerrain from "@/components/skeletons/SkeletonFicheTerrain";
 import CommoditesSection from "@/components/CommoditesSection";
-import { ArrowLeft, MapPin, Star, Clock, Heart, Info, MessageCircle, X, ChevronDown } from "lucide-react";
+import { ArrowLeft, MapPin, Star, Clock, Heart, Info, MessageCircle, X, ChevronDown, Navigation } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
 import { terrainsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { resolveTerrainPhotos } from "@/espaces/joueur/components/FieldPhoto";
+import MapTerrain from "@/espaces/joueur/components/MapTerrain";
 import { favKey } from "@/espaces/joueur/components/FieldCard";
+import { useTerrainEvents } from "@/hooks/useTerrainEvents";
 
 function toLocalISO(d: Date) {
   const y = d.getFullYear();
@@ -24,10 +26,20 @@ function formatHourLabel(h: string) {
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
-function getEndTime(startSlot: string, duration: number) {
-  const h = parseInt(startSlot.split(":")[0], 10) + duration;
-  return `${String(h).padStart(2, "0")}:00`;
+function getEndTime(startSlot: string, durationHours: number) {
+  const [hh, mm = "00"] = String(startSlot).slice(0, 5).split(":");
+  const total = parseInt(hh, 10) * 60 + parseInt(mm, 10) + Math.round(durationHours * 60);
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
+
+const DUREES = [
+  { label: "1h", hours: 1, minutes: 60 },
+  { label: "1h30", hours: 1.5, minutes: 90 },
+  { label: "2h", hours: 2, minutes: 120 },
+  { label: "3h", hours: 3, minutes: 180 },
+] as const;
 
 const FieldDetails = () => {
   const { id } = useParams();
@@ -41,7 +53,14 @@ const FieldDetails = () => {
   const [fieldFormat, setFieldFormat] = useState<"moitie" | "entier">("entier");
   const [creneaux, setCreneaux] = useState<any[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
+  const [fermeMotif, setFermeMotif] = useState<string | null>(null);
+  const [devis, setDevis] = useState<{
+    montant?: number;
+    montant_avance?: number;
+    montant_restant?: number;
+  } | null>(null);
   const [photoIndex, setPhotoIndex] = useState(0);
+  const [galleryOpen, setGalleryOpen] = useState(false);
   const [fav, setFav] = useState(false);
   const [carouselPaused, setCarouselPaused] = useState(false);
   const [avisOpen, setAvisOpen] = useState(false);
@@ -79,7 +98,71 @@ const FieldDetails = () => {
 
   useEffect(() => {
     if (terrain) loadCreneaux(dates[selectedDate].isoDate);
-  }, [selectedDate, terrain]);
+  }, [selectedDate, terrain, selectedDuration]);
+
+  const selectedIsoDate = dates[selectedDate]?.isoDate;
+
+  const reloadPlanningQuiet = useCallback(() => {
+    if (!terrain || !selectedIsoDate) return;
+    const dureeMin = Math.round(selectedDuration * 60);
+    terrainsApi
+      .getCreneaux(id!, selectedIsoDate, { duree_minutes: dureeMin })
+      .then((data: any) => {
+        const slots = data.creneaux || [];
+        setCreneaux(slots);
+        setFermeMotif(data.ferme ? data.motif || "Terrain temporairement fermé" : null);
+        setSelectedSlot((prev) => {
+          if (!prev) return prev;
+          const stillOk = slots.some((s: any) => (s.heure || s.heure_debut) === prev && s.disponible);
+          return stillOk ? prev : null;
+        });
+      })
+      .catch(() => {
+        /* ignore soft refresh errors */
+      });
+  }, [terrain, selectedIsoDate, id, selectedDuration]);
+
+  useTerrainEvents(terrain?.id || id, (ev) => {
+    if (
+      ev.type === "tarifs" ||
+      ev.type === "horaires" ||
+      ev.type === "blocage" ||
+      ev.type === "reservation" ||
+      ev.type === "statut" ||
+      ev.type === "photos"
+    ) {
+      reloadPlanningQuiet();
+      if (ev.type === "statut" || ev.type === "photos") {
+        loadTerrain();
+      }
+    }
+  });
+
+  useEffect(() => {
+    if (!terrain || !selectedSlot) {
+      setDevis(null);
+      return;
+    }
+    const date = dates[selectedDate].isoDate;
+    const heure_fin = getEndTime(selectedSlot, selectedDuration);
+    let cancelled = false;
+    terrainsApi
+      .getDevis(id!, {
+        date,
+        heure_debut: selectedSlot,
+        heure_fin,
+        format: fieldFormat,
+      })
+      .then((payload) => {
+        if (!cancelled) setDevis(payload as { montant?: number; montant_avance?: number; montant_restant?: number });
+      })
+      .catch(() => {
+        if (!cancelled) setDevis(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [terrain, selectedSlot, selectedDuration, fieldFormat, selectedDate, dates, id]);
 
   useEffect(() => {
     return () => {
@@ -127,37 +210,34 @@ const FieldDetails = () => {
   const loadCreneaux = async (date: string) => {
     setLoadingSlots(true);
     try {
-      const data = await terrainsApi.getCreneaux(id!, date);
-      let slots = data.creneaux || [];
-      if (slots.length === 0) {
-        slots = ["18:00", "19:00", "20:00"].map((heure) => ({
-          heure,
-          heure_fin: `${String(parseInt(heure, 10) + 1).padStart(2, "0")}:00`,
-          disponible: true,
-          statut: "libre",
-        }));
-      }
-      setCreneaux(slots);
+      const dureeMin = Math.round(selectedDuration * 60);
+      const data: any = await terrainsApi.getCreneaux(id!, date, { duree_minutes: dureeMin });
+      setCreneaux(data.creneaux || []);
+      setFermeMotif(data.ferme ? data.motif || "Terrain temporairement fermé" : null);
     } catch (err) {
       console.error(err);
-      setCreneaux(
-        ["18:00", "19:00", "20:00"].map((heure) => ({
-          heure,
-          heure_fin: `${String(parseInt(heure, 10) + 1).padStart(2, "0")}:00`,
-          disponible: true,
-          statut: "libre",
-        }))
-      );
+      setCreneaux([]);
+      setFermeMotif(null);
     } finally {
       setLoadingSlots(false);
     }
   };
 
-  const hourlyPrice = terrain
-    ? Number(fieldFormat === "moitie" ? terrain.prix_moitie : terrain.prix_entier || terrain.prix_heure)
-    : 0;
-  const total = hourlyPrice * selectedDuration;
-  const deposit = calculerMontantAvance(total, terrain?.pourcentage_avance);
+  const selectedSlotRow = creneaux.find((s) => (s.heure || s.heure_debut) === selectedSlot);
+  const previewSlot = selectedSlotRow || creneaux.find((s) => s.disponible) || creneaux[0];
+  const hourlyPrice = previewSlot
+    ? Number(fieldFormat === "moitie" ? previewSlot.prix_moitie : previewSlot.prix_entier)
+    : terrain
+      ? Number(fieldFormat === "moitie" ? terrain.prix_moitie : terrain.prix_entier || terrain.prix_heure)
+      : 0;
+  const total =
+    devis?.montant != null && Number(devis.montant) > 0
+      ? Number(devis.montant)
+      : hourlyPrice * selectedDuration;
+  const deposit =
+    devis?.montant_avance != null
+      ? Number(devis.montant_avance)
+      : calculerMontantAvance(total, terrain?.pourcentage_avance);
   const hasSlot = selectedSlot != null && selectedSlot !== "";
 
   const selectedDateMeta = dates[selectedDate];
@@ -169,9 +249,15 @@ const FieldDetails = () => {
       : selectedDateMeta.isToday
         ? "Aujourd'hui"
         : `${selectedDateMeta.weekday} ${selectedDateMeta.day}`;
+    const dureeTxt =
+      selectedDuration === 1.5 ? "1h30" : selectedDuration === 1 ? "1 heure" : `${selectedDuration} heures`;
     return {
-      primary: `${dayLabel} ${formatHourLabel(selectedSlot)} – ${formatHourLabel(slotEnd)}`,
-      secondary: `Total ${total.toLocaleString("fr-SN")} FCFA · Avance ${deposit.toLocaleString("fr-SN")} FCFA`,
+      primary: `${dayLabel} ${formatHourLabel(selectedSlot)} → ${formatHourLabel(slotEnd)}`,
+      secondary: `Durée ${dureeTxt} · Total ${total.toLocaleString("fr-SN")} FCFA · Avance ${deposit.toLocaleString("fr-SN")} FCFA`,
+      longNote:
+        selectedDuration > 1
+          ? `Ce créneau dure ${dureeTxt}. Le gérant vous accueille pendant toute cette durée.`
+          : null,
     };
   })();
 
@@ -238,7 +324,9 @@ const FieldDetails = () => {
   const photos = resolveTerrainPhotos(terrain);
   const note = Number(terrain.note || 0);
   const avisCount = Number(terrain.avis_count || terrain.avis?.length || 0);
-  const quartier = terrain.adresse || terrain.ville || "";
+  const adresseAffichee = terrain.adresse_theorique || terrain.adresse || terrain.ville || "";
+  const hasCoords =
+    Number.isFinite(Number(terrain.latitude)) && Number.isFinite(Number(terrain.longitude));
   const descriptionText = String(terrain.description || "").trim();
   const showDescription =
     descriptionText &&
@@ -292,7 +380,7 @@ const FieldDetails = () => {
             className="absolute top-4 left-4 w-11 h-11 rounded-full bg-white/85 backdrop-blur-md flex items-center justify-center shadow-sm"
             aria-label="Retour"
           >
-            <ArrowLeft className="w-5 h-5 text-emerald-700" />
+            <ArrowLeft className="w-5 h-5 text-[var(--primary)]" />
           </button>
           <button
             type="button"
@@ -312,9 +400,9 @@ const FieldDetails = () => {
             </h1>
             <div className="mt-1.5 flex items-center gap-2 flex-wrap text-sm text-white/90">
               <span className="inline-flex items-center gap-1">
-                <MapPin className="w-3.5 h-3.5 text-emerald-300" />
-                {quartier}
-                {terrain.ville && terrain.adresse ? ` · ${terrain.ville}` : ""}
+                <MapPin className="w-3.5 h-3.5 text-[var(--primary-light)]" />
+                {adresseAffichee}
+                {terrain.ville && (terrain.adresse_theorique || terrain.adresse) ? ` · ${terrain.ville}` : ""}
               </span>
               {note > 0 && (
                 <span className="inline-flex items-center gap-1 font-semibold">
@@ -326,29 +414,36 @@ const FieldDetails = () => {
                 </span>
               )}
             </div>
-            {(terrain.latitude || terrain.adresse) && (
+            {hasCoords ? (
               <a
-                href={
-                  terrain.latitude && terrain.longitude
-                    ? `https://maps.google.com/?q=${terrain.latitude},${terrain.longitude}`
-                    : `https://maps.google.com/?q=${encodeURIComponent(`${quartier} ${terrain.ville || "Dakar"}`)}`
-                }
+                href={`https://maps.google.com/?q=${terrain.latitude},${terrain.longitude}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-block mt-2 text-xs font-medium text-emerald-300 underline-offset-2 hover:underline"
+                className="inline-block mt-2 text-xs font-medium text-[var(--primary-light)] underline-offset-2 hover:underline"
               >
                 Voir sur Maps
               </a>
-            )}
+            ) : null}
           </div>
 
-          <div className="absolute bottom-[76px] left-0 right-0 flex justify-center gap-1.5 pointer-events-none">
+          <div className="absolute bottom-[76px] left-0 right-0 flex flex-col items-center gap-2 pointer-events-none">
+            <div className="flex justify-center gap-1.5">
             {photos.map((_, i) => (
               <span
                 key={i}
-                className={`h-1 rounded-full transition-all ${i === photoIndex ? "w-5 bg-white" : "w-1.5 bg-white/45"}`}
+                className={`h-1.5 rounded-full transition-all ${i === photoIndex ? "w-5 bg-white" : "w-1.5 bg-white/50"}`}
               />
             ))}
+            </div>
+            {photos.length > 1 ? (
+              <button
+                type="button"
+                className="pointer-events-auto h-8 px-3 rounded-full text-[11px] font-semibold bg-black/45 text-white"
+                onClick={() => setGalleryOpen(true)}
+              >
+                Voir toutes les photos ({photos.length})
+              </button>
+            ) : null}
           </div>
         </div>
       </header>
@@ -362,6 +457,36 @@ const FieldDetails = () => {
             compact
           />
         </div>
+
+        {(terrain.adresse_theorique || hasCoords) ? (
+          <section className={`${sectionCard} mt-4 p-4 sm:p-5`}>
+            <h2 className="text-base font-bold text-[var(--color-text-primary)] mb-3" style={{ fontFamily: "var(--font-display)" }}>
+              Localisation
+            </h2>
+            {terrain.adresse_theorique ? (
+              <p className="text-sm text-[var(--color-text-secondary)] mb-3">{terrain.adresse_theorique}</p>
+            ) : null}
+            {hasCoords ? (
+              <>
+                <MapTerrain
+                  latitude={Number(terrain.latitude)}
+                  longitude={Number(terrain.longitude)}
+                  nom={terrain.nom}
+                  quartier={terrain.adresse_theorique || terrain.adresse || terrain.ville}
+                />
+                <a
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${terrain.latitude},${terrain.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex items-center justify-center gap-2 w-full min-h-[44px] rounded-xl text-sm font-semibold border border-[var(--border)] text-[var(--color-text-primary)] bg-white dark:bg-[var(--surface)]"
+                >
+                  <Navigation className="w-4 h-4 text-[var(--primary)]" />
+                  Lancer l&apos;itinéraire
+                </a>
+              </>
+            ) : null}
+          </section>
+        ) : null}
 
         {/* ═══ 3. TUNNEL DE RÉSERVATION ═══ */}
         <section className={`${sectionCard} mt-4 p-4 sm:p-5`}>
@@ -385,7 +510,7 @@ const FieldDetails = () => {
                   }}
                   className={`flex flex-col items-center justify-center w-[58px] min-w-[58px] min-h-[70px] py-2 rounded-xl text-[11px] font-medium snap-start transition-colors ${
                     selectedDate === i
-                      ? "bg-emerald-500 text-white shadow-sm"
+                      ? "bg-[var(--primary)] text-white shadow-sm"
                       : "bg-white dark:bg-[var(--surface)] border border-gray-200 dark:border-[var(--border)] text-[var(--color-text-secondary)]"
                   }`}
                 >
@@ -407,8 +532,8 @@ const FieldDetails = () => {
               <div className="grid grid-cols-2 gap-2">
                 {(
                   [
-                    ["moitie", "Demi-terrain", terrain.prix_moitie],
-                    ["entier", "Terrain entier", terrain.prix_entier || terrain.prix_heure],
+                    ["moitie", "Demi-terrain", previewSlot?.prix_moitie ?? terrain.prix_moitie],
+                    ["entier", "Terrain entier", previewSlot?.prix_entier ?? terrain.prix_entier ?? terrain.prix_heure],
                   ] as const
                 ).map(([value, label, price]) => (
                   <button
@@ -417,7 +542,7 @@ const FieldDetails = () => {
                     onClick={() => setFieldFormat(value)}
                     className={`rounded-xl p-3 text-left min-h-[64px] border transition-colors ${
                       fieldFormat === value
-                        ? "bg-emerald-500 text-white border-emerald-500"
+                        ? "bg-[var(--primary)] text-white border-[var(--primary)]"
                         : "bg-white dark:bg-[var(--surface)] border-gray-200 dark:border-[var(--border)]"
                     }`}
                   >
@@ -434,19 +559,22 @@ const FieldDetails = () => {
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
                 Durée
               </p>
-              <div className="flex gap-2">
-                {[1, 2, 3].map((h) => (
+              <div className="flex flex-wrap gap-2">
+                {DUREES.map((d) => (
                   <button
-                    key={h}
+                    key={d.label}
                     type="button"
-                    onClick={() => setSelectedDuration(h)}
-                    className={`flex-1 min-h-[44px] rounded-xl text-sm font-semibold transition-colors ${
-                      selectedDuration === h
-                        ? "bg-emerald-500 text-white"
+                    onClick={() => {
+                      setSelectedDuration(d.hours);
+                      setSelectedSlot(null);
+                    }}
+                    className={`min-h-[44px] min-w-[64px] flex-1 rounded-xl text-sm font-semibold transition-colors ${
+                      selectedDuration === d.hours
+                        ? "bg-[var(--primary)] text-white"
                         : "bg-white dark:bg-[var(--surface)] border border-gray-200 dark:border-[var(--border)] text-[var(--color-text-secondary)]"
                     }`}
                   >
-                    {h}h
+                    {d.label}
                   </button>
                 ))}
               </div>
@@ -464,43 +592,87 @@ const FieldDetails = () => {
                   <div key={i} className="skeleton h-12 w-full rounded-xl" />
                 ))}
               </div>
+            ) : fermeMotif ? (
+              <p className="text-center py-5 text-sm text-[var(--color-warning)] font-medium">
+                {fermeMotif}
+              </p>
             ) : creneaux.length === 0 ? (
               <p className="text-center py-5 text-sm text-[var(--color-text-secondary)]">
                 Aucun créneau disponible ce jour
               </p>
             ) : (
-              <div className="grid grid-cols-3 gap-2">
-                {creneaux.map((slot) => {
-                  const selected = selectedSlot === slot.heure;
-                  const available = Boolean(slot.disponible);
-                  const fin = getEndTime(slot.heure, selectedDuration);
-                  return (
-                    <button
-                      key={slot.heure}
-                      type="button"
-                      disabled={!available}
-                      onClick={() => setSelectedSlot(slot.heure)}
-                      title={`${formatHourLabel(slot.heure)} – ${formatHourLabel(fin)}`}
-                      className={`min-h-[52px] rounded-xl text-sm font-semibold transition-all duration-200 border ${
-                        !available
-                          ? "bg-gray-100 dark:bg-[var(--surface-3)] text-gray-400 line-through cursor-not-allowed border-transparent"
-                          : selected
-                            ? "bg-emerald-500 text-white border-emerald-500 shadow-md scale-[1.03]"
-                            : "bg-white dark:bg-[var(--surface)] text-emerald-700 dark:text-emerald-400 border-gray-200 dark:border-[var(--border)]"
-                      }`}
-                    >
-                      <span className="block">{formatHourLabel(slot.heure)}</span>
-                      <span
-                        className={`block text-[10px] font-normal mt-0.5 ${
-                          selected ? "text-white/80" : "opacity-60"
+              <>
+                <div className="grid grid-cols-3 gap-2">
+                  {creneaux.map((slot) => {
+                    const heure = slot.heure || slot.heure_debut;
+                    const selected = selectedSlot === heure;
+                    const available = Boolean(slot.disponible) && !slot.passe;
+                    const passe = Boolean(slot.passe);
+                    const fin = slot.heure_fin || getEndTime(heure, selectedDuration);
+                    const long = (slot.duree_minutes || selectedDuration * 60) > 60;
+                    const title =
+                      slot.raison_indisponibilite ||
+                      (passe
+                        ? "Créneau dépassé"
+                        : available
+                          ? `${formatHourLabel(heure)} – ${formatHourLabel(fin)}`
+                          : "Indisponible");
+                    return (
+                      <button
+                        key={`${heure}-${fin}`}
+                        type="button"
+                        disabled={!available}
+                        onClick={() => setSelectedSlot(heure)}
+                        title={title}
+                        className={`min-h-[52px] rounded-xl text-sm font-semibold transition-all duration-200 border ${
+                          long ? "col-span-2" : ""
+                        } ${
+                          passe
+                            ? "bg-gray-50 dark:bg-[var(--surface-3)] text-gray-300 cursor-not-allowed border-transparent opacity-60"
+                            : !available
+                              ? "bg-gray-100 dark:bg-[var(--surface-3)] text-gray-400 line-through cursor-not-allowed border-transparent"
+                              : selected
+                                ? "bg-[var(--primary)] text-white border-[var(--primary)] shadow-md scale-[1.03]"
+                                : "bg-[var(--primary-glow,rgba(30,64,175,0.08))] text-[var(--primary)] border-[var(--primary)]"
                         }`}
                       >
-                        – {formatHourLabel(fin)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+                        <span className="block">
+                          {formatHourLabel(heure)} - {formatHourLabel(fin)}
+                        </span>
+                        {long ? (
+                          <span
+                            className={`block text-[10px] font-bold mt-0.5 ${
+                              selected ? "text-white/90" : "opacity-70"
+                            }`}
+                          >
+                            {slot.duree_label || `${selectedDuration}h`}
+                          </span>
+                        ) : (
+                          <span
+                            className={`block text-[10px] font-normal mt-0.5 ${
+                              selected ? "text-white/80" : "opacity-60"
+                            }`}
+                          >
+                            {!available
+                              ? passe
+                                ? "Passé"
+                                : slot.raison_indisponibilite?.includes("chevauche") ||
+                                    slot.raison_indisponibilite?.includes("match")
+                                  ? "Non disponible"
+                                  : "Pris"
+                              : selected
+                                ? "✓"
+                                : null}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
+                  Vert = disponible · Gris = indisponible · Atténué = passé
+                </p>
+              </>
             )}
           </div>
         </section>
@@ -513,7 +685,7 @@ const FieldDetails = () => {
           <ul className="space-y-3 text-sm text-[var(--color-text-secondary)]">
             {horaire && (
               <li className="flex items-start gap-2">
-                <Clock className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <Clock className="w-4 h-4 text-[var(--primary)] shrink-0 mt-0.5" />
                 <span>
                   Ouvert {horaire.heure_debut} – {horaire.heure_fin}
                   {selectedDateMeta.isTomorrow ? " demain" : selectedDateMeta.isToday ? " aujourd'hui" : ""}
@@ -521,7 +693,7 @@ const FieldDetails = () => {
               </li>
             )}
             <li className="flex items-start gap-2">
-              <Info className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <Info className="w-4 h-4 text-[var(--primary)] shrink-0 mt-0.5" />
               <span>
                 La réservation expire après 15 min sans paiement. Annulation gratuite jusqu&apos;à 2h avant le créneau.
               </span>
@@ -642,17 +814,37 @@ const FieldDetails = () => {
               <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5 truncate">
                 {stickyRecap.secondary}
               </p>
+              {stickyRecap.longNote ? (
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 line-clamp-2">
+                  {stickyRecap.longNote}
+                </p>
+              ) : null}
             </div>
             <button
               type="button"
               onClick={goToPayment}
-              className="shrink-0 h-12 px-4 rounded-xl text-sm font-bold bg-emerald-500 text-white shadow-[0_4px_16px_rgba(16,185,129,0.4)] hover:bg-emerald-400 active:scale-[0.98] transition-all"
+              className="shrink-0 h-12 px-4 rounded-xl text-sm font-bold bg-[var(--primary)] text-white shadow-[0_4px_16px_rgba(30,64,175,0.35)] hover:bg-[var(--primary-light)] active:scale-[0.98] transition-all"
             >
               Valider la réservation
             </button>
           </div>
         </div>
       )}
+      {galleryOpen ? (
+        <div className="fixed inset-0 z-[80] bg-black/90 flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 text-white">
+            <p className="text-sm font-semibold">Photos ({photos.length})</p>
+            <button type="button" onClick={() => setGalleryOpen(false)} className="w-10 h-10 grid place-items-center" aria-label="Fermer">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 pb-8 space-y-3">
+            {photos.map((src, i) => (
+              <img key={`${src}-${i}`} src={src} alt={`${terrain.nom} ${i + 1}`} className="w-full rounded-xl object-cover" />
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

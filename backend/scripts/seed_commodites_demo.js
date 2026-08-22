@@ -25,7 +25,7 @@ const OBELISQUE_COMMO = ['dossards', 'eau', 'vestiaires', 'parking', 'toilettes'
 
 async function main() {
   const db = await getDb();
-  const terrains = queryAll(db, 'SELECT id, nom, commodites FROM terrains WHERE COALESCE(is_active, 1) = 1');
+  const terrains = await queryAll(db, 'SELECT id, nom, commodites FROM terrains WHERE COALESCE(is_active, 1) = 1');
   console.log(`🏟️  ${terrains.length} terrain(s) actifs`);
 
   for (let i = 0; i < terrains.length; i++) {
@@ -46,7 +46,7 @@ async function main() {
         ? existing
         : DEMO_SETS[i % DEMO_SETS.length];
 
-    runSql(db, 'UPDATE terrains SET commodites = ? WHERE id = ?', [
+    await runSql(db, 'UPDATE terrains SET commodites = ? WHERE id = ?', [
       JSON.stringify(commodites),
       t.id,
     ]);
@@ -55,15 +55,15 @@ async function main() {
     // Garantir horaires ouverts
     const jours = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
     for (const jour of jours) {
-      const h = queryOne(db, 'SELECT id FROM horaires WHERE terrain_id = ? AND jour = ?', [t.id, jour]);
+      const h = await queryOne(db, 'SELECT id FROM horaires WHERE terrain_id = ? AND jour = ?', [t.id, jour]);
       if (!h) {
-        runSql(
+        await runSql(
           db,
           'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)',
           [t.id, jour, '08:00', '23:00']
         );
       } else {
-        runSql(
+        await runSql(
           db,
           "UPDATE horaires SET heure_debut = COALESCE(heure_debut,'08:00'), heure_fin = '23:00', est_ouvert = 1 WHERE terrain_id = ? AND jour = ?",
           [t.id, jour]
@@ -80,19 +80,19 @@ async function main() {
       for (const hour of [18, 19, 20, 21]) {
         const debut = `${String(hour).padStart(2, '0')}:00`;
         const fin = `${String(hour + 1).padStart(2, '0')}:00`;
-        const exists = queryOne(
+        const exists = await queryOne(
           db,
           'SELECT id FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ?',
           [t.id, dateStr, debut]
         );
         if (!exists) {
-          runSql(
+          await runSql(
             db,
             "INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, 'libre')",
             [t.id, dateStr, debut, fin]
           );
         } else {
-          runSql(db, "UPDATE creneaux SET statut = 'libre' WHERE id = ?", [exists.id]);
+          await runSql(db, "UPDATE creneaux SET statut = 'libre' WHERE id = ?", [exists.id]);
         }
       }
     }
@@ -101,9 +101,9 @@ async function main() {
   // Avis démo Obélisque si aucun
   const obe = terrains.find((t) => /ob[eé]lisque/i.test(String(t.nom || '')));
   if (obe) {
-    const count = queryOne(db, 'SELECT COUNT(*) AS n FROM avis WHERE terrain_id = ?', [obe.id]);
+    const count = await queryOne(db, 'SELECT COUNT(*) AS n FROM avis WHERE terrain_id = ?', [obe.id]);
     if (!count || Number(count.n) === 0) {
-      const joueur = queryOne(db, "SELECT id, nom FROM users WHERE role = 'joueur' LIMIT 1");
+      const joueur = await queryOne(db, "SELECT id, nom FROM users WHERE role = 'joueur' LIMIT 1");
       if (joueur) {
         const samples = [
           [5, 'Super terrain Obélisque, dossards et eau inclus !'],
@@ -111,7 +111,7 @@ async function main() {
           [5, 'Parking sécurisé, on reviendra.'],
         ];
         for (const [note, commentaire] of samples) {
-          runSql(
+          await runSql(
             db,
             'INSERT INTO avis (reservation_id, joueur_id, joueur_nom, terrain_id, note, commentaire) VALUES (NULL, ?, ?, ?, ?, ?)',
             [joueur.id, joueur.nom, obe.id, note, commentaire]

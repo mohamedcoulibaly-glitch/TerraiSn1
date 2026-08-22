@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, MessageCircle, QrCode, Unplug } from "lucide-react";
 import { toast } from "sonner";
 import { gerantApi } from "@/lib/api";
+import { WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
 
 type WaStatus = {
   connected?: boolean;
@@ -30,93 +31,64 @@ export default function WhatsAppGerantCard() {
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const applyPayload = (payload: WaStatus) => {
+    setStatus((prev) => ({ ...prev, ...payload }));
+    if (payload.connected) {
+      setQr(null);
+      setPairingCode(null);
+      return;
+    }
+    if (payload.dataUrl) setQr(payload.dataUrl);
+    if (payload.pairingCode) setPairingCode(payload.pairingCode);
+  };
+
   const refresh = useCallback(async () => {
     try {
       const data = (await gerantApi.whatsappStatus()) as WaStatus;
-      setStatus(data);
+      if (data.connected) {
+        setStatus(data);
+        setQr(null);
+        setPairingCode(null);
+        return data;
+      }
+      const payload = (await gerantApi.whatsappQr()) as WaStatus;
+      applyPayload({ ...data, ...payload });
+      return { ...data, ...payload };
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const connect = useCallback(async (force = false) => {
+    setBusy(true);
+    try {
+      const data = (await gerantApi.whatsappConnect({ force })) as WaStatus;
+      applyPayload(data);
       if (data.mock) {
         setQr(null);
         setPairingCode(null);
+        toast.error(WHATSAPP_INFRA_MESSAGE);
         return;
       }
       if (data.connected) {
-        setQr(null);
-        setPairingCode(null);
+        toast.success("WhatsApp du gérant connecté");
         return;
       }
-      if (data.hasQr || data.initializing || data.pairingCode) {
-        const payload = (await gerantApi.whatsappQr()) as WaStatus;
-        if (payload.dataUrl) setQr(payload.dataUrl);
-        if (payload.pairingCode) setPairingCode(payload.pairingCode);
-        setStatus((prev) => ({ ...prev, ...payload }));
+      if (!data.dataUrl && !data.pairingCode) {
+        toast.error(data.error || WHATSAPP_INFRA_MESSAGE);
       }
-    } catch {
-      /* ignore polling errors */
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : WHATSAPP_INFRA_MESSAGE);
+    } finally {
+      setBusy(false);
     }
   }, []);
 
   useEffect(() => {
     refresh();
-    const timer = window.setInterval(refresh, 3500);
+    const timer = window.setInterval(refresh, 4000);
     return () => window.clearInterval(timer);
   }, [refresh]);
-
-  const connect = async (force = false) => {
-    setBusy(true);
-    try {
-      const data = (await gerantApi.whatsappConnect({ force })) as WaStatus;
-      setStatus(data);
-      if (data.mock) {
-        setQr(null);
-        setPairingCode(null);
-        toast.error("WhatsApp est en mode MOCK. Désactivez WHATSAPP_MOCK puis redémarrez l’API.");
-        return;
-      }
-      if (data.connected) {
-        setQr(null);
-        setPairingCode(null);
-        toast.success("WhatsApp du gérant connecté");
-        return;
-      }
-      if (data.dataUrl) setQr(data.dataUrl);
-      if (data.pairingCode) setPairingCode(data.pairingCode);
-
-      if (data.pairingCode) {
-        toast.success(`Code : ${formatPairingCode(data.pairingCode)} — saisissez-le sur le téléphone`);
-        return;
-      }
-      if (data.dataUrl) {
-        toast.success("QR prêt — ou utilisez le code d’appairage s’il s’affiche");
-        return;
-      }
-
-      toast.message("Génération en cours…");
-      for (let i = 0; i < 20; i += 1) {
-        await new Promise((r) => setTimeout(r, 1500));
-        const payload = (await gerantApi.whatsappQr()) as WaStatus;
-        setStatus((prev) => ({ ...prev, ...payload }));
-        if (payload.connected) {
-          setQr(null);
-          setPairingCode(null);
-          toast.success("WhatsApp du gérant connecté");
-          return;
-        }
-        if (payload.pairingCode) {
-          setPairingCode(payload.pairingCode);
-          toast.success(`Code : ${formatPairingCode(payload.pairingCode)}`);
-          return;
-        }
-        if (payload.dataUrl) {
-          setQr(payload.dataUrl);
-        }
-      }
-      toast.error(data.error || "Impossible d’obtenir QR/code. Cliquez Nouveau QR.");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Connexion WhatsApp impossible");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const disconnect = async () => {
     setBusy(true);
@@ -136,7 +108,7 @@ export default function WhatsAppGerantCard() {
   const connected = Boolean(status?.connected);
   const mock = Boolean(status?.mock);
   const phone = status?.configured_number || status?.phone || status?.connected_wid;
-  const authenticating = status?.waState === "AUTHENTICATED" || /OPENING|PAIRING/i.test(String(status?.waState || ""));
+  const waitingScan = Boolean((qr || pairingCode) && !connected && !mock);
 
   return (
     <section className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 space-y-3">
@@ -147,7 +119,7 @@ export default function WhatsAppGerantCard() {
             WhatsApp expéditeur
           </h2>
           <p className="text-xs text-[var(--color-text-secondary)] mt-1">
-            Les joueurs reçoivent les liens depuis <strong>votre</strong> numéro.
+            Scannez le QR, ou utilisez le code. Ne fermez pas cette page pendant la liaison.
           </p>
         </div>
         <span
@@ -156,10 +128,12 @@ export default function WhatsAppGerantCard() {
               ? "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"
               : connected
                 ? "bg-[color-mix(in_srgb,#25D366_16%,white)] text-[#128C7E]"
-                : "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]"
+                : waitingScan
+                  ? "bg-[color-mix(in_srgb,#25D366_16%,white)] text-[#128C7E]"
+                  : "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]"
           }`}
         >
-          {mock ? "Mode test" : connected ? "Connecté" : authenticating ? "Connexion…" : "À connecter"}
+          {mock ? "Mode test" : connected ? "Connecté" : waitingScan ? "En attente du scan" : "À connecter"}
         </span>
       </div>
 
@@ -167,14 +141,45 @@ export default function WhatsAppGerantCard() {
         <p className="text-sm font-medium" style={{ fontFamily: "var(--font-display)" }}>
           {phone}
         </p>
-      ) : (
-        <p className="text-sm text-[var(--color-text-muted)]">Aucun numéro WhatsApp lié à ce compte.</p>
-      )}
+      ) : null}
+
+      {busy && !qr && !connected ? (
+        <p className="text-sm text-[var(--color-text-secondary)] inline-flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Génération du QR…
+        </p>
+      ) : null}
+
+      {qr && !connected && !mock && status?.waState !== "authenticating" && status?.waState !== "restarting" ? (
+        <div className="flex flex-col items-center gap-2 py-2">
+          <img
+            key={qr.slice(-48)}
+            src={qr}
+            alt="QR WhatsApp"
+            className="w-52 h-52 rounded-lg border border-[var(--color-border)] bg-white p-2"
+          />
+          <p className="text-xs text-center text-[var(--color-text-secondary)] max-w-xs">
+            Sur le <strong>téléphone principal</strong> (pas un appareil déjà lié) :
+            WhatsApp → Paramètres → Appareils connectés → Connecter un appareil, puis scannez
+            <strong> ce </strong> QR. Si WhatsApp refuse, attendez 2 minutes, retirez un ancien appareil
+            lié, puis cliquez sur Nouveau QR.
+          </p>
+        </div>
+      ) : null}
+
+      {(status?.waState === "authenticating" || status?.waState === "restarting") && !connected ? (
+        <p className="text-sm text-[var(--color-text-secondary)] inline-flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          {status?.waState === "restarting"
+            ? "Finalisation de la liaison… ne fermez pas cette page."
+            : "Validation en cours sur le téléphone… ne fermez pas cette page."}
+        </p>
+      ) : null}
 
       {pairingCode && !connected && !mock ? (
         <div className="rounded-xl border border-[#25D366]/40 bg-[color-mix(in_srgb,#25D366_8%,white)] p-4 text-center space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-[#128C7E]">
-            Méthode recommandée — code d’appairage
+            Ou code d’appairage
           </p>
           <p
             className="text-3xl font-bold tracking-[0.2em] text-[var(--color-text-primary)]"
@@ -183,56 +188,39 @@ export default function WhatsAppGerantCard() {
             {formatPairingCode(pairingCode)}
           </p>
           <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
-            Sur le téléphone (<strong>{status?.pairingPhone || phone || "75 014 71 38"}</strong>) :
-            <br />
-            WhatsApp → Paramètres → Appareils connectés → Connecter un appareil →{" "}
-            <strong>Lier avec un numéro de téléphone</strong>
-            <br />
-            puis saisissez ce code (sans recharger la page).
+            Connecter un appareil → <strong>Lier avec un numéro de téléphone</strong>
+            {status?.pairingPhone || phone ? (
+              <>
+                {" "}
+                (<strong>{status?.pairingPhone || phone}</strong>)
+              </>
+            ) : null}
           </p>
         </div>
-      ) : null}
-
-      {qr && !connected && !mock ? (
-        <div className="flex flex-col items-center gap-2 py-2">
-          <img
-            src={qr}
-            alt="QR WhatsApp gérant"
-            className="w-44 h-44 rounded-lg border border-[var(--color-border)] bg-white"
-          />
-          <p className="text-xs text-center text-[var(--color-text-secondary)] max-w-xs">
-            Alternative : scannez ce QR (Appareils connectés → Connecter un appareil).
-            <br />
-            Preférez le <strong>code</strong> ci-dessus si le scan échoue.
-          </p>
-        </div>
-      ) : null}
-
-      {status?.error && !mock ? (
-        <p className="text-xs text-[var(--color-danger)]">{status.error}</p>
       ) : null}
 
       <div className="flex flex-wrap gap-2">
-        {!connected && (
-          <>
-            <button
-              type="button"
-              onClick={() => connect(Boolean(qr || pairingCode))}
-              disabled={busy || mock}
-              className="min-h-[44px] px-4 rounded-[var(--radius-sm)] bg-[#25D366] text-white text-sm font-medium inline-flex items-center gap-2 disabled:opacity-60"
-            >
-              {busy || status?.initializing ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <QrCode className="w-4 h-4" />
-              )}
-              {busy
-                ? "Préparation…"
-                : qr || pairingCode
-                  ? "Nouveau QR / code"
-                  : "Connecter mon WhatsApp"}
-            </button>
-          </>
+        {!connected && !waitingScan && (
+          <button
+            type="button"
+            onClick={() => connect(false)}
+            disabled={busy || mock}
+            className="min-h-[44px] px-4 rounded-[var(--radius-sm)] bg-[#25D366] text-white text-sm font-medium inline-flex items-center gap-2 disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
+            {busy ? "Préparation…" : "Connecter mon WhatsApp"}
+          </button>
+        )}
+        {waitingScan && (
+          <button
+            type="button"
+            onClick={() => connect(true)}
+            disabled={busy || mock}
+            className="min-h-[44px] px-4 rounded-[var(--radius-sm)] border border-[var(--color-border)] text-sm font-medium inline-flex items-center gap-2 disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
+            Nouveau QR
+          </button>
         )}
         {connected && !mock && (
           <button

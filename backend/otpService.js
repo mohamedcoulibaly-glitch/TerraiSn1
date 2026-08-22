@@ -30,7 +30,7 @@ function generateOtpCode() {
 }
 
 async function invalidateOtps(db, telephoneDigits) {
-  runSql(db, 'UPDATE auth_otps SET used = 1 WHERE telephone = ? AND used = 0', [telephoneDigits]);
+  await runSql(db, 'UPDATE auth_otps SET used = 1 WHERE telephone = ? AND used = 0', [telephoneDigits]);
 }
 
 async function createAndSendOtp(db, { telephone, userId, prenom }) {
@@ -44,7 +44,7 @@ async function createAndSendOtp(db, { telephone, userId, prenom }) {
   const code = generateOtpCode();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-  runSql(
+  await runSql(
     db,
     'INSERT INTO auth_otps (telephone, code, user_id, expires_at, used) VALUES (?, ?, ?, ?, 0)',
     [telephoneDigits, code, userId || null, expiresAt]
@@ -64,9 +64,9 @@ async function createAndSendOtp(db, { telephone, userId, prenom }) {
   return { telephone: telephoneDigits, expiresAt, code };
 }
 
-function findValidOtp(db, telephone, code) {
+async function findValidOtp(db, telephone, code) {
   const telephoneDigits = normalizeTelephone(telephone);
-  const otp = queryOne(
+  const otp = await queryOne(
     db,
     `SELECT * FROM auth_otps
      WHERE telephone = ? AND code = ? AND used = 0

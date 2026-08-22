@@ -28,8 +28,12 @@ export default function DesktopNavbar() {
   return (
     <header className="hidden md:flex fixed top-0 inset-x-0 z-50 h-16 items-center bg-[var(--nav-bg)] backdrop-blur-xl border-b border-[var(--nav-border)]">
       <div className="h-full w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-6">
-        <Link to="/" className="text-xl font-black tracking-tight text-[var(--text-primary)] shrink-0">
-          TERRAIN<span className="text-[var(--primary)]">.SN</span>
+        <Link
+          to="/"
+          className="text-[15px] font-semibold tracking-tight shrink-0"
+          style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
+        >
+          TerrainSN
         </Link>
 
         <nav className="flex items-center gap-1">
@@ -66,7 +70,8 @@ export default function DesktopNavbar() {
           <button
             type="button"
             onClick={() => navigate(profilPath)}
-            className="w-10 h-10 rounded-full overflow-hidden bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-center text-sm font-bold text-[var(--text-primary)]"
+            className="w-9 h-9 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold"
+            style={{ border: "2px solid var(--primary)", background: "var(--primary-glow)", color: "var(--primary)" }}
             aria-label="Profil"
           >
             {photo ? (

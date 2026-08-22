@@ -1,7 +1,8 @@
-const { queryAll, queryOne } = require('../database');
+const { queryAll, queryOne, runSql } = require('../database');
 
-function logPhotoAction(database, { terrain_id, photo_id, action, fait_par, role, detail }) {
-  database.run(
+async function logPhotoAction(database, { terrain_id, photo_id, action, fait_par, role, detail }) {
+  await runSql(
+    database,
     `INSERT INTO audit_photos (terrain_id, photo_id, action, fait_par, role_fait_par, detail, created_at)
      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
@@ -15,7 +16,7 @@ function logPhotoAction(database, { terrain_id, photo_id, action, fait_par, role
   );
 }
 
-function listAuditPhotos(database, { terrain_id, role, action, depuis, jusqua, limit = 200, offset = 0 } = {}) {
+async function listAuditPhotos(database, { terrain_id, role, action, depuis, jusqua, limit = 200, offset = 0 } = {}) {
   let sql = `SELECT a.*, t.nom AS terrain_nom, p.url AS photo_url, p.nom_fichier AS photo_nom
     FROM audit_photos a
     LEFT JOIN terrains t ON t.id = a.terrain_id
@@ -29,23 +30,24 @@ function listAuditPhotos(database, { terrain_id, role, action, depuis, jusqua, l
   if (jusqua) { sql += ' AND a.created_at <= ?'; params.push(jusqua); }
   sql += ' ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?';
   params.push(Number(limit), Number(offset));
-  return queryAll(database, sql, params).map(enrichActeur(database));
+  const rows = await queryAll(database, sql, params);
+  const out = [];
+  for (const row of rows) {
+    out.push({
+      ...row,
+      fait_par_nom: await nomActeur(database, row.fait_par, row.role_fait_par),
+    });
+  }
+  return out;
 }
 
-function enrichActeur(database) {
-  return (row) => {
-    const nom = nomActeur(database, row.fait_par, row.role_fait_par);
-    return { ...row, fait_par_nom: nom };
-  };
-}
-
-function nomActeur(database, id, role) {
+async function nomActeur(database, id, role) {
   if (!id) return '—';
   if (role === 'gerant') {
-    const e = queryOne(database, 'SELECT nom, prenom FROM employes WHERE id = ?', [id]);
+    const e = await queryOne(database, 'SELECT nom, prenom FROM employes WHERE id = ?', [id]);
     return e ? [e.prenom, e.nom].filter(Boolean).join(' ').trim() || e.nom : 'Gérant';
   }
-  const u = queryOne(database, 'SELECT nom, prenom FROM users WHERE id = ?', [id]);
+  const u = await queryOne(database, 'SELECT nom, prenom FROM users WHERE id = ?', [id]);
   return u ? [u.prenom, u.nom].filter(Boolean).join(' ').trim() || u.nom : 'Super Admin';
 }
 

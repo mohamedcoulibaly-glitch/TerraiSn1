@@ -336,6 +336,14 @@ export default function ScannerModal({
           });
           return;
         }
+        if (error.code === "QR_SCAN_PRIORITY") {
+          setResult({
+            state: "invalid",
+            title: "⏳ Un créneau à la fois",
+            text: error.message || "Valide d'abord le créneau prioritaire.",
+          });
+          return;
+        }
         if (error.status === 403 || error.code === "QR_ALREADY_SCANNED") {
           setResult({
             state: "already_scanned",

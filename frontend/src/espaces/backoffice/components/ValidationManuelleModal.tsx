@@ -196,6 +196,12 @@ export default function ValidationManuelleModal({
           title: "⌛ Fenêtre dépassée",
           text: `Ce match était prévu à ${formatTime(error.match_time)}. Le délai de validation est dépassé.`,
         });
+      } else if (error.code === "QR_SCAN_PRIORITY") {
+        setResult({
+          state: "invalid",
+          title: "⏳ Un créneau à la fois",
+          text: error.message || "Valide d'abord le créneau prioritaire.",
+        });
       } else if (error.code === "QR_ALREADY_SCANNED" || error.status === 403) {
         setResult({
           state: "already_scanned",

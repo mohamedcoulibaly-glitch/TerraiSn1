@@ -7,7 +7,7 @@ const overlayClass =
   "inline-flex items-center gap-1.5 backdrop-blur-md bg-black/40 text-white border border-white/10 text-xs font-medium px-2.5 py-1 rounded-full";
 
 const dotClass: Record<Exclude<BadgeTone, "neutral">, string> = {
-  libre: "bg-emerald-400",
+  libre: "bg-[var(--success)]",
   presque: "bg-amber-400",
   complet: "bg-red-400",
 };

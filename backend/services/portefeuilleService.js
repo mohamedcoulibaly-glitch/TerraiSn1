@@ -1,6 +1,6 @@
-const { queryOne } = require('../database');
+const { queryOne, runSql } = require('../database');
 
-function crediterPortefeuilleGerant(db, {
+async function crediterPortefeuilleGerant(db, {
   gerantId,
   terrainId,
   reservationId,
@@ -15,27 +15,30 @@ function crediterPortefeuilleGerant(db, {
   const reverse = Math.max(0, encaisse - commission);
   if (!gerant || !terrain || encaisse <= 0) return { montant_reverse: 0, solde_disponible: 0 };
 
-  db.run(
+  await runSql(
+    db,
     `INSERT INTO portefeuille_gerant
         (gerant_id, terrain_id, solde_disponible, total_encaisse, total_commission_prelevee)
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(gerant_id, terrain_id) DO UPDATE SET
-          solde_disponible = solde_disponible + excluded.solde_disponible,
-          total_encaisse = total_encaisse + excluded.total_encaisse,
-          total_commission_prelevee = total_commission_prelevee + excluded.total_commission_prelevee,
+          solde_disponible = portefeuille_gerant.solde_disponible + EXCLUDED.solde_disponible,
+          total_encaisse = portefeuille_gerant.total_encaisse + EXCLUDED.total_encaisse,
+          total_commission_prelevee = portefeuille_gerant.total_commission_prelevee + EXCLUDED.total_commission_prelevee,
           updated_at = CURRENT_TIMESTAMP`,
     [gerant, terrain, reverse, encaisse, commission],
   );
 
   if (reservationId) {
-    db.run(
-      `INSERT OR IGNORE INTO reversements (gerant_id, terrain_id, reservation_id, montant, commission_prelevee, statut)
-          VALUES (?, ?, ?, ?, ?, ?)`,
+    await runSql(
+      db,
+      `INSERT INTO reversements (gerant_id, terrain_id, reservation_id, montant, commission_prelevee, statut)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT (reservation_id) DO NOTHING`,
       [gerant, terrain, reservationId, reverse, commission, statutReversement],
     );
   }
 
-  const wallet = queryOne(
+  const wallet = await queryOne(
     db,
     'SELECT solde_disponible FROM portefeuille_gerant WHERE gerant_id = ? AND terrain_id = ?',
     [gerant, terrain],
@@ -47,24 +50,26 @@ function crediterPortefeuilleGerant(db, {
   };
 }
 
-function encaisserSoldeSurPlace(db, reservation, gerantId, methode = 'especes') {
+async function encaisserSoldeSurPlace(db, reservation, gerantId, methode = 'especes') {
   const solde = Number(reservation.reste_a_payer ?? reservation.montant_restant ?? 0);
   if (solde <= 0) return 0;
 
-  db.run(
+  await runSql(
+    db,
     `UPDATE reservations
        SET reste_a_payer = 0, montant_restant = 0
      WHERE id = ? AND COALESCE(montant_restant, reste_a_payer, 0) > 0`,
     [reservation.id],
   );
 
-  db.run(
+  await runSql(
+    db,
     `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe)
      VALUES (?, ?, ?, 'paye', ?)`,
     [reservation.id, solde, methode, `SOLDE-${reservation.id}-${Date.now()}`],
   );
 
-  crediterPortefeuilleGerant(db, {
+  await crediterPortefeuilleGerant(db, {
     gerantId,
     terrainId: reservation.terrain_id,
     reservationId: reservation.id,

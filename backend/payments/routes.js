@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const paytechService = require('../paytechService');
-const { getDb, queryOne, transaction } = require('../database');
+const { getDb, queryOne, runSql, transaction } = require('../database');
 const { libererCreneauxReservation } = require('../reservationLockService');
 const logger = require('../logger');
 const {
@@ -46,20 +46,20 @@ function mountPaymentRoutes(app) {
       }
 
       const db = await getDb();
-      const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+      const reservation = await queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
       if (!reservation) return res.status(404).json({ error: 'Reservation non trouvee' });
       const domain = appDomain();
 
       if (action !== 'success') {
-        transaction(db, () => {
-          db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
-          libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
+        await transaction(db, async () => {
+          await runSql(db, "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
+          await libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
         });
         return res.json({ redirect_url: `${domain}/reservation/annule?terrain_id=${reservation.terrain_id}` });
       }
 
       await confirmerPaiementEtNotifier(reservationId, refCommand);
-      const confirmed = queryOne(db, 'SELECT statut FROM reservations WHERE id = ?', [reservationId]);
+      const confirmed = await queryOne(db, 'SELECT statut FROM reservations WHERE id = ?', [reservationId]);
       if (confirmed?.statut !== 'confirme') throw new Error('La confirmation simulee a echoue');
       return res.json({ redirect_url: `${domain}/reservation/succes?id=${reservationId}` });
     } catch (error) {
@@ -83,14 +83,14 @@ function mountPaymentRoutes(app) {
       }
 
       const db = await getDb();
-      const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+      const reservation = await queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
       if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
       const domain = appDomain();
 
       if (action === 'cancel') {
-        transaction(db, () => {
-          db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
-          libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
+        await transaction(db, async () => {
+          await runSql(db, "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
+          await libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
         });
         return res.json({ redirect_url: `${domain}/reservation/annule?terrain_id=${reservation.terrain_id}` });
       }
@@ -109,7 +109,7 @@ function mountPaymentRoutes(app) {
         }),
       });
       if (!webhookResponse.ok) throw new Error('Le webhook simulé a été rejeté');
-      const confirmed = queryOne(db, 'SELECT statut FROM reservations WHERE id = ?', [reservationId]);
+      const confirmed = await queryOne(db, 'SELECT statut FROM reservations WHERE id = ?', [reservationId]);
       if (confirmed?.statut !== 'confirme') throw new Error('La confirmation simulée a échoué');
       return res.json({ redirect_url: `${domain}/reservation/succes?id=${reservationId}` });
     } catch (error) {

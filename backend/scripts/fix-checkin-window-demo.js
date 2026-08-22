@@ -12,7 +12,7 @@ const { serializeQrPayload } = require('../services/qrPayload');
   const heure_debut = `${String(startH).padStart(2, '0')}:00`;
   const heure_fin = `${String(endH).padStart(2, '0')}:00`;
 
-  const rows = queryAll(
+  const rows = await queryAll(
     db,
     `SELECT r.id, r.statut, r.code_reservation, r.date, r.heure_debut, r.heure_fin, r.qr_code_scanne_at, r.creneau_id, r.terrain_id,
             COALESCE(c.fenetre_retard, 30) AS fenetre_retard
@@ -57,7 +57,7 @@ const { serializeQrPayload } = require('../services/qrPayload');
     expire_at: Math.floor(fenetre.finFenetre / 1000),
   });
 
-  runSql(
+  await runSql(
     db,
     `UPDATE reservations
      SET date = ?, heure_debut = ?, heure_fin = ?, qr_code_scanne_at = NULL, statut = 'confirme', qr_code_payload = ?
@@ -65,7 +65,7 @@ const { serializeQrPayload } = require('../services/qrPayload');
     [today, heure_debut, heure_fin, payload, target.id]
   );
   if (target.creneau_id) {
-    runSql(
+    await runSql(
       db,
       `UPDATE creneaux SET date = ?, heure_debut = ?, heure_fin = ?, statut = 'reserve', fenetre_retard = COALESCE(fenetre_retard, 30) WHERE id = ?`,
       [today, heure_debut, heure_fin, target.creneau_id]

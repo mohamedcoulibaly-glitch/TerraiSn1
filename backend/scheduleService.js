@@ -27,9 +27,18 @@ function formatHour(h) {
 }
 
 function normalizeHourString(time) {
-  const h = parseHour(time);
-  if (h === 24) return '00:00';
-  return formatHour(h);
+  const raw = String(time || '').trim();
+  if (raw === '24:00' || raw === '24') return '00:00';
+  const m = raw.match(/^(\d{1,2})(?::(\d{1,2}))?/);
+  if (!m) {
+    const h = parseHour(time);
+    if (h === 24) return '00:00';
+    return formatHour(h);
+  }
+  const h = Math.min(23, Math.max(0, parseInt(m[1], 10) || 0));
+  const min = Math.min(59, Math.max(0, parseInt(m[2] || '0', 10) || 0));
+  // Compat tarifs / grilles horaires : si minutes absentes → :00
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 
 /** Interprète heure_fin "00:00" comme fin de journée (24h exclusive). */

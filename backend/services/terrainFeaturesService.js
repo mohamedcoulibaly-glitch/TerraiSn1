@@ -1,4 +1,4 @@
-const { queryAll, queryOne } = require('../database');
+const { queryAll, queryOne, runSql } = require('../database');
 
 const FEATURES = [
   { cle: 'reservations_en_ligne', label: 'Réservations en ligne', description: 'Les joueurs peuvent réserver et payer en ligne', icone: 'Globe', defaut: true, impact: 'joueur' },
@@ -10,8 +10,8 @@ const FEATURES = [
   { cle: 'dette_commission', label: 'Système de dette commission', description: 'Comptabilisation des commissions hors PayTech', icone: 'Receipt', defaut: true, impact: 'gerant' },
 ];
 
-function listFeatures(database, terrainId) {
-  const rows = queryAll(database, 'SELECT feature_cle, actif FROM terrain_features WHERE terrain_id = ?', [Number(terrainId)]);
+async function listFeatures(database, terrainId) {
+  const rows = await queryAll(database, 'SELECT feature_cle, actif FROM terrain_features WHERE terrain_id = ?', [Number(terrainId)]);
   const map = new Map(rows.map((r) => [r.feature_cle, Number(r.actif) === 1]));
   return FEATURES.map((f) => ({
     ...f,
@@ -19,17 +19,18 @@ function listFeatures(database, terrainId) {
   }));
 }
 
-function saveFeatures(database, terrainId, items, actorId) {
+async function saveFeatures(database, terrainId, items, actorId) {
   const wanted = Array.isArray(items) ? items : [];
   for (const item of wanted) {
     const def = FEATURES.find((f) => f.cle === item.cle);
     if (!def) continue;
     const actif = item.actif ? 1 : 0;
-    const existing = queryOne(database, 'SELECT id FROM terrain_features WHERE terrain_id = ? AND feature_cle = ?', [Number(terrainId), def.cle]);
+    const existing = await queryOne(database, 'SELECT id FROM terrain_features WHERE terrain_id = ? AND feature_cle = ?', [Number(terrainId), def.cle]);
     if (existing) {
-      database.run('UPDATE terrain_features SET actif = ?, configure_par = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [actif, actorId || null, existing.id]);
+      await runSql(database, 'UPDATE terrain_features SET actif = ?, configure_par = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [actif, actorId || null, existing.id]);
     } else {
-      database.run(
+      await runSql(
+        database,
         'INSERT INTO terrain_features (terrain_id, feature_cle, actif, configure_par) VALUES (?, ?, ?, ?)',
         [Number(terrainId), def.cle, actif, actorId || null],
       );

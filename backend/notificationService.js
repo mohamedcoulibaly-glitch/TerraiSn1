@@ -79,21 +79,105 @@ function sessionKeyFromReservation(reservation = {}) {
   return client.gerantSessionKey(reservation.gerant_id) || 'platform';
 }
 
+/**
+ * Session prête pour écrire au joueur : gérant si connecté, sinon plateforme.
+ */
+async function resolvePlayerOutboundSession(reservation = {}) {
+  const preferred = sessionKeyFromReservation(reservation);
+  try {
+    const st = await client.getStatus(preferred);
+    if (st?.connected) return preferred;
+  } catch {
+    /* ignore */
+  }
+  if (preferred !== 'platform') {
+    try {
+      const platform = await client.getStatus('platform');
+      if (platform?.connected) {
+        console.log(
+          `↪️ Notif joueur via session plateforme (gérant ${preferred} non connecté)`,
+        );
+        return 'platform';
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const err = new Error(
+    preferred === 'platform'
+      ? 'WhatsApp n’est pas connecté. Contactez le développeur.'
+      : 'WhatsApp n’est pas connecté. Allez dans Paramètres pour le lier (ou reconnectez WhatsApp plateforme).',
+  );
+  err.statusCode = 503;
+  throw err;
+}
+
+/**
+ * Attache le gérant de garde (source de vérité multi-gérants) aux détails résa.
+ * Ne lit plus le premier employes.terrain_id au hasard.
+ */
+async function attachGerantDeGarde(data) {
+  if (!data?.terrain_id) return data;
+  const { getGerantDeGarde, getGerantPrincipal } = require('./services/gerantService');
+  let garde = await getGerantDeGarde(data.terrain_id, new Date());
+  if (!garde) {
+    console.error(`[NOTIF] Aucun gérant trouvé pour terrain ${data.terrain_id}`);
+    garde = await getGerantPrincipal(data.terrain_id);
+  }
+  if (!garde) return data;
+  data.gerant_id = garde.gerant_id;
+  data.gerant_nom = [garde.prenom, garde.nom].filter(Boolean).join(' ').trim() || garde.nom;
+  data.gerant_prenom = garde.prenom;
+  data.gerant_telephone = garde.telephone;
+  data.gerant_whatsapp = garde.whatsapp_number || garde.telephone;
+  data.gerant_est_principal = Number(garde.est_principal) === 1 ? 1 : 0;
+  return data;
+}
+
+/** Notifie le gérant de garde + copie au principal si différent. */
+async function notifierGerantTerrain(terrainId, message, sessionKey = 'platform', dateTime = new Date()) {
+  const { getGerantDeGarde, getGerantPrincipal } = require('./services/gerantService');
+  let garde = await getGerantDeGarde(terrainId, dateTime);
+  if (!garde) {
+    console.error(`[NOTIF] Aucun gérant trouvé pour terrain ${terrainId}`);
+    garde = await getGerantPrincipal(terrainId);
+  }
+  if (!garde) return null;
+
+  const tel = garde.whatsapp_number || garde.telephone;
+  if (tel) {
+    await envoyerWhatsApp(tel, message, sessionKey || client.gerantSessionKey(garde.gerant_id) || 'platform');
+  }
+
+  if (!Number(garde.est_principal)) {
+    const principal = await getGerantPrincipal(terrainId);
+    const pTel = principal?.whatsapp_number || principal?.telephone;
+    if (principal && pTel && pTel !== tel) {
+      const prenom = garde.prenom || 'Un gérant';
+      await envoyerWhatsApp(
+        pTel,
+        `📋 [Info] ${prenom} est de garde et vient de recevoir la notification suivante :\n\n${message}`,
+        client.gerantSessionKey(principal.gerant_id) || 'platform',
+      );
+    }
+  }
+  return garde;
+}
+
 async function details(reservationId) {
   const db = await getDb();
-  return queryOne(
+  const data = await queryOne(
     db,
     `SELECT r.*, t.nom AS terrain_nom, t.adresse, t.ville, t.latitude, t.longitude,
-      e.id AS gerant_id, e.nom AS gerant_nom, e.telephone AS gerant_telephone, e.whatsapp_number AS gerant_whatsapp,
       u.prenom AS joueur_prenom, u.telephone AS joueur_tel_user
      FROM reservations r
      JOIN terrains t ON t.id = r.terrain_id
-     LEFT JOIN employes e ON e.terrain_id = t.id AND e.is_active = 1
      LEFT JOIN users u ON u.id = r.joueur_id
      WHERE r.id = ?
      LIMIT 1`,
     [reservationId]
   );
+  return attachGerantDeGarde(data);
 }
 
 function telephoneJoueur(data) {
@@ -110,7 +194,7 @@ function prenomJoueur(data) {
  */
 async function assurerQrCodeUrl(reservationId) {
   const db = await getDb();
-  const row = queryOne(
+  const row = await queryOne(
     db,
     `SELECT r.id, r.code_reservation, r.qr_code_url, r.qr_code_payload, r.creneau_id, r.terrain_id,
             r.date, r.heure_debut, r.heure_fin,
@@ -150,7 +234,7 @@ async function assurerQrCodeUrl(reservationId) {
     errorCorrectionLevel: 'M',
   });
   const publicUrl = `/uploads/qr/${filename}`;
-  runSql(db, 'UPDATE reservations SET qr_code_url = ?, qr_code_payload = COALESCE(qr_code_payload, ?) WHERE id = ?', [
+  await runSql(db, 'UPDATE reservations SET qr_code_url = ?, qr_code_payload = COALESCE(qr_code_payload, ?) WHERE id = ?', [
     publicUrl,
     payload,
     reservationId,
@@ -220,7 +304,7 @@ async function envoyerConfirmation(reservationId) {
     `c'est lui qui ouvre les portes 😄\n` +
     `⚠️ Ce QR code est à usage unique — ne le partage pas.`;
 
-  const waKey = sessionKeyFromReservation(data);
+  const waKey = await resolvePlayerOutboundSession(data);
   await envoyerWhatsApp(tel, message, waKey);
 
   if (data.qr_code_url) {
@@ -243,13 +327,87 @@ async function envoyerConfirmation(reservationId) {
     }
   }
 
-  if (data.gerant_whatsapp || data.gerant_telephone) {
-    await envoyerWhatsApp(
-      data.gerant_whatsapp || data.gerant_telephone,
+  if (data.terrain_id) {
+    await notifierGerantTerrain(
+      data.terrain_id,
       `Paiement reçu. Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}.`,
-      waKey
-    );
+      'platform',
+    ).catch((err) => {
+      console.warn('⚠️ Notif gérant après confirmation:', err.message || err);
+    });
   }
+}
+
+/** Template — confirmation manuelle (avance reçue hors PayTech) */
+async function envoyerConfirmationManuelle(reservationId) {
+  const qrUrl = await assurerQrCodeUrl(reservationId);
+  const data = await details(reservationId);
+  if (!data) return;
+  if (qrUrl) data.qr_code_url = qrUrl;
+
+  const prenom = prenomJoueur(data);
+  const tel = telephoneJoueur(data);
+  const quartier = data.adresse || data.ville || '';
+  const lienMaps =
+    data.latitude && data.longitude
+      ? `https://maps.google.com/?q=${data.latitude},${data.longitude}`
+      : null;
+
+  const message =
+    `⚽ C'est confirmé ${prenom} !\n\n` +
+    `Ton terrain t'attend :\n` +
+    `📍 ${data.terrain_nom} — ${quartier}\n` +
+    `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
+    `🏷️ Code : *${data.code_reservation}*\n\n` +
+    (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
+    `💰 Avance reçue : ${formaterMontant(data.montant_avance || data.acompte)} ✓\n` +
+    `💵 À régler sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}\n\n` +
+    `📌 Viens *30 minutes avant* avec ce QR code 😄\n` +
+    `⚠️ Ce QR code est à usage unique.`;
+
+  const waKey = await resolvePlayerOutboundSession(data);
+  await envoyerWhatsApp(tel, message, waKey);
+
+  if (data.qr_code_url) {
+    const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
+    const relative = String(data.qr_code_url).replace(/^\/uploads\//, '');
+    const absolutePath = path.join(UPLOAD_ROOT, relative);
+    const caption = `QR Code — ${data.code_reservation}`;
+
+    if (fs.existsSync(absolutePath) && String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
+      await client.sendImageForSession(waKey, formatNumero(tel), {
+        filePath: absolutePath,
+        mimetype: 'image/png',
+        caption,
+      });
+    } else {
+      const imageUrl = data.qr_code_url.startsWith('http')
+        ? data.qr_code_url
+        : `${domain}${data.qr_code_url}`;
+      await envoyerImageWhatsApp(tel, imageUrl, caption, waKey);
+    }
+  }
+}
+
+/** Template — créneau confirmé par un autre joueur (perdant non payé) */
+async function envoyerCreneauPris(reservationId) {
+  const data = await details(reservationId);
+  if (!data) return;
+  const prenom = prenomJoueur(data);
+  const tel = telephoneJoueur(data);
+  const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
+  const lienDispo = `${domain}/terrain/${data.terrain_id}`;
+  await envoyerWhatsApp(
+    tel,
+    `😕 Oups ${prenom}...\n\n` +
+      `Ce créneau du ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)} ` +
+      `vient d'être confirmé par un autre joueur.\n\n` +
+      `Ton lien de paiement n'est plus valable.\n\n` +
+      `Voici ce qui est encore dispo :\n` +
+      `👉 ${lienDispo}\n\n` +
+      `On t'en trouve un autre 💪`,
+    sessionKeyFromReservation(data)
+  );
 }
 
 /** Template 4 — Remboursement créneau pris */
@@ -303,16 +461,126 @@ async function envoyerReversement({
   );
 }
 
-const envoyerReversementGerant = envoyerReversement;
+/** Annulation joueur / gérant — messages selon politique terrain + notif gérants. */
+async function envoyerAnnulation(
+  reservationId,
+  { rembourse = false, politique = null, traiteParGerant = false } = {},
+) {
+  const data = await details(reservationId);
+  if (!data) return;
+  const prenom = prenomJoueur(data);
+  const tel = telephoneJoueur(data);
+  const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
+  const lienDispo = `${domain}/terrain/${data.terrain_id}`;
+  const code = data.code_reservation || `TF-${reservationId}`;
+  const raison = politique?.raison || (rembourse ? 'dans_delai' : 'hors_delai');
+  const typeLabel =
+    politique?.type_annulation === 'avec_remboursement' || rembourse
+      ? 'avec remboursement'
+      : 'sans remboursement';
 
-async function envoyerAlerteSilencieuse({ telephone, prenom, gerant_prenom, terrain_nom }) {
+  let detailRemboursement;
+  if (rembourse || raison === 'dans_delai') {
+    detailRemboursement = `Type : *annulation avec remboursement*.\nTon avance sera remboursée sous 24h.`;
+  } else if (raison === 'pas_confirmee') {
+    detailRemboursement = `Type : *annulation sans remboursement*.\nAucun paiement n'avait encore été confirmé.`;
+  } else if (raison === 'politique_sans_remboursement') {
+    detailRemboursement =
+      `Type : *annulation sans remboursement*.\n` +
+      `La politique de ce terrain n'autorise pas de remboursement.`;
+  } else {
+    const delai = Number(politique?.delai_heures || 0);
+    detailRemboursement =
+      `Type : *annulation sans remboursement* (délai dépassé).\n` +
+      (delai > 0
+        ? `Le délai de ${delai} h après confirmation est dépassé : l'avance n'est pas remboursée.`
+        : `L'avance n'est pas remboursée.`);
+  }
+
+  const initiateur = traiteParGerant ? 'par le gérant du terrain' : 'à ta demande';
+  if (tel) {
+    await envoyerWhatsApp(
+      tel,
+      `ℹ️ ${prenom || 'Salut'}, ta réservation *${code}* du ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)} a été annulée ${initiateur}.\n\n` +
+        `${detailRemboursement}\n\n` +
+        `D'autres créneaux sont dispo ici :\n` +
+        `👉 ${lienDispo}`,
+      await resolvePlayerOutboundSession(data),
+    );
+  }
+
+  const joueurLabel = data.joueur_nom || prenom || 'Joueur';
+  const telJoueur = tel || '—';
+  await notifierGerantTerrain(
+    data.terrain_id,
+    `⚠️ Réservation annulée — *${code}*\n\n` +
+      `${joueurLabel} (${telJoueur})\n` +
+      `${formaterDate(data.date)} · ${formaterHeure(data.heure_debut)}–${formaterHeure(data.heure_fin)}\n` +
+      `Type : *${typeLabel}*\n` +
+      `Créneau libéré — disponible pour une nouvelle réservation.`,
+  );
+}
+
+/**
+ * Reversement : toujours au gérant principal (gestion de l'argent).
+ * Si telephone/nom fournis explicitement (flow paiement Mohamed), on les respecte.
+ */
+async function envoyerReversementGerant(opts = {}) {
+  if (opts.telephone) {
+    return envoyerReversement(opts);
+  }
+  if (opts.terrain_id) {
+    const { getGerantPrincipal } = require('./services/gerantService');
+    const principal = await getGerantPrincipal(opts.terrain_id);
+    if (!principal) {
+      console.error(`[NOTIF] Reversement : aucun principal pour terrain ${opts.terrain_id}`);
+      return;
+    }
+    return envoyerReversement({
+      ...opts,
+      telephone: principal.whatsapp_number || principal.telephone,
+      nom: [principal.prenom, principal.nom].filter(Boolean).join(' ') || principal.nom,
+      gerant_id: principal.gerant_id,
+    });
+  }
+  return envoyerReversement(opts);
+}
+
+/** Alerte score : toujours au principal (si terrain_id) ou telephone fourni. */
+async function envoyerAlerteSilencieuse({ telephone, prenom, gerant_prenom, terrain_nom, terrain_id }) {
+  let tel = telephone;
+  if (!tel && terrain_id) {
+    const { getGerantPrincipal } = require('./services/gerantService');
+    const principal = await getGerantPrincipal(terrain_id);
+    tel = principal?.whatsapp_number || principal?.telephone;
+  }
+  if (!tel) return;
   await envoyerWhatsApp(
-    telephone,
+    tel,
     `Petit point sur ${terrain_nom} ${prenom || ''}.\n\n` +
       `Ces deux derniers mois, quelques indicateurs sont un peu bas pour ${gerant_prenom || 'votre gerant'}. ` +
       `Rien d'alarmant, mais ca vaut peut-etre une petite discussion avec lui.\n\n` +
       `Tu peux voir le detail dans ton dashboard.`
   );
+}
+
+/** Résumé semaine → tous les gérants actifs du terrain. */
+async function envoyerResumeSemaine(terrainId, message) {
+  const { getGerantsTerrain } = require('./services/gerantService');
+  const gerants = await getGerantsTerrain(terrainId);
+  if (!gerants.length) {
+    console.error(`[NOTIF] Resume semaine : aucun gérant pour terrain ${terrainId}`);
+    return;
+  }
+  for (const g of gerants) {
+    const tel = g.whatsapp_number || g.telephone;
+    if (!tel) continue;
+    await envoyerWhatsApp(
+      tel,
+      message,
+      client.gerantSessionKey(g.gerant_id) || 'platform',
+    );
+  }
 }
 
 module.exports = {
@@ -328,9 +596,15 @@ module.exports = {
   envoyerOTP,
   envoyerLienPaiement,
   envoyerConfirmation,
+  envoyerConfirmationManuelle,
+  envoyerCreneauPris,
   envoyerRemboursement,
+  envoyerAnnulation,
   envoyerReversement,
   envoyerReversementGerant,
   envoyerAlerteSilencieuse,
+  envoyerResumeSemaine,
+  notifierGerantTerrain,
+  attachGerantDeGarde,
   sessionKeyFromReservation,
 };

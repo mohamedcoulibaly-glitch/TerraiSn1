@@ -1,10 +1,15 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Eye, EyeOff } from "lucide-react";
+import { AlertCircle, Eye, EyeOff, Mail, Phone } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { homeForUser, normalizeRole } from "@/auth/roles";
 import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
+import { messageErreurAuth } from "@/auth/loginErrors";
+import FloatingInput from "@/components/FloatingInput";
+import BoutonSoumettre from "@/components/BoutonSoumettre";
+import MotDePasseOublie from "@/components/MotDePasseOublie";
+import LoginHeroVideo from "@/components/LoginHeroVideo";
 
 const API_URL = import.meta.env.VITE_API_URL || "/api";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -26,47 +31,6 @@ function identifierError(value: string): string | null {
   return phoneError(trimmed);
 }
 
-function FloatingField({
-  id,
-  label,
-  focused,
-  filled,
-  children,
-}: {
-  id: string;
-  label: string;
-  focused: boolean;
-  filled: boolean;
-  children: React.ReactNode;
-}) {
-  const floated = focused || filled;
-  return (
-    <div
-      className={`relative flex items-center gap-2 rounded-[var(--radius-md)] border bg-[var(--color-surface-2)] px-4 min-h-[56px] transition-colors duration-200 cursor-text ${
-        focused ? "border-[var(--color-primary)]" : "border-[var(--color-border)]"
-      }`}
-      onMouseDown={(e) => {
-        const target = e.target as HTMLElement;
-        if (target.closest("button, a, input, textarea, select")) return;
-        e.preventDefault();
-        (document.getElementById(id) as HTMLInputElement | null)?.focus();
-      }}
-    >
-      <label
-        htmlFor={id}
-        className={`absolute left-4 transition-all duration-200 pointer-events-none ${
-          floated
-            ? "top-1.5 text-[11px] text-[var(--color-primary)]"
-            : "top-1/2 -translate-y-1/2 text-sm text-[var(--color-text-muted)]"
-        }`}
-      >
-        {label}
-      </label>
-      <div className="flex-1 flex items-center gap-1 self-stretch pt-5 pb-2 min-w-[2rem]">{children}</div>
-    </div>
-  );
-}
-
 /**
  * /backoffice/login — espace administration uniquement.
  * Ne redirige plus automatiquement si une session staff existe :
@@ -82,7 +46,7 @@ export default function BackofficeLoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [focus, setFocus] = useState<string | null>(null);
+  const [showForgot, setShowForgot] = useState(false);
   /** Affiche le formulaire même si une session staff est encore active. */
   const [forceLoginForm, setForceLoginForm] = useState(
     () => searchParams.get("switch") === "1",
@@ -158,9 +122,9 @@ export default function BackofficeLoginPage() {
       if (!res.ok) {
         const raw = typeof data.error === "string" ? data.error : "";
         if (res.status === 429 || /trop de tentatives/i.test(raw)) {
-          throw new Error(RATE_LIMIT_MSG);
+          throw Object.assign(new Error(RATE_LIMIT_MSG), { status: 429 });
         }
-        throw new Error("Identifiants incorrects");
+        throw Object.assign(new Error(raw || "Identifiants incorrects"), { status: res.status });
       }
 
       const connected = data.user;
@@ -168,7 +132,7 @@ export default function BackofficeLoginPage() {
       const role = normalizeRole(connected);
       if (!role || role === "joueur") {
         await logout({ redirect: false });
-        setError("Accès non autorisé. Cet espace est réservé à l'administration.");
+        setError("Accès non autorisé pour ce rôle.");
         return;
       }
 
@@ -186,165 +150,182 @@ export default function BackofficeLoginPage() {
       navigate(homeForUser(connected), { replace: true });
     } catch (err: any) {
       const msg = String(err?.message || "");
-      const message =
-        /trop de tentatives/i.test(msg)
-          ? RATE_LIMIT_MSG
-          : msg || "Identifiants incorrects";
+      const message = /trop de tentatives/i.test(msg)
+        ? RATE_LIMIT_MSG
+        : messageErreurAuth(err, "backoffice");
       setError(message);
-      toast.error(message);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const inputClass =
-    "relative z-[2] w-full min-w-[2rem] h-full bg-transparent outline-none text-sm text-[var(--color-text-primary)]";
-
   const roleLabel =
     staffRole && ROLE_LABEL[staffRole] ? ROLE_LABEL[staffRole] : "Administration";
 
+  const trimmedId = identifier.trim();
+  const looksEmail = trimmedId.includes("@");
+  const looksPhone = !!trimmedId && !looksEmail && !/[a-zA-Z]/.test(trimmedId);
+  const idLiveError = trimmedId ? identifierError(identifier) : null;
+  const idValid = !!trimmedId && !idLiveError;
+
+  const brand = (
+    <div className="px-6">
+      <p className="text-[22px] font-black tracking-tight text-white">
+        TERRAIN<span className="text-[var(--lb-primary)]">.SN</span>
+      </p>
+      <span
+        className="inline-flex mt-2 px-3 py-1 rounded-full text-[11px] font-semibold backdrop-blur-md border"
+        style={{
+          background: "var(--lb-badge-bg)",
+          color: "var(--lb-badge-text)",
+          borderColor: "color-mix(in srgb, var(--lb-primary) 30%, transparent)",
+        }}
+      >
+        Espace administration
+      </span>
+    </div>
+  );
+
+  const formInner = showExistingSession ? (
+    <>
+      <h2
+        className="text-[20px] font-bold mb-2 text-center"
+        style={{ fontFamily: "var(--font-display)", color: "var(--lb-text)" }}
+      >
+        Session active
+      </h2>
+      <p className="text-[13px] text-center mb-6" style={{ color: "var(--lb-muted)" }}>
+        Vous êtes déjà connecté en tant que{" "}
+        <span className="font-medium" style={{ color: "var(--lb-text)" }}>{roleLabel}</span>
+        {user?.email ? ` (${user.email})` : user?.telephone ? ` (${user.telephone})` : ""}.
+        Choisissez de continuer ou de vous connecter avec un autre compte (propriétaire, gérant…).
+      </p>
+      <div className="flex flex-col gap-3">
+        <BoutonSoumettre
+          theme="backoffice"
+          type="button"
+          label="Continuer vers mon espace"
+          labelLoading="Redirection..."
+          loading={false}
+          onClick={() => navigate(homeForUser(user), { replace: true })}
+        />
+        <button
+          type="button"
+          onClick={switchAccount}
+          className="w-full h-[52px] rounded-[14px] text-sm font-medium min-h-[44px] border"
+          style={{
+            borderColor: "var(--lb-border)",
+            color: "var(--lb-text)",
+            background: "var(--lb-sheet-bg)",
+          }}
+        >
+          Se connecter avec un autre compte
+        </button>
+      </div>
+    </>
+  ) : (
+    <>
+      <h2
+        className="text-[20px] font-bold"
+        style={{ fontFamily: "var(--font-display)", color: "var(--lb-text)" }}
+      >
+        Connexion
+      </h2>
+      <p className="text-[13px] mb-6" style={{ color: "var(--lb-muted)" }}>
+        Gérant · Propriétaire
+      </p>
+
+      <form onSubmit={handleSubmit} className="login-form" noValidate>
+        <FloatingInput
+          id="bo-id"
+          theme="backoffice"
+          label="Téléphone ou email"
+          type={looksEmail ? "email" : "text"}
+          inputMode={looksEmail ? "email" : "tel"}
+          autoComplete="username"
+          value={identifier}
+          onChange={onIdentifierChange}
+          erreur={fieldErrors.identifier || ((looksEmail || looksPhone) && idLiveError ? idLiveError : undefined)}
+          succes={idValid && (looksEmail || looksPhone)}
+          iconeDroite={
+            looksPhone ? <Phone className="w-4 h-4" /> : looksEmail ? <Mail className="w-4 h-4" /> : undefined
+          }
+        />
+
+        <FloatingInput
+          id="bo-pass"
+          theme="backoffice"
+          label="Mot de passe"
+          type={showPassword ? "text" : "password"}
+          autoComplete="current-password"
+          value={password}
+          onChange={(v) => {
+            setPassword(v);
+            setFieldErrors((f) => ({ ...f, password: "" }));
+            setError("");
+          }}
+          erreur={fieldErrors.password}
+          iconeDroite={showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          onIconeDroiteClick={() => setShowPassword(!showPassword)}
+        />
+
+        <button
+          type="button"
+          className="login-forgot"
+          onClick={() => setShowForgot(true)}
+        >
+          Mot de passe oublié ?
+        </button>
+
+        <BoutonSoumettre
+          theme="backoffice"
+          label="Se connecter"
+          labelLoading="Connexion en cours..."
+          loading={submitting}
+          onClick={() => {}}
+        />
+        {error ? (
+          <p
+            className="flex items-center gap-2 text-[13px] animate-[login-fade-in_0.2s_ease]"
+            style={{ color: "var(--lb-error)" }}
+          >
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            {error}
+          </p>
+        ) : null}
+      </form>
+
+      <p className="text-center text-[12px] mt-6 leading-relaxed" style={{ color: "var(--lb-muted)" }}>
+        Ton accès est créé par l&apos;administration.
+        <br />
+        Pour toute question :{" "}
+        <a href="mailto:support@terrainsn.sn" className="underline underline-offset-2">
+          support@terrainsn.sn
+        </a>
+      </p>
+    </>
+  );
+
   return (
-    <div className="min-h-screen bg-[var(--color-sidebar)] flex flex-col items-center justify-center px-6 py-10">
-      <div className="text-center mb-8">
-        <div
-          className="inline-flex items-center justify-center w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--color-primary)] text-white text-xl font-semibold mb-3"
-          style={{ fontFamily: "var(--font-display)" }}
-        >
-          TS
-        </div>
-        <h1
-          className="text-xl font-semibold text-white tracking-tight"
-          style={{ fontFamily: "var(--font-display)" }}
-        >
-          TerrainSN
-        </h1>
-        <p className="text-sm text-white/45 mt-1.5">Espace administration</p>
+    <div className="login-backoffice">
+      <div className="login-media">
+        <LoginHeroVideo />
+        <div className="login-bg-overlay" aria-hidden />
+        <div className="login-brand">{brand}</div>
       </div>
 
-      <div className="w-full max-w-[420px] bg-white rounded-[var(--radius-lg)] p-6 sm:p-10 shadow-xl">
-        {showExistingSession ? (
-          <>
-            <h2
-              className="text-lg font-semibold text-[var(--color-text-primary)] mb-2 text-center"
-              style={{ fontFamily: "var(--font-display)" }}
-            >
-              Session active
-            </h2>
-            <p className="text-sm text-[var(--color-text-muted)] text-center mb-6">
-              Vous êtes déjà connecté en tant que{" "}
-              <span className="font-medium text-[var(--color-text-primary)]">{roleLabel}</span>
-              {user?.email ? ` (${user.email})` : user?.telephone ? ` (${user.telephone})` : ""}.
-              Choisissez de continuer ou de vous connecter avec un autre compte (propriétaire, gérant…).
-            </p>
-            <div className="flex flex-col gap-3">
-              <button
-                type="button"
-                onClick={() => navigate(homeForUser(user), { replace: true })}
-                className="w-full h-[52px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium hover:bg-[var(--color-primary-light)]"
-              >
-                Continuer vers mon espace
-              </button>
-              <button
-                type="button"
-                onClick={switchAccount}
-                className="w-full h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] text-[var(--color-text-primary)] text-sm font-medium hover:bg-[var(--color-surface-2)]"
-              >
-                Se connecter avec un autre compte
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <h2
-              className="text-lg font-semibold text-[var(--color-text-primary)] mb-6 text-center"
-              style={{ fontFamily: "var(--font-display)" }}
-            >
-              Connexion
-            </h2>
-
-            {error && (
-              <div className="mb-4 rounded-[var(--radius-md)] bg-red-50 px-4 py-3 text-sm text-[var(--color-danger)]">
-                {error}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-              <div>
-                <FloatingField
-                  id="bo-id"
-                  label="Téléphone ou Email"
-                  focused={focus === "id"}
-                  filled={!!identifier}
-                >
-                  <input
-                    id="bo-id"
-                    type="text"
-                    inputMode={identifier.includes("@") ? "email" : "tel"}
-                    autoComplete="username"
-                    value={identifier}
-                    onFocus={() => setFocus("id")}
-                    onBlur={() => setFocus(null)}
-                    onChange={(e) => onIdentifierChange(e.target.value)}
-                    className={inputClass}
-                  />
-                </FloatingField>
-                {fieldErrors.identifier && (
-                  <p className="mt-1.5 text-xs text-[var(--color-danger)]">{fieldErrors.identifier}</p>
-                )}
-              </div>
-
-              <div>
-                <FloatingField
-                  id="bo-pass"
-                  label="Mot de passe"
-                  focused={focus === "pass"}
-                  filled={!!password}
-                >
-                  <input
-                    id="bo-pass"
-                    type={showPassword ? "text" : "password"}
-                    value={password}
-                    onFocus={() => setFocus("pass")}
-                    onBlur={() => setFocus(null)}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                      setFieldErrors((f) => ({ ...f, password: "" }));
-                      setError("");
-                    }}
-                    className={inputClass}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="text-[var(--color-text-muted)] p-1"
-                    aria-label={showPassword ? "Masquer" : "Afficher"}
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </FloatingField>
-                {fieldErrors.password && (
-                  <p className="mt-1.5 text-xs text-[var(--color-danger)]">{fieldErrors.password}</p>
-                )}
-              </div>
-
-              <button
-                type="submit"
-                disabled={submitting}
-                className="w-full h-[52px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium hover:bg-[var(--color-primary-light)] disabled:bg-[var(--color-text-muted)] disabled:cursor-not-allowed mt-2 inline-flex items-center justify-center gap-2"
-              >
-                {submitting ? (
-                  <>
-                    <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                    Connexion...
-                  </>
-                ) : (
-                  "Se connecter"
-                )}
-              </button>
-            </form>
-          </>
-        )}
+      <div className="login-sheet">
+        {formInner}
       </div>
+      <MotDePasseOublie
+        open={showForgot}
+        onOpenChange={setShowForgot}
+        theme="backoffice"
+        telephoneInitial={identifier.includes("@") ? "" : identifier}
+        onSucces={() => {
+          window.setTimeout(() => document.getElementById("bo-pass")?.focus(), 50);
+        }}
+      />
     </div>
   );
 }

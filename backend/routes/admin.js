@@ -24,6 +24,7 @@ const {
   terrainAUnePhotoPrincipale,
 } = require('../terrainPhotoService');
 const { syncApresModificationTerrain } = require('../services/configSync');
+const { normaliserDelaiVerrouPaiementMin } = require('../reservationLockService');
 const detteService = require('../services/detteCommissionService');
 const commoditesService = require('../services/commoditesService');
 const { logPhotoAction, listAuditPhotos } = require('../services/auditPhotos');
@@ -31,6 +32,7 @@ const { listAuditCommodites } = require('../services/auditCommodites');
 const essaiService = require('../services/essaiService');
 const terrainFeaturesService = require('../services/terrainFeaturesService');
 const modeRevenuService = require('../services/modeRevenuService');
+const { registerAdminGerantsRoutes } = require('./multiGerants');
 
 const photoUpload = multer({
   storage: multer.memoryStorage(),
@@ -67,7 +69,7 @@ router.post('/auth/login', async (req, res) => {
     const db = await getDb();
     const { telephone, password } = req.body;
     const normalized = String(telephone || '').replace(/\D/g, '');
-    const user = queryAll(db, "SELECT * FROM users WHERE (role = 'super_admin' OR role = 'superadmin') AND is_active = 1").find((item) => String(item.telephone || '').replace(/\D/g, '') === normalized);
+    const user = ((await queryAll(db, "SELECT * FROM users WHERE (role = 'super_admin' OR role = 'superadmin') AND is_active = 1")).find((item) => String(item.telephone || '').replace(/\D/g, '') === normalized));
     if (!user || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Acces refuse' });
     const token = jwt.sign({ id: user.id, telephone: user.telephone, role: 'super_admin', accountType: 'user' }, process.env.JWT_SECRET || 'terrainsn_secret_key_2026', { expiresIn: '8h' });
     res.json({ token, user: { id: user.id, nom: user.nom, telephone: user.telephone, role: 'super_admin', accountType: 'user' } });
@@ -78,43 +80,45 @@ router.post('/auth/login', async (req, res) => {
 
 router.use(authMiddleware, requireRole('super_admin'));
 
+registerAdminGerantsRoutes(router);
+
 router.get('/dashboard', async (req, res) => {
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const month = today.slice(0, 7);
   res.json({
-    terrainsActifs: queryOne(db, 'SELECT COUNT(*) AS total FROM terrains WHERE is_active = 1').total,
-    reservationsAujourdhui: queryOne(db, 'SELECT COUNT(*) AS total FROM reservations WHERE date = ?', [today]).total,
-    revenusMois: queryOne(db, "SELECT COALESCE(SUM(prix_total), 0) AS total FROM reservations WHERE statut = 'joue' AND substr(date, 1, 7) = ?", [month]).total,
+    terrainsActifs: ((await queryOne(db, 'SELECT COUNT(*) AS total FROM terrains WHERE is_active = 1')).total),
+    reservationsAujourdhui: ((await queryOne(db, 'SELECT COUNT(*) AS total FROM reservations WHERE date = ?', [today])).total),
+    revenusMois: ((await queryOne(db, "SELECT COALESCE(SUM(prix_total), 0) AS total FROM reservations WHERE statut = 'joue' AND substr(date, 1, 7) = ?", [month])).total),
   });
 });
 
 router.get('/profile', async (req, res) => {
   const db = await getDb();
-  const account = queryOne(db, `SELECT id, nom, email, telephone, role, is_active, created_at
+  const account = await queryOne(db, `SELECT id, nom, email, telephone, role, is_active, created_at
     FROM users WHERE id = ?`, [req.user.id]);
   const month = new Date().toISOString().slice(0, 7);
   const summary = {
-    terrains_total: queryOne(db, 'SELECT COUNT(*) AS total FROM terrains').total,
-    terrains_actifs: queryOne(db, 'SELECT COUNT(*) AS total FROM terrains WHERE is_active = 1').total,
-    proprietaires: queryOne(db, 'SELECT COUNT(*) AS total FROM proprietaires').total,
-    gerants: queryOne(db, 'SELECT COUNT(*) AS total FROM employes').total,
-    reservations_jouees_mois: queryOne(db, "SELECT COUNT(*) AS total FROM reservations WHERE statut IN ('joue','match_joue') AND substr(date, 1, 7) = ?", [month]).total,
-    avances_mois: queryOne(db, `SELECT COALESCE(SUM(p.montant_acompte), 0) AS total
+    terrains_total: ((await queryOne(db, 'SELECT COUNT(*) AS total FROM terrains')).total),
+    terrains_actifs: ((await queryOne(db, 'SELECT COUNT(*) AS total FROM terrains WHERE is_active = 1')).total),
+    proprietaires: ((await queryOne(db, 'SELECT COUNT(*) AS total FROM proprietaires')).total),
+    gerants: ((await queryOne(db, 'SELECT COUNT(*) AS total FROM employes')).total),
+    reservations_jouees_mois: ((await queryOne(db, "SELECT COUNT(*) AS total FROM reservations WHERE statut IN ('joue','match_joue') AND substr(date, 1, 7) = ?", [month])).total),
+    avances_mois: ((await queryOne(db, `SELECT COALESCE(SUM(p.montant_acompte), 0) AS total
       FROM paiements p
       JOIN reservations r ON r.id = p.reservation_id
       WHERE p.statut = 'paye'
         AND r.statut IN ('joue','match_joue')
-        AND substr(r.date, 1, 7) = ?`, [month]).total,
-    commissions_mois: queryOne(db, `SELECT COALESCE(SUM(p.montant_commission), 0) AS total
+        AND substr(r.date, 1, 7) = ?`, [month])).total),
+    commissions_mois: ((await queryOne(db, `SELECT COALESCE(SUM(p.montant_commission), 0) AS total
       FROM paiements p
       JOIN reservations r ON r.id = p.reservation_id
       WHERE p.statut = 'paye'
         AND r.statut IN ('joue','match_joue')
-        AND substr(r.date, 1, 7) = ?`, [month]).total,
-    abonnements_en_retard: queryOne(db, "SELECT COUNT(*) AS total FROM abonnements WHERE statut = 'en_retard'").total,
+        AND substr(r.date, 1, 7) = ?`, [month])).total),
+    abonnements_en_retard: ((await queryOne(db, "SELECT COUNT(*) AS total FROM abonnements WHERE statut = 'en_retard'")).total),
   };
-  const recentTerrains = queryAll(db, `SELECT t.id, t.nom, t.ville, t.is_active, t.modele_revenus, p.nom AS proprietaire_nom
+  const recentTerrains = await queryAll(db, `SELECT t.id, t.nom, t.ville, t.is_active, t.modele_revenus, p.nom AS proprietaire_nom
     FROM terrains t
     LEFT JOIN proprietaires p ON p.id = t.proprietaire_id
     ORDER BY t.created_at DESC
@@ -124,7 +128,7 @@ router.get('/profile', async (req, res) => {
 
 router.get('/terrains', async (req, res) => {
   const db = await getDb();
-  res.json(queryAll(db, `SELECT t.*, p.nom AS proprietaire_nom FROM terrains t
+  res.json(await queryAll(db, `SELECT t.*, p.nom AS proprietaire_nom FROM terrains t
     LEFT JOIN proprietaires p ON p.id = t.proprietaire_id ORDER BY t.created_at DESC`));
 });
 
@@ -148,7 +152,7 @@ router.post('/terrains', async (req, res) => {
     const pourcentageAvance = Number(pourcentage_avance || 8);
     const avanceReference = montantAvanceReference(prixEntier, pourcentageAvance);
     const delaiRemboursement = normaliserDelaiHeures(delai_remboursement_heures);
-    const result = runSql(db, `INSERT INTO terrains
+    const result = await runSql(db, `INSERT INTO terrains
       (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_entier, prix_moitie, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, adresse_theorique, adresse_nominatim, photos, description, commodites, is_active, delai_remboursement_heures)
       VALUES (?, ?, ?, ?, 'foot', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [proprietaire_id, nom, quartier, ville || 'Dakar', taille || '11v11', prixEntier, prixEntier, prixMoitie, avanceReference, avanceReference, pourcentageAvance, modele_revenus || 'commission', Number(commission_pourcentage || 0), Number(abonnement_montant || 0), Number(achat_definitif_montant || 0), parseCoord(latitude), parseCoord(longitude), adresse_theorique ? String(adresse_theorique).trim() : null, adresse_nominatim ? String(adresse_nominatim).trim() : null, JSON.stringify(photos || []), surface || 'synthetique', typeof commodites === 'string' ? commodites : JSON.stringify(Array.isArray(commodites) ? commodites : []), delaiRemboursement]);
@@ -156,23 +160,23 @@ router.post('/terrains', async (req, res) => {
     const actor = commoditesService.actorFromReq(req);
     let ids = Array.isArray(commodite_ids) ? commodite_ids.map(Number).filter((n) => n > 0) : [];
     if (!ids.length && Array.isArray(commodites)) {
-      const catalog = commoditesService.listCommodites(db);
+      const catalog = await commoditesService.listCommodites(db);
       ids = commodites
         .map((key) => catalog.find((c) => c.cle === String(key))?.id)
         .filter(Boolean)
         .map(Number);
     }
     if (ids.length) {
-      commoditesService.setTerrainCommodites(db, terrainId, ids, actor);
+      await commoditesService.setTerrainCommodites(db, terrainId, ids, actor);
     }
     for (const jour of ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']) {
-      runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, '06:00', '00:00']);
+      await runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, '06:00', '00:00']);
     }
     if ((modele_revenus || 'commission') === 'abonnement') {
-      ensurePendingAbonnement(db, terrainId, Number(abonnement_montant || 0));
+      await ensurePendingAbonnement(db, terrainId, Number(abonnement_montant || 0));
       saveDb();
     }
-    res.status(201).json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+    res.status(201).json(await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
   } catch (error) {
     res.status(500).json({ error: error.message || 'Erreur serveur' });
   }
@@ -182,16 +186,16 @@ router.patch('/terrains/:id/statut', async (req, res) => {
   const db = await getDb();
   if (!['actif', 'suspendu'].includes(req.body.statut)) return res.status(400).json({ error: 'Statut invalide' });
   const terrainId = Number(req.params.id);
-  if (req.body.statut === 'actif' && !terrainAUnePhotoPrincipale(db, terrainId)) {
+  if (req.body.statut === 'actif' && !(await terrainAUnePhotoPrincipale(db, terrainId))) {
     return res.status(400).json({ error: 'Au moins une photo principale est requise pour activer le terrain' });
   }
   if (req.body.statut === 'actif') {
-    const terrain = queryOne(db, 'SELECT latitude, longitude FROM terrains WHERE id = ?', [terrainId]);
+    const terrain = await queryOne(db, 'SELECT latitude, longitude FROM terrains WHERE id = ?', [terrainId]);
     if (!terrainADesCoordonnees(terrain)) {
       return res.status(400).json({ error: 'La position GPS du terrain est requise pour l\'activer' });
     }
   }
-  runSql(db, 'UPDATE terrains SET is_active = ? WHERE id = ?', [req.body.statut === 'actif' ? 1 : 0, terrainId]);
+  await runSql(db, 'UPDATE terrains SET is_active = ? WHERE id = ?', [req.body.statut === 'actif' ? 1 : 0, terrainId]);
   syncApresModificationTerrain(terrainId, 'statut_terrain', { statut: req.body.statut });
   res.json({ message: `Terrain ${req.body.statut}` });
 });
@@ -199,7 +203,7 @@ router.patch('/terrains/:id/statut', async (req, res) => {
 router.patch('/terrains/:id/localisation', async (req, res) => {
   const db = await getDb();
   const terrainId = Number(req.params.id);
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+  const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   const lat = parseCoord(req.body?.latitude);
   const lng = parseCoord(req.body?.longitude);
@@ -209,33 +213,45 @@ router.patch('/terrains/:id/localisation', async (req, res) => {
   const adresseNominatim = req.body?.adresse_nominatim == null
     ? terrain.adresse_nominatim
     : String(req.body.adresse_nominatim).trim();
-  runSql(
+  await runSql(
     db,
     'UPDATE terrains SET adresse_theorique = ?, adresse_nominatim = ?, latitude = ?, longitude = ? WHERE id = ?',
     [adresseTheorique || null, adresseNominatim || null, lat, lng, terrainId],
   );
   syncApresModificationTerrain(terrainId, 'localisation', { latitude: lat, longitude: lng });
-  res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+  res.json(await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
 });
 
 router.patch('/terrains/:id/politique-annulation', async (req, res) => {
   const db = await getDb();
   const terrainId = Number(req.params.id);
-  const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
+  const terrain = await queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   const delai = normaliserDelaiHeures(req.body?.delai_remboursement_heures);
-  runSql(db, 'UPDATE terrains SET delai_remboursement_heures = ? WHERE id = ?', [delai, terrainId]);
+  await runSql(db, 'UPDATE terrains SET delai_remboursement_heures = ? WHERE id = ?', [delai, terrainId]);
   syncApresModificationTerrain(terrainId, 'contrat_paiement', { delai_remboursement_heures: delai });
-  res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+  res.json(await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+});
+
+/** Délai d'indisponibilité du créneau pendant l'attente de confirmation paiement (minutes). */
+router.patch('/terrains/:id/delai-verrou-paiement', async (req, res) => {
+  const db = await getDb();
+  const terrainId = Number(req.params.id);
+  const terrain = await queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
+  if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+  const delai = normaliserDelaiVerrouPaiementMin(req.body?.delai_verrou_paiement_min);
+  await runSql(db, 'UPDATE terrains SET delai_verrou_paiement_min = ? WHERE id = ?', [delai, terrainId]);
+  syncApresModificationTerrain(terrainId, 'contrat_paiement', { delai_verrou_paiement_min: delai });
+  res.json(await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
 });
 
 router.get('/terrains/:id/photos', async (req, res) => {
   const db = await getDb();
   const terrainId = Number(req.params.id);
-  const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
+  const terrain = await queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.json(listTerrainPhotos(db, terrainId));
+  res.json(await listTerrainPhotos(db, terrainId));
 });
 
 function photoPayloadFromReq(req) {
@@ -262,7 +278,7 @@ router.post('/terrains/:id/photos', (req, res, next) => {
         uploaded_by: actor.id,
         uploaded_by_role: 'super_admin',
       });
-      logPhotoAction(db, {
+      await logPhotoAction(db, {
         terrain_id: terrainId,
         photo_id: photo.id,
         action: 'upload',
@@ -284,7 +300,7 @@ router.patch('/terrains/:id/photos/ordre', async (req, res) => {
   const db = await getDb();
   try {
     const terrainId = Number(req.params.id);
-    const photos = transaction(db, () => reorderTerrainPhotos(db, terrainId, req.body?.ordre || []));
+    const photos = await transaction(db, async () => await reorderTerrainPhotos(db, terrainId, req.body?.ordre || []));
     syncApresModificationTerrain(terrainId, 'photos');
     res.json(photos);
   } catch (error) {
@@ -296,9 +312,9 @@ router.patch('/terrains/:id/photos/:photoId/principale', async (req, res) => {
   const db = await getDb();
   try {
     const terrainId = Number(req.params.id);
-    const photo = transaction(db, () => setPhotoPrincipale(db, terrainId, Number(req.params.photoId)));
+    const photo = await transaction(db, async () => await setPhotoPrincipale(db, terrainId, Number(req.params.photoId)));
     const actor = commoditesService.actorFromReq(req);
-    logPhotoAction(db, {
+    await logPhotoAction(db, {
       terrain_id: terrainId,
       photo_id: photo.id,
       action: 'principale_definie',
@@ -318,7 +334,7 @@ router.patch('/terrains/:id/photos/:photoId', async (req, res) => {
   const db = await getDb();
   try {
     const terrainId = Number(req.params.id);
-    const photo = transaction(db, () => updateTerrainPhoto(db, terrainId, Number(req.params.photoId), req.body || {}));
+    const photo = await transaction(db, async () => await updateTerrainPhoto(db, terrainId, Number(req.params.photoId), req.body || {}));
     syncApresModificationTerrain(terrainId, 'photos');
     res.json(photo);
   } catch (error) {
@@ -330,9 +346,9 @@ router.delete('/terrains/:id/photos/:photoId', async (req, res) => {
   const db = await getDb();
   try {
     const terrainId = Number(req.params.id);
-    const result = transaction(db, () => deleteTerrainPhoto(db, terrainId, Number(req.params.photoId)));
+    const result = await transaction(db, async () => await deleteTerrainPhoto(db, terrainId, Number(req.params.photoId)));
     const actor = commoditesService.actorFromReq(req);
-    logPhotoAction(db, {
+    await logPhotoAction(db, {
       terrain_id: terrainId,
       photo_id: result.photo?.id || Number(req.params.photoId),
       action: 'suppression',
@@ -350,7 +366,7 @@ router.delete('/terrains/:id/photos/:photoId', async (req, res) => {
 
 router.patch('/terrains/:id/tarifs', async (req, res) => {
   const db = await getDb();
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
+  const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   const prixReference = Number(terrain.prix_entier || terrain.prix_heure || 0);
   const pourcentageAvance = Number(req.body.pourcentage_avance || (req.body.acompte ? (Number(req.body.acompte) * 100) / prixReference : terrain.pourcentage_avance || 8));
@@ -361,7 +377,7 @@ router.patch('/terrains/:id/tarifs', async (req, res) => {
     return res.status(400).json({ error: 'Tarifs invalides' });
   }
   const commissionReference = Math.round((avanceReference * commissionPourcentage) / 100);
-  runSql(db, `UPDATE terrains SET acompte = ?, montant_acompte = ?, commission = ?, pourcentage_avance = ?,
+  await runSql(db, `UPDATE terrains SET acompte = ?, montant_acompte = ?, commission = ?, pourcentage_avance = ?,
     modele_revenus = ?, commission_pourcentage = ?, abonnement_montant = ?, achat_definitif_montant = ?, achat_definitif_paye = ?
     WHERE id = ?`, [
     avanceReference,
@@ -377,29 +393,29 @@ router.patch('/terrains/:id/tarifs', async (req, res) => {
   ]);
   const abonnementMontant = Number(req.body.abonnement_montant ?? terrain.abonnement_montant ?? 0);
   if (modeleRevenus === 'abonnement') {
-    ensurePendingAbonnement(db, Number(req.params.id), abonnementMontant);
+    await ensurePendingAbonnement(db, Number(req.params.id), abonnementMontant);
     saveDb();
   }
   syncApresModificationTerrain(Number(req.params.id), 'contrat_paiement');
-  res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]));
+  res.json(await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]));
 });
 
 router.get('/terrains/:id/regles-tarifs', async (req, res) => {
   const db = await getDb();
   const terrainId = Number(req.params.id);
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+  const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   res.json({
     terrain_id: terrainId,
     prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
     prix_moitie_base: Number(terrain.prix_moitie || 0),
-    regles: listRegles(db, terrainId),
-    apercu: apercuPrix(db, terrainId),
-    grille_standard: grilleFromRegles(listRegles(db, terrainId, { actifsUniquement: true }), {
+    regles: await listRegles(db, terrainId),
+    apercu: await apercuPrix(db, terrainId),
+    grille_standard: grilleFromRegles(await listRegles(db, terrainId, { actifsUniquement: true }), {
       prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
       prix_moitie_base: Number(terrain.prix_moitie || 0),
     }),
-    propositions: listPropositions(db, { terrainId, statut: 'en_attente' }),
+    propositions: await listPropositions(db, { terrainId, statut: 'en_attente' }),
   });
 });
 
@@ -407,12 +423,12 @@ router.post('/terrains/:id/regles-tarifs', async (req, res) => {
   try {
     const db = await getDb();
     const terrainId = Number(req.params.id);
-    const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+    const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
     if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
-    const row = creerRegle(db, terrainId, req.body || {});
+    const row = await creerRegle(db, terrainId, req.body || {});
     res.status(201).json({
       regle: mapRegle(row),
-      apercu: apercuPrix(db, terrainId),
+      apercu: await apercuPrix(db, terrainId),
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -423,10 +439,10 @@ router.put('/terrains/:id/regles-tarifs/:regleId', async (req, res) => {
   try {
     const db = await getDb();
     const terrainId = Number(req.params.id);
-    const row = modifierRegle(db, terrainId, Number(req.params.regleId), req.body || {});
+    const row = await modifierRegle(db, terrainId, Number(req.params.regleId), req.body || {});
     res.json({
       regle: mapRegle(row),
-      apercu: apercuPrix(db, terrainId),
+      apercu: await apercuPrix(db, terrainId),
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -437,10 +453,10 @@ router.patch('/terrains/:id/regles-tarifs/:regleId', async (req, res) => {
   try {
     const db = await getDb();
     const terrainId = Number(req.params.id);
-    const row = toggleRegle(db, terrainId, Number(req.params.regleId), req.body?.actif);
+    const row = await toggleRegle(db, terrainId, Number(req.params.regleId), req.body?.actif);
     res.json({
       regle: mapRegle(row),
-      apercu: apercuPrix(db, terrainId),
+      apercu: await apercuPrix(db, terrainId),
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -451,10 +467,10 @@ router.delete('/terrains/:id/regles-tarifs/:regleId', async (req, res) => {
   try {
     const db = await getDb();
     const terrainId = Number(req.params.id);
-    const result = supprimerRegle(db, terrainId, Number(req.params.regleId));
+    const result = await supprimerRegle(db, terrainId, Number(req.params.regleId));
     res.json({
       ...result,
-      apercu: apercuPrix(db, terrainId),
+      apercu: await apercuPrix(db, terrainId),
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -465,13 +481,13 @@ router.put('/terrains/:id/grille-tarifs', async (req, res) => {
   try {
     const db = await getDb();
     const terrainId = Number(req.params.id);
-    const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
+    const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
     if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
     const base = {
       prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
       prix_moitie_base: Number(terrain.prix_moitie || 0),
     };
-    const applied = appliquerGrille(db, terrainId, req.body || {}, base);
+    const applied = await appliquerGrille(db, terrainId, req.body || {}, base);
     const { notifyTerrain } = require('../realtimeHub');
     notifyTerrain(terrainId, 'tarifs');
     res.json({
@@ -488,13 +504,13 @@ router.put('/terrains/:id/grille-tarifs', async (req, res) => {
 router.get('/propositions-tarifs', async (req, res) => {
   const db = await getDb();
   const statut = String(req.query.statut || 'en_attente');
-  res.json({ propositions: listPropositions(db, { statut }) });
+  res.json({ propositions: await listPropositions(db, { statut }) });
 });
 
 router.post('/propositions-tarifs/:id/valider', async (req, res) => {
   try {
     const db = await getDb();
-    const result = validerProposition(db, Number(req.params.id), req.user.id);
+    const result = await validerProposition(db, Number(req.params.id), req.user.id);
     const terrainId = result?.proposition?.terrain_id || result?.regles?.[0]?.terrain_id;
     if (terrainId) {
       const { notifyTerrain } = require('../realtimeHub');
@@ -509,7 +525,7 @@ router.post('/propositions-tarifs/:id/valider', async (req, res) => {
 router.post('/propositions-tarifs/:id/refuser', async (req, res) => {
   try {
     const db = await getDb();
-    const proposition = refuserProposition(db, Number(req.params.id), req.user.id, req.body?.commentaire);
+    const proposition = await refuserProposition(db, Number(req.params.id), req.user.id, req.body?.commentaire);
     res.json({ message: 'Proposition refusée', proposition });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -519,7 +535,7 @@ router.post('/propositions-tarifs/:id/refuser', async (req, res) => {
 router.post('/abonnements/:id/payer', async (req, res) => {
   const db = await getDb();
   try {
-    const abonnement = transaction(db, () => marquerAbonnementPaye(db, Number(req.params.id)));
+    const abonnement = await transaction(db, async () => await marquerAbonnementPaye(db, Number(req.params.id)));
     res.json({ abonnement, message: 'Abonnement marque comme paye' });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -529,7 +545,7 @@ router.post('/abonnements/:id/payer', async (req, res) => {
 router.post('/terrains/:id/achat-definitif/payer', async (req, res) => {
   const db = await getDb();
   try {
-    const terrain = transaction(db, () => marquerAchatDefinitifPaye(db, Number(req.params.id), req.body?.montant));
+    const terrain = await transaction(db, async () => await marquerAchatDefinitifPaye(db, Number(req.params.id), req.body?.montant));
     res.json({ terrain, message: 'Achat definitif marque comme paye' });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -538,11 +554,213 @@ router.post('/terrains/:id/achat-definitif/payer', async (req, res) => {
 
 router.get('/users', async (req, res) => {
   const db = await getDb();
-  const proprietaires = queryAll(db, `SELECT id, nom, telephone, email, statut, must_change_password,
+  const proprietaires = await queryAll(db, `SELECT id, nom, prenom, telephone, email, statut, must_change_password,
     'proprietaire' AS role, NULL AS terrain_id FROM proprietaires`);
-  const gerants = queryAll(db, `SELECT e.id, e.nom, e.telephone, e.email, e.is_active AS statut, e.must_change_password,
+  const gerants = await queryAll(db, `SELECT e.id, e.nom, e.prenom, e.telephone, e.email, e.is_active AS statut, e.must_change_password,
     'gerant' AS role, e.terrain_id, t.nom AS terrain_nom FROM employes e LEFT JOIN terrains t ON t.id = e.terrain_id`);
-  res.json([...proprietaires, ...gerants]);
+  const superadmins = await queryAll(db, `SELECT id, nom, prenom, telephone, email, is_active AS statut, must_change_password,
+    'super_admin' AS role, NULL AS terrain_id FROM users
+    WHERE role IN ('super_admin', 'superadmin')`);
+  res.json([...superadmins, ...proprietaires, ...gerants]);
+});
+
+// ─── Propriétaires CRUD ─────────────────────────────────────────────
+router.get('/proprietaires', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = await queryAll(db, `
+      SELECT p.*,
+        (SELECT COUNT(*) FROM terrains t WHERE t.proprietaire_id = p.id) AS nb_terrains,
+        (SELECT COUNT(*) FROM employes e WHERE e.proprietaire_id = p.id AND e.is_active = 1) AS nb_gerants
+      FROM proprietaires p
+      ORDER BY p.created_at DESC, p.id DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+router.post('/proprietaires', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { nom, prenom, telephone, email, terrain_id } = req.body || {};
+    if (!nom || !telephone) return res.status(400).json({ error: 'Nom et téléphone requis' });
+
+    const telDigits = String(telephone).replace(/\D/g, '');
+    const existing = ((await queryAll(db, 'SELECT id, telephone FROM proprietaires')).find(
+      (p) => String(p.telephone || '').replace(/\D/g, '') === telDigits,
+    ));
+    if (existing) return res.status(409).json({ error: 'Un propriétaire avec ce téléphone existe déjà' });
+
+    const temporaryPassword = crypto.randomBytes(6).toString('base64url');
+    const passwordHash = bcrypt.hashSync(temporaryPassword, 12);
+    const mail = email || `proprietaire-${Date.now()}@terrainsn.local`;
+
+    let id;
+    await transaction(db, async () => {
+      const insertResult = await runSql(db,
+        `INSERT INTO proprietaires (nom, prenom, email, telephone, password_hash, statut, must_change_password)
+         VALUES (?, ?, ?, ?, ?, 'actif', 1)`,
+        [nom, prenom || null, mail, telephone, passwordHash],
+      );
+      id = insertResult.lastInsertRowid;
+      if (terrain_id) {
+        await runSql(db, 'UPDATE terrains SET proprietaire_id = ? WHERE id = ?', [id, Number(terrain_id)]);
+      }
+    });
+
+    try {
+      await envoyerAcces({ telephone, motDePasse: temporaryPassword, role: 'proprietaire' });
+    } catch (waErr) {
+      console.warn('[admin] Accès propriétaire créé mais WhatsApp échoué:', waErr.message);
+    }
+
+    const row = await queryOne(db, 'SELECT * FROM proprietaires WHERE id = ?', [id]);
+    res.status(201).json({ ...row, role: 'proprietaire', temporary_password_sent: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.patch('/proprietaires/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const id = Number(req.params.id);
+    const current = await queryOne(db, 'SELECT * FROM proprietaires WHERE id = ?', [id]);
+    if (!current) return res.status(404).json({ error: 'Propriétaire introuvable' });
+
+    const nom = req.body.nom !== undefined ? req.body.nom : current.nom;
+    const prenom = req.body.prenom !== undefined ? req.body.prenom : current.prenom;
+    const telephone = req.body.telephone !== undefined ? req.body.telephone : current.telephone;
+    const email = req.body.email !== undefined ? req.body.email : current.email;
+    let statut = req.body.statut !== undefined ? String(req.body.statut) : current.statut;
+    if (req.body.actif != null) {
+      statut = Number(req.body.actif) ? 'actif' : 'inactif';
+    }
+    if (!['actif', 'inactif', 'bloque', 'suspendu'].includes(String(statut).toLowerCase())) {
+      return res.status(400).json({ error: 'Statut invalide' });
+    }
+
+    await runSql(db, `
+      UPDATE proprietaires
+      SET nom = ?, prenom = ?, telephone = ?, email = ?, statut = ?
+      WHERE id = ?
+    `, [nom, prenom, telephone, email, statut, id]);
+
+    res.json(await queryOne(db, 'SELECT * FROM proprietaires WHERE id = ?', [id]));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+// ─── Superadmins CRUD ───────────────────────────────────────────────
+router.get('/superadmins', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = await queryAll(db, `
+      SELECT id, nom, prenom, email, telephone, role, is_active, must_change_password, created_at
+      FROM users
+      WHERE role IN ('super_admin', 'superadmin')
+      ORDER BY id ASC
+    `);
+    res.json(rows.map((r) => ({ ...r, role: 'super_admin' })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+router.post('/superadmins', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { nom, prenom, telephone, email } = req.body || {};
+    if (!nom || !telephone) return res.status(400).json({ error: 'Nom et téléphone requis' });
+
+    const telDigits = String(telephone).replace(/\D/g, '');
+    const existingTel = ((await queryAll(db, `
+      SELECT id, telephone FROM users WHERE role IN ('super_admin', 'superadmin')
+    `)).find((u) => String(u.telephone || '').replace(/\D/g, '') === telDigits));
+    if (existingTel) return res.status(409).json({ error: 'Un superadmin avec ce téléphone existe déjà' });
+
+    const mail = email || `superadmin-${Date.now()}@terrainsn.local`;
+    const existingMail = await queryOne(db, 'SELECT id FROM users WHERE email = ?', [mail]);
+    if (existingMail) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+
+    const temporaryPassword = crypto.randomBytes(6).toString('base64url');
+    const passwordHash = bcrypt.hashSync(temporaryPassword, 12);
+
+    const result = await runSql(db, `
+      INSERT INTO users (nom, prenom, email, telephone, password_hash, role, is_active, must_change_password)
+      VALUES (?, ?, ?, ?, ?, 'super_admin', 1, 1)
+    `, [nom, prenom || null, mail, telephone, passwordHash]);
+
+    try {
+      await envoyerAcces({ telephone, motDePasse: temporaryPassword, role: 'super_admin' });
+    } catch (waErr) {
+      console.warn('[admin] Accès superadmin créé mais WhatsApp échoué:', waErr.message);
+    }
+
+    const row = await queryOne(db, `
+      SELECT id, nom, prenom, email, telephone, role, is_active, must_change_password, created_at
+      FROM users WHERE id = ?
+    `, [result.lastInsertRowid]);
+    res.status(201).json({ ...row, role: 'super_admin', temporary_password_sent: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.patch('/superadmins/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const id = Number(req.params.id);
+    const current = await queryOne(db, `
+      SELECT * FROM users WHERE id = ? AND role IN ('super_admin', 'superadmin')
+    `, [id]);
+    if (!current) return res.status(404).json({ error: 'Superadmin introuvable' });
+
+    if (Number(req.user.id) === id && (req.body.is_active === 0 || req.body.is_active === false || req.body.actif === 0 || req.body.actif === false)) {
+      return res.status(400).json({ error: 'Tu ne peux pas désactiver ton propre compte' });
+    }
+
+    // Empêcher de désactiver le dernier superadmin actif
+    const nextActive = req.body.is_active != null
+      ? (Number(req.body.is_active) ? 1 : 0)
+      : (req.body.actif != null ? (Number(req.body.actif) ? 1 : 0) : Number(current.is_active));
+    if (Number(current.is_active) === 1 && nextActive === 0) {
+      const actifs = await queryOne(db, `
+        SELECT COUNT(*) AS n FROM users
+        WHERE role IN ('super_admin', 'superadmin') AND is_active = 1 AND id != ?
+      `, [id]);
+      if (Number(actifs?.n || 0) < 1) {
+        return res.status(400).json({ error: 'Impossible de désactiver le dernier superadmin actif' });
+      }
+    }
+
+    const nom = req.body.nom !== undefined ? req.body.nom : current.nom;
+    const prenom = req.body.prenom !== undefined ? req.body.prenom : current.prenom;
+    const telephone = req.body.telephone !== undefined ? req.body.telephone : current.telephone;
+    const email = req.body.email !== undefined ? req.body.email : current.email;
+
+    await runSql(db, `
+      UPDATE users SET nom = ?, prenom = ?, telephone = ?, email = ?, is_active = ?
+      WHERE id = ?
+    `, [nom, prenom, telephone, email, nextActive, id]);
+
+    const row = await queryOne(db, `
+      SELECT id, nom, prenom, email, telephone, role, is_active, must_change_password, created_at
+      FROM users WHERE id = ?
+    `, [id]);
+    res.json({ ...row, role: 'super_admin' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Erreur serveur' });
+  }
 });
 
 router.post('/users', async (req, res) => {
@@ -555,18 +773,27 @@ router.post('/users', async (req, res) => {
     const passwordHash = bcrypt.hashSync(temporaryPassword, 12);
     const email = req.body.email || `${role}-${Date.now()}@terrainsn.local`;
     let id;
-    transaction(db, () => {
+    await transaction(db, async () => {
       if (role === 'proprietaire') {
-        db.run(`INSERT INTO proprietaires (nom, email, telephone, password_hash, statut, must_change_password)
+        const insertResult = await runSql(db, `INSERT INTO proprietaires (nom, email, telephone, password_hash, statut, must_change_password)
           VALUES (?, ?, ?, ?, 'actif', 1)`, [nom, email, telephone, passwordHash]);
-        id = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
-        if (terrain_id) db.run('UPDATE terrains SET proprietaire_id = ? WHERE id = ?', [id, terrain_id]);
+        id = insertResult.lastInsertRowid;
+        if (terrain_id) await runSql(db, 'UPDATE terrains SET proprietaire_id = ? WHERE id = ?', [id, terrain_id]);
       } else {
-        const terrain = queryOne(db, 'SELECT proprietaire_id FROM terrains WHERE id = ?', [terrain_id]);
+        const terrain = await queryOne(db, 'SELECT proprietaire_id FROM terrains WHERE id = ?', [terrain_id]);
         if (!terrain) throw new Error('Terrain introuvable');
-        db.run(`INSERT INTO employes (proprietaire_id, terrain_id, nom, email, telephone, whatsapp_number, password_hash, is_active, must_change_password)
+        const insertResult = await runSql(db, `INSERT INTO employes (proprietaire_id, terrain_id, nom, email, telephone, whatsapp_number, password_hash, is_active, must_change_password)
           VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)`, [terrain.proprietaire_id, terrain_id, nom, email, telephone, telephone, passwordHash]);
-        id = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
+        id = insertResult.lastInsertRowid;
+        // Multi-gérants : liaison + principal si premier
+        const hasPrincipal = await queryOne(db, `
+          SELECT id FROM gerants_terrains WHERE terrain_id = ? AND est_principal = 1 AND actif = 1
+        `, [terrain_id]);
+        await runSql(db, `INSERT INTO gerants_terrains
+          (gerant_id, terrain_id, est_principal, actif, date_debut, note)
+          VALUES (?, ?, ?, 1, CURRENT_DATE, 'Création compte admin')
+          ON CONFLICT (gerant_id, terrain_id) DO NOTHING`,
+          [id, terrain_id, hasPrincipal ? 0 : 1]);
       }
     });
     await envoyerAcces({ telephone, motDePasse: temporaryPassword, role });
@@ -581,7 +808,7 @@ router.get('/revenus', async (req, res) => {
   const period = req.query.periode === 'semaine' ? 7 : req.query.periode === 'annee' ? 365 : 31;
   const start = new Date(); start.setDate(start.getDate() - period + 1);
   const from = start.toISOString().slice(0, 10);
-  const rows = queryAll(db, `SELECT t.id, t.nom, COUNT(r.id) AS reservations,
+  const rows = await queryAll(db, `SELECT t.id, t.nom, COUNT(r.id) AS reservations,
     COALESCE(SUM(CASE WHEN r.statut = 'joue' THEN r.prix_total ELSE 0 END), 0) AS revenu
     FROM terrains t LEFT JOIN reservations r ON r.terrain_id = t.id AND r.date >= ?
     GROUP BY t.id, t.nom ORDER BY revenu DESC`, [from]);
@@ -590,13 +817,13 @@ router.get('/revenus', async (req, res) => {
 
 router.get('/finances', async (req, res) => {
   const db = await getDb();
-  const totals = queryOne(db, `SELECT
+  const totals = await queryOne(db, `SELECT
     COALESCE(SUM(montant_acompte), 0) AS total_acomptes,
     COALESCE(SUM(montant_commission), 0) AS total_commissions,
     COALESCE(SUM(montant_reverse), 0) AS total_reverse
     FROM paiements
     WHERE statut = 'paye'`) || {};
-  const terrains = queryAll(db, `SELECT t.id, t.nom,
+  const terrains = await queryAll(db, `SELECT t.id, t.nom,
     COALESCE(SUM(p.montant_acompte), 0) AS acomptes,
     COALESCE(SUM(p.montant_commission), 0) AS commissions,
     COALESCE(SUM(p.montant_reverse), 0) AS reverse
@@ -610,7 +837,7 @@ router.get('/finances', async (req, res) => {
     total_avances: Number(totals.total_acomptes || 0),
     total_commissions: Number(totals.total_commissions || 0),
     total_reverse: Number(totals.total_reverse || 0),
-    dettes: detteService.resumeSuperadminMois(db),
+    dettes: await detteService.resumeSuperadminMois(db),
     terrains: terrains.map((terrain) => ({ ...terrain, avances: Number(terrain.acomptes || 0) })),
   });
 });
@@ -627,7 +854,7 @@ router.get('/dettes', async (req, res) => {
   } else if (/^\d{4}-\d{2}$/.test(periode)) {
     periodeKey = periode;
   }
-  res.json(detteService.listDettesAdmin(db, {
+  res.json(await detteService.listDettesAdmin(db, {
     periode: periodeKey,
     terrainId: req.query.terrain_id ? Number(req.query.terrain_id) : null,
     statut: req.query.statut || null,
@@ -636,10 +863,10 @@ router.get('/dettes', async (req, res) => {
 
 router.patch('/dettes/instructions', async (req, res) => {
   const db = await getDb();
-  transaction(db, () => {
-    detteService.setSetting(db, 'dette_instructions', req.body?.texte || req.body?.instructions || '');
+  await transaction(db, async () => {
+    await detteService.setSetting(db, 'dette_instructions', req.body?.texte || req.body?.instructions || '');
   });
-  res.json({ success: true, instructions: detteService.instructionsPaiementDette(db) });
+  res.json({ success: true, instructions: await detteService.instructionsPaiementDette(db) });
 });
 
 router.patch('/dettes/:terrain_id/remise-a-zero', async (req, res) => {
@@ -647,7 +874,7 @@ router.patch('/dettes/:terrain_id/remise-a-zero', async (req, res) => {
   try {
     const periode = String(req.body?.periode || '').trim();
     const periodeKey = /^\d{4}-\d{2}$/.test(periode) ? periode : detteService.periodeCivile();
-    const result = transaction(db, () => detteService.remiseAZero(db, {
+    const result = await transaction(db, async () => await detteService.remiseAZero(db, {
       terrainId: Number(req.params.terrain_id),
       superAdminId: req.user.id,
       note: req.body?.note,
@@ -662,21 +889,21 @@ router.patch('/dettes/:terrain_id/remise-a-zero', async (req, res) => {
 
 router.get('/abonnements', async (req, res) => {
   const db = await getDb();
-  transaction(db, () => {
-    appliquerSuspensionsAbonnements(db);
+  await transaction(db, async () => {
+    await appliquerSuspensionsAbonnements(db);
   });
-  res.json({ grace_days: GRACE_DAYS, abonnements: abonnementsAvecEtat(db) });
+  res.json({ grace_days: GRACE_DAYS, abonnements: await abonnementsAvecEtat(db) });
 });
 
 router.get('/commodites', async (req, res) => {
   const db = await getDb();
-  res.json(commoditesService.listCommodites(db));
+  res.json(await commoditesService.listCommodites(db));
 });
 
 router.post('/commodites', async (req, res) => {
   const db = await getDb();
   try {
-    const created = transaction(db, () => commoditesService.createCommodite(db, req.body || {}, commoditesService.actorFromReq(req)));
+    const created = await transaction(db, async () => await commoditesService.createCommodite(db, req.body || {}, commoditesService.actorFromReq(req)));
     res.status(201).json(created);
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -686,7 +913,7 @@ router.post('/commodites', async (req, res) => {
 router.patch('/commodites/:id', async (req, res) => {
   const db = await getDb();
   try {
-    const updated = transaction(db, () => commoditesService.updateCommodite(db, Number(req.params.id), req.body || {}, commoditesService.actorFromReq(req)));
+    const updated = await transaction(db, async () => await commoditesService.updateCommodite(db, Number(req.params.id), req.body || {}, commoditesService.actorFromReq(req)));
     res.json(updated);
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -696,7 +923,7 @@ router.patch('/commodites/:id', async (req, res) => {
 router.delete('/commodites/:id', async (req, res) => {
   const db = await getDb();
   try {
-    const updated = transaction(db, () => commoditesService.softDeleteCommodite(db, Number(req.params.id), commoditesService.actorFromReq(req)));
+    const updated = await transaction(db, async () => await commoditesService.softDeleteCommodite(db, Number(req.params.id), commoditesService.actorFromReq(req)));
     res.json(updated);
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -705,18 +932,18 @@ router.delete('/commodites/:id', async (req, res) => {
 
 router.get('/terrains/:id/commodites', async (req, res) => {
   const db = await getDb();
-  const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [Number(req.params.id)]);
+  const terrain = await queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [Number(req.params.id)]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
-  res.json(commoditesService.listTerrainCommodites(db, terrain.id));
+  res.json(await commoditesService.listTerrainCommodites(db, terrain.id));
 });
 
 router.put('/terrains/:id/commodites', async (req, res) => {
   const db = await getDb();
   try {
     const terrainId = Number(req.params.id);
-    const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
+    const terrain = await queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
     if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
-    const list = transaction(db, () => commoditesService.setTerrainCommodites(
+    const list = await transaction(db, async () => await commoditesService.setTerrainCommodites(
       db,
       terrainId,
       req.body?.commodite_ids || [],
@@ -746,8 +973,8 @@ router.get('/terrains/:id/audit', async (req, res) => {
   const terrainId = Number(req.params.id);
   const filters = { ...parseAuditFilters(req.query), terrain_id: terrainId, limit: 200, offset: 0 };
   res.json({
-    photos: listAuditPhotos(db, filters),
-    commodites: listAuditCommodites(db, filters),
+    photos: await listAuditPhotos(db, filters),
+    commodites: await listAuditCommodites(db, filters),
   });
 });
 
@@ -755,14 +982,14 @@ router.get('/audit/photos-commodites', async (req, res) => {
   const db = await getDb();
   const type = String(req.query.type || 'tout');
   const filters = parseAuditFilters(req.query);
-  const photos = type === 'commodites' ? [] : listAuditPhotos(db, filters);
-  const commodites = type === 'photos' ? [] : listAuditCommodites(db, filters);
+  const photos = type === 'commodites' ? [] : await listAuditPhotos(db, filters);
+  const commodites = type === 'photos' ? [] : await listAuditCommodites(db, filters);
   res.json({ photos, commodites });
 });
 
 router.get('/terrains/:id/essai', async (req, res) => {
   const db = await getDb();
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
+  const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   res.json(essaiService.publicEssai(terrain));
 });
@@ -770,46 +997,46 @@ router.get('/terrains/:id/essai', async (req, res) => {
 router.patch('/terrains/:id/essai', async (req, res) => {
   const db = await getDb();
   const id = Number(req.params.id);
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [id]);
+  const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [id]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   const action = String(req.body?.action || '');
   const today = essaiService.ymd(new Date());
   try {
-    transaction(db, () => {
+    await transaction(db, async () => {
       if (action === 'activer') {
         const duree = Math.max(1, Number(req.body?.essai_duree_jours || 30));
         const nego = Math.max(0, Number(req.body?.delai_negociation_jours || 7));
         const fin = essaiService.addDays(today, duree);
-        runSql(db, `UPDATE terrains SET mode_essai = 1, essai_debut_at = ?, essai_duree_jours = ?, essai_fin_at = ?,
+        await runSql(db, `UPDATE terrains SET mode_essai = 1, essai_debut_at = ?, essai_duree_jours = ?, essai_fin_at = ?,
           delai_negociation_jours = ?, essai_suspendu_auto = 0, notif_essai_fin_j7 = 0, notif_essai_fin_j3 = 0, notif_essai_fin_j1 = 0 WHERE id = ?`,
           [today, duree, fin, nego, id]);
       } else if (action === 'production' || action === 'desactiver') {
-        runSql(db, 'UPDATE terrains SET mode_essai = 0, essai_fin_at = COALESCE(essai_fin_at, ?) WHERE id = ?', [today, id]);
+        await runSql(db, 'UPDATE terrains SET mode_essai = 0, essai_fin_at = COALESCE(essai_fin_at, ?) WHERE id = ?', [today, id]);
       } else if (action === 'modifier') {
         const duree = Math.max(1, Number(req.body?.essai_duree_jours || terrain.essai_duree_jours || 30));
         const nego = Math.max(0, Number(req.body?.delai_negociation_jours || terrain.delai_negociation_jours || 7));
         const debut = String(terrain.essai_debut_at || today).slice(0, 10);
         const fin = essaiService.addDays(debut, duree);
-        runSql(db, 'UPDATE terrains SET essai_duree_jours = ?, delai_negociation_jours = ?, essai_fin_at = ? WHERE id = ?', [duree, nego, fin, id]);
+        await runSql(db, 'UPDATE terrains SET essai_duree_jours = ?, delai_negociation_jours = ?, essai_fin_at = ? WHERE id = ?', [duree, nego, fin, id]);
       } else if (action === 'delai') {
         const extra = Math.max(1, Number(req.body?.jours || 7));
         const nego = Number(terrain.delai_negociation_jours || 7) + extra;
-        runSql(db, 'UPDATE terrains SET delai_negociation_jours = ? WHERE id = ?', [nego, id]);
+        await runSql(db, 'UPDATE terrains SET delai_negociation_jours = ? WHERE id = ?', [nego, id]);
       } else if (action === 'reactiver-essai') {
         const duree = Math.max(1, Number(req.body?.essai_duree_jours || 30));
         const nego = Math.max(0, Number(req.body?.delai_negociation_jours || 7));
         const fin = essaiService.addDays(today, duree);
-        runSql(db, `UPDATE terrains SET mode_essai = 1, essai_suspendu_auto = 0, is_active = 1, essai_debut_at = ?, essai_duree_jours = ?, essai_fin_at = ?, delai_negociation_jours = ? WHERE id = ?`,
+        await runSql(db, `UPDATE terrains SET mode_essai = 1, essai_suspendu_auto = 0, is_active = 1, essai_debut_at = ?, essai_duree_jours = ?, essai_fin_at = ?, delai_negociation_jours = ? WHERE id = ?`,
           [today, duree, fin, nego, id]);
       } else if (action === 'reactiver-production') {
-        runSql(db, 'UPDATE terrains SET mode_essai = 0, essai_suspendu_auto = 0, is_active = 1 WHERE id = ?', [id]);
+        await runSql(db, 'UPDATE terrains SET mode_essai = 0, essai_suspendu_auto = 0, is_active = 1 WHERE id = ?', [id]);
       } else {
         const err = new Error('Action essai inconnue');
         err.statusCode = 400;
         throw err;
       }
     });
-    const next = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [id]);
+    const next = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [id]);
     res.json(essaiService.publicEssai(next));
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
@@ -818,7 +1045,7 @@ router.patch('/terrains/:id/essai', async (req, res) => {
 
 router.get('/essai-kpis', async (req, res) => {
   const db = await getDb();
-  const terrains = queryAll(db, 'SELECT * FROM terrains');
+  const terrains = await queryAll(db, 'SELECT * FROM terrains');
   const items = terrains.map((t) => ({ id: t.id, nom: t.nom, ...essaiService.publicEssai(t) }));
   const actifs = items.filter((t) => t.etat === 'actif');
   const expires = items.filter((t) => t.etat === 'expire');
@@ -835,17 +1062,17 @@ router.get('/essai-kpis', async (req, res) => {
 
 router.get('/terrains/:id/features', async (req, res) => {
   const db = await getDb();
-  const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [Number(req.params.id)]);
+  const terrain = await queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [Number(req.params.id)]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
-  res.json(terrainFeaturesService.listFeatures(db, terrain.id));
+  res.json(await terrainFeaturesService.listFeatures(db, terrain.id));
 });
 
 router.put('/terrains/:id/features', async (req, res) => {
   const db = await getDb();
   const terrainId = Number(req.params.id);
-  const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
+  const terrain = await queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
-  const list = transaction(db, () => terrainFeaturesService.saveFeatures(db, terrainId, req.body?.features || [], req.user?.id));
+  const list = await transaction(db, async () => await terrainFeaturesService.saveFeatures(db, terrainId, req.body?.features || [], req.user?.id));
   res.json(list);
 });
 
@@ -883,15 +1110,53 @@ router.post('/whatsapp/test', async (req, res) => {
   }
 });
 
+router.post('/bug-alerts/test', async (req, res) => {
+  const bugAlert = require('../services/bugAlertService');
+  try {
+    const result = await bugAlert.notify({
+      kind: 'test',
+      title: 'Test alerte développeur TerrainSN',
+      error: new Error(req.body?.message || 'Ceci est un test manuel depuis le superadmin.'),
+      req,
+      force: true,
+      meta: { triggered_by: req.user?.email || req.user?.id || 'superadmin' },
+    });
+    res.json({
+      ok: Boolean(result.ok),
+      email: result.email,
+      whatsapp: result.whatsapp,
+      recipients: {
+        emails: bugAlert.emailRecipients(),
+        whatsapp: bugAlert.whatsappContacts().map((c) => ({
+          phone: c.phone,
+          name: c.fullName,
+        })),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message || 'Envoi impossible' });
+  }
+});
+
+router.get('/bug-alerts/status', async (req, res) => {
+  const bugAlert = require('../services/bugAlertService');
+  res.json({
+    enabled: String(process.env.BUG_ALERT_ENABLED || 'true').toLowerCase() !== 'false',
+    smtp_configured: bugAlert.smtpConfigured(),
+    emails: bugAlert.emailRecipients(),
+    whatsapp: bugAlert.whatsappContacts().map((c) => ({ phone: c.phone, name: c.fullName })),
+  });
+});
+
 router.get('/mode-revenu/defaults', async (req, res) => {
   const db = await getDb();
-  res.json(modeRevenuService.getDefaults(db));
+  res.json(await modeRevenuService.getDefaults(db));
 });
 
 router.patch('/mode-revenu/defaults', async (req, res) => {
   const db = await getDb();
   try {
-    const next = transaction(db, () => modeRevenuService.saveDefaults(db, req.body || {}));
+    const next = await transaction(db, async () => await modeRevenuService.saveDefaults(db, req.body || {}));
     res.json(next);
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Enregistrement impossible' });
@@ -900,15 +1165,15 @@ router.patch('/mode-revenu/defaults', async (req, res) => {
 
 router.get('/mode-revenu/history', async (req, res) => {
   const db = await getDb();
-  res.json(modeRevenuService.listHistory(db));
+  res.json(await modeRevenuService.listHistory(db));
 });
 
 router.patch('/terrains/:id/mode-revenu', async (req, res) => {
   const db = await getDb();
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
+  const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [Number(req.params.id)]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   try {
-    const next = transaction(db, () => modeRevenuService.applyMode(db, terrain, req.body || {}, req.user?.id));
+    const next = await transaction(db, async () => await modeRevenuService.applyMode(db, terrain, req.body || {}, req.user?.id));
     res.json(modeRevenuService.enrichTerrain(next));
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });

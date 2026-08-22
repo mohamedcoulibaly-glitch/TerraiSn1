@@ -266,7 +266,7 @@ const Accueil = () => {
         {geo.denied && (
           <div className="mt-2">
             <div className="flex items-center gap-2 px-3 h-9 bg-[var(--surface)] border border-[var(--border)] rounded-2xl max-w-md">
-              <MapPin className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+              <MapPin className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />
               <input
                 type="text"
                 placeholder="Filtrer par quartier..."
@@ -363,7 +363,7 @@ const Accueil = () => {
                 <button
                   type="button"
                   onClick={resetFiltres}
-                  className="mt-5 px-5 py-2 rounded-xl border border-emerald-500 text-emerald-400 text-sm font-semibold active:scale-95 transition-transform min-h-[40px]"
+                  className="mt-5 px-5 py-2 rounded-xl border border-[var(--primary)] text-[var(--primary)] text-sm font-semibold active:scale-95 transition-transform min-h-[40px]"
                 >
                   Réinitialiser
                 </button>

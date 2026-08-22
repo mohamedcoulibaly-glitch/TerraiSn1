@@ -73,6 +73,11 @@ export default function KanbanCard({ card, hot, onScan, onLink }: Props) {
             Walk-in
           </span>
         )}
+        {card.mode_paiement === "manuel" && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: "var(--g-warning-bg)", color: "var(--g-warning)" }}>
+            Manuel
+          </span>
+        )}
         {!blocked && Number(card.montant_restant) > 0 && (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-[color-mix(in_srgb,var(--color-warning)_14%,white)] text-[var(--color-warning)]">
             Impayé

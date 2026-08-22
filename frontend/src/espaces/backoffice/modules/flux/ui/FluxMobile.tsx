@@ -152,6 +152,11 @@ export default function FluxMobile({ cards, advancingId, onMove, onScan, onLink 
                       {!card.joueur_id && (
                         <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-[var(--color-surface-2)]">Walk-in</span>
                       )}
+                      {card.mode_paiement === "manuel" && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: "var(--g-warning-bg)", color: "var(--g-warning)" }}>
+                          Manuel
+                        </span>
+                      )}
                     </div>
                   </div>
                 </button>

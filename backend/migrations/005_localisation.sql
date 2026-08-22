@@ -1,0 +1,9 @@
+-- Localisation terrain
+-- Appliqué au runtime par addColumnIfMissing() dans backend/database.js
+-- (SQLite / sql.js ne gère pas ADD COLUMN IF NOT EXISTS de façon portable)
+--
+-- Colonnes :
+--   adresse_theorique TEXT  — texte libre saisi par l'admin
+--   adresse_nominatim TEXT  — adresse retournée par Nominatim
+--   latitude REAL           — déjà présente
+--   longitude REAL          — déjà présente

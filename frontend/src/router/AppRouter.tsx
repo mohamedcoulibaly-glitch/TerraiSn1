@@ -43,6 +43,9 @@ const NotFound = lazy(() => import("@/espaces/joueur/pages/NotFound"));
 const SuperAdminDashboard = lazy(() => import("@/espaces/backoffice/pages/superadmin/Dashboard"));
 const GestionTerrains = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionTerrains"));
 const TerrainFicheAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/TerrainFiche"));
+const GestionGerants = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionGerants"));
+const GestionProprietaires = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionProprietaires"));
+const GestionSuperadmins = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionSuperadmins"));
 const GestionUtilisateurs = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionUtilisateurs"));
 const RevenusAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Revenus"));
 const CaisseAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Caisse"));
@@ -119,6 +122,9 @@ export default function AppRouter() {
         <Route path="superadmin" element={<RoleGuard roles={["super_admin"]}>{withSuspense(SuperAdminDashboard)}</RoleGuard>} />
         <Route path="superadmin/terrains" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionTerrains)}</RoleGuard>} />
         <Route path="superadmin/terrains/:id" element={<RoleGuard roles={["super_admin"]}>{withSuspense(TerrainFicheAdmin)}</RoleGuard>} />
+        <Route path="superadmin/gerants" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionGerants)}</RoleGuard>} />
+        <Route path="superadmin/proprietaires" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionProprietaires)}</RoleGuard>} />
+        <Route path="superadmin/superadmins" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionSuperadmins)}</RoleGuard>} />
         <Route path="superadmin/utilisateurs" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionUtilisateurs)}</RoleGuard>} />
         <Route path="superadmin/caisse" element={<RoleGuard roles={["super_admin"]}>{withSuspense(CaisseAdmin)}</RoleGuard>} />
         <Route path="superadmin/audit" element={<RoleGuard roles={["super_admin"]}>{withSuspense(AuditAdmin)}</RoleGuard>} />

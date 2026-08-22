@@ -17,6 +17,10 @@ import {
   MessageCircle,
   CircleDot,
   ClipboardList,
+  UserCog,
+  Building2,
+  Shield,
+  ChevronDown,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
@@ -56,7 +60,10 @@ export function useSaCrumbs(crumbs: SaCrumb[]) {
 const FALLBACK_CRUMBS: Record<string, string> = {
   superadmin: "Tableau de bord",
   terrains: "Terrains",
+  gerants: "Gérants",
   utilisateurs: "Utilisateurs",
+  proprietaires: "Propriétaires",
+  superadmins: "Superadmins",
   caisse: "Caisse & Reversements",
   rapprochement: "Rapprochement",
   revenus: "Revenus",
@@ -66,9 +73,16 @@ const FALLBACK_CRUMBS: Record<string, string> = {
   audit: "Audit",
 };
 
-type NavEntry =
-  | { kind: "link"; to: string; label: string; icon: typeof LayoutDashboard; end?: boolean }
-  | { kind: "soon"; label: string; icon: typeof LayoutDashboard };
+type NavLinkItem = { kind: "link"; to: string; label: string; icon: typeof LayoutDashboard; end?: boolean };
+type NavSoonItem = { kind: "soon"; label: string; icon: typeof LayoutDashboard };
+type NavGroupItem = {
+  kind: "group";
+  label: string;
+  icon: typeof LayoutDashboard;
+  basePath: string;
+  children: { to: string; label: string; icon: typeof LayoutDashboard }[];
+};
+type NavEntry = NavLinkItem | NavSoonItem | NavGroupItem;
 
 const SECTIONS: { title: string; items: NavEntry[] }[] = [
   {
@@ -79,7 +93,17 @@ const SECTIONS: { title: string; items: NavEntry[] }[] = [
     title: "Gestion",
     items: [
       { kind: "link", to: "/backoffice/superadmin/terrains", label: "Terrains", icon: Map },
-      { kind: "link", to: "/backoffice/superadmin/utilisateurs", label: "Utilisateurs", icon: Users },
+      {
+        kind: "group",
+        label: "Utilisateurs",
+        icon: Users,
+        basePath: "/backoffice/superadmin",
+        children: [
+          { to: "/backoffice/superadmin/gerants", label: "Gérants", icon: UserCog },
+          { to: "/backoffice/superadmin/proprietaires", label: "Propriétaires", icon: Building2 },
+          { to: "/backoffice/superadmin/superadmins", label: "Superadmins", icon: Shield },
+        ],
+      },
       { kind: "link", to: "/backoffice/superadmin/abonnements", label: "Abonnements", icon: CreditCard },
     ],
   },
@@ -116,6 +140,17 @@ function displayName(user: { prenom?: string; nom?: string } | null) {
 function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const usersOpen =
+    location.pathname.includes("/gerants") ||
+    location.pathname.includes("/proprietaires") ||
+    location.pathname.includes("/superadmins") ||
+    location.pathname.includes("/utilisateurs");
+  const [groupOpen, setGroupOpen] = useState(usersOpen);
+
+  useEffect(() => {
+    if (usersOpen) setGroupOpen(true);
+  }, [usersOpen]);
 
   return (
     <aside
@@ -139,7 +174,7 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
         {SECTIONS.map((section) => (
-          <div key={section.title}>
+          <div key={section.title || "root"}>
             {section.title ? (
             <p
               className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider"
@@ -163,17 +198,70 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
                     </div>
                   );
                 }
+
+                if (item.kind === "group") {
+                  return (
+                    <div key={item.label}>
+                      <button
+                        type="button"
+                        onClick={() => setGroupOpen((v) => !v)}
+                        className="w-full flex items-center gap-2.5 mx-1 px-3 py-2 rounded-md text-[13px] font-medium"
+                        style={{
+                          color: usersOpen ? "var(--sa-sidebar-active-text)" : "var(--sa-sidebar-text)",
+                          background: usersOpen ? "var(--sa-sidebar-active-bg)" : "transparent",
+                        }}
+                      >
+                        <item.icon size={15} className="shrink-0" />
+                        <span className="flex-1 text-left">{item.label}</span>
+                        <ChevronDown
+                          size={14}
+                          className={`shrink-0 transition-transform ${groupOpen ? "rotate-180" : ""}`}
+                        />
+                      </button>
+                      {groupOpen ? (
+                        <div className="mt-0.5 ml-3 pl-2 space-y-0.5" style={{ borderLeft: "1px solid var(--sa-sidebar-border)" }}>
+                          <NavLink
+                            to="/backoffice/superadmin/utilisateurs"
+                            end
+                            onClick={onNavigate}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-[12px] font-medium"
+                            style={({ isActive }) =>
+                              isActive
+                                ? { color: "var(--sa-sidebar-active-text)", background: "rgba(255,255,255,0.08)" }
+                                : { color: "var(--sa-sidebar-text)" }
+                            }
+                          >
+                            Vue d&apos;ensemble
+                          </NavLink>
+                          {item.children.map((child) => (
+                            <NavLink
+                              key={child.to}
+                              to={child.to}
+                              onClick={onNavigate}
+                              className="flex items-center gap-2 px-3 py-1.5 rounded-md text-[12px] font-medium"
+                              style={({ isActive }) =>
+                                isActive
+                                  ? { color: "var(--sa-sidebar-active-text)", background: "rgba(255,255,255,0.08)" }
+                                  : { color: "var(--sa-sidebar-text)" }
+                              }
+                            >
+                              <child.icon size={13} className="shrink-0 opacity-80" />
+                              {child.label}
+                            </NavLink>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                }
+
                 return (
                   <NavLink
                     key={item.to}
                     to={item.to}
                     end={item.end}
                     onClick={onNavigate}
-                    className={({ isActive }) =>
-                      `flex items-center gap-2.5 mx-1 px-3 py-2 rounded-md text-[13px] font-medium leading-snug ${
-                        isActive ? "" : ""
-                      }`
-                    }
+                    className="flex items-center gap-2.5 mx-1 px-3 py-2 rounded-md text-[13px] font-medium leading-snug"
                     style={({ isActive }) =>
                       isActive
                         ? {

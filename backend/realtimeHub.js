@@ -27,7 +27,7 @@ function subscribe(terrainId, res) {
 
 /**
  * @param {number|string} terrainId
- * @param {string} type  horaires | blocage | reservation | tarifs | planning | statut | sante | encaissement
+ * @param {string} type  horaires | blocage | reservation | tarifs | planning | statut | sante | encaissement | photos
  * @param {Record<string, unknown>} [payload]
  */
 function notifyTerrain(terrainId, type, payload = {}) {

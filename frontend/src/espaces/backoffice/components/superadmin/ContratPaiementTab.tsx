@@ -118,6 +118,7 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
   const [canal, setCanal] = useState<CanalReversement>(contrat.canal_reversement);
   const [remb, setRemb] = useState(contrat.remboursement_autorise || Number(terrain.delai_remboursement_heures || 0) > 0);
   const [delai, setDelai] = useState(String(terrain.delai_remboursement_heures ?? 0));
+  const [delaiVerrou, setDelaiVerrou] = useState(String(terrain.delai_verrou_paiement_min ?? 15));
   const [mode, setMode] = useState<PayoutMode>(contrat.payout_mode);
   const [politique, setPolitique] = useState<FraisPolitique>(contrat.payout_frais_politique);
   const [pctG, setPctG] = useState(String(contrat.frais_payout_pct_gerant ?? 1));
@@ -245,6 +246,22 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
         remb ? `${heures} h` : "Non",
       );
       toast.success("Politique d’annulation enregistrée");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function saveDelaiVerrou() {
+    setSaving("verrou");
+    try {
+      const minutes = Math.max(1, Math.min(120, Number(delaiVerrou) || 15));
+      const updated = (await superAdminApi.delaiVerrouPaiement(terrain.id, minutes)) as {
+        delai_verrou_paiement_min?: number;
+      };
+      setDelaiVerrou(String(updated?.delai_verrou_paiement_min ?? minutes));
+      toast.success(`Délai de confirmation : ${minutes} min`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
     } finally {
@@ -508,6 +525,42 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
           style={{ background: "var(--sa-primary)" }}
         >
           {saving === "politique" ? "Enregistrement…" : "Enregistrer la politique"}
+        </button>
+      </section>
+
+      {/* Délai hold paiement */}
+      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-primary)" }}>
+        <h3 className="flex items-center gap-2 text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
+          <Zap size={16} style={{ color: "var(--sa-primary)" }} />
+          Délai de confirmation paiement
+        </h3>
+        <p className="mt-2 text-[13px]" style={{ color: "var(--sa-text-2)" }}>
+          Quand un créneau est réservé en attente de paiement, il reste indisponible (joueur et gérant)
+          pendant ce délai. Sans confirmation, il redevient libre automatiquement.
+        </p>
+        <label className="mt-4 block max-w-xs">
+          <span className="text-[12px] font-medium" style={{ color: "var(--sa-text-2)" }}>Délai en minutes</span>
+          <input
+            type="number"
+            min={1}
+            max={120}
+            value={delaiVerrou}
+            onChange={(e) => setDelaiVerrou(e.target.value)}
+            className="mt-1 w-full h-11 rounded-lg px-3 text-sm"
+            style={{ border: "1px solid var(--sa-border)", color: "var(--sa-text)" }}
+          />
+          <span className="mt-1 block text-[11px]" style={{ color: "var(--sa-muted)" }}>
+            Par défaut 15 min · max 120 min
+          </span>
+        </label>
+        <button
+          type="button"
+          disabled={saving === "verrou"}
+          onClick={saveDelaiVerrou}
+          className="mt-4 min-h-[44px] px-4 rounded-lg text-[13px] font-semibold text-white"
+          style={{ background: "var(--sa-primary)" }}
+        >
+          {saving === "verrou" ? "Enregistrement…" : "Enregistrer le délai"}
         </button>
       </section>
 

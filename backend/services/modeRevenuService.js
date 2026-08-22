@@ -22,9 +22,9 @@ const DEFAULTS = {
   achat_montant_min: 0,
 };
 
-function getDefaults(database) {
+async function getDefaults(database) {
   try {
-    const row = queryOne(database, 'SELECT valeur FROM plateforme_settings WHERE cle = ?', ['mode_revenu_defaults']);
+    const row = await queryOne(database, 'SELECT valeur FROM plateforme_settings WHERE cle = ?', ['mode_revenu_defaults']);
     if (!row?.valeur) return { ...DEFAULTS };
     return { ...DEFAULTS, ...JSON.parse(row.valeur) };
   } catch {
@@ -32,14 +32,14 @@ function getDefaults(database) {
   }
 }
 
-function saveDefaults(database, patch) {
-  const next = { ...getDefaults(database), ...patch };
-  const existing = queryOne(database, 'SELECT cle FROM plateforme_settings WHERE cle = ?', ['mode_revenu_defaults']);
+async function saveDefaults(database, patch) {
+  const next = { ...(await getDefaults(database)), ...patch };
+  const existing = await queryOne(database, 'SELECT cle FROM plateforme_settings WHERE cle = ?', ['mode_revenu_defaults']);
   const json = JSON.stringify(next);
   if (existing) {
-    runSql(database, 'UPDATE plateforme_settings SET valeur = ?, updated_at = CURRENT_TIMESTAMP WHERE cle = ?', [json, 'mode_revenu_defaults']);
+    await runSql(database, 'UPDATE plateforme_settings SET valeur = ?, updated_at = CURRENT_TIMESTAMP WHERE cle = ?', [json, 'mode_revenu_defaults']);
   } else {
-    runSql(database, 'INSERT INTO plateforme_settings (cle, valeur) VALUES (?, ?)', ['mode_revenu_defaults', json]);
+    await runSql(database, 'INSERT INTO plateforme_settings (cle, valeur) VALUES (?, ?)', ['mode_revenu_defaults', json]);
   }
   return next;
 }
@@ -53,10 +53,10 @@ function resolveMode(terrain) {
   return 'commission';
 }
 
-function applyMode(database, terrain, body, actorId) {
+async function applyMode(database, terrain, body, actorId) {
   const mode = String(body?.mode || '');
   const today = essaiService.ymd(new Date());
-  const defaults = getDefaults(database);
+  const defaults = await getDefaults(database);
   const from = resolveMode(terrain);
   const id = Number(terrain.id);
 
@@ -65,32 +65,32 @@ function applyMode(database, terrain, body, actorId) {
     const nego = Math.max(0, Number(body.delai_negociation_jours || defaults.delai_negociation_jours));
     const debut = String(body.essai_debut_at || today).slice(0, 10);
     const fin = essaiService.addDays(debut, duree);
-    runSql(database, `UPDATE terrains SET mode_essai = 1, essai_debut_at = ?, essai_duree_jours = ?, essai_fin_at = ?,
+    await runSql(database, `UPDATE terrains SET mode_essai = 1, essai_debut_at = ?, essai_duree_jours = ?, essai_fin_at = ?,
       delai_negociation_jours = ?, essai_suspendu_auto = 0, notif_essai_fin_j7 = 0, notif_essai_fin_j3 = 0, notif_essai_fin_j1 = 0 WHERE id = ?`,
       [debut, duree, fin, nego, id]);
   } else if (mode === 'commission') {
     const pct = Math.max(0, Number(body.commission_pourcentage ?? terrain.commission_pourcentage ?? defaults.commission_pourcentage));
-    runSql(database, 'UPDATE terrains SET mode_essai = 0, modele_revenus = ?, commission_pourcentage = ? WHERE id = ?', ['commission', pct, id]);
+    await runSql(database, 'UPDATE terrains SET mode_essai = 0, modele_revenus = ?, commission_pourcentage = ? WHERE id = ?', ['commission', pct, id]);
   } else if (mode === 'abonnement') {
     const montant = Math.max(0, Number(body.abonnement_montant ?? terrain.abonnement_montant ?? defaults.abonnement_montant));
-    runSql(database, 'UPDATE terrains SET mode_essai = 0, modele_revenus = ?, abonnement_montant = ? WHERE id = ?', ['abonnement', montant, id]);
+    await runSql(database, 'UPDATE terrains SET mode_essai = 0, modele_revenus = ?, abonnement_montant = ? WHERE id = ?', ['abonnement', montant, id]);
   } else if (mode === 'achat') {
     const montant = Math.max(0, Number(body.achat_definitif_montant ?? terrain.achat_definitif_montant ?? 0));
-    runSql(database, 'UPDATE terrains SET mode_essai = 0, modele_revenus = ?, achat_definitif_montant = ? WHERE id = ?', ['achat_definitif', montant, id]);
+    await runSql(database, 'UPDATE terrains SET mode_essai = 0, modele_revenus = ?, achat_definitif_montant = ? WHERE id = ?', ['achat_definitif', montant, id]);
   } else {
     const err = new Error('Mode invalide');
     err.statusCode = 400;
     throw err;
   }
 
-  runSql(database, `INSERT INTO mode_revenu_history (terrain_id, ancien_mode, nouveau_mode, fait_par, note)
+  await runSql(database, `INSERT INTO mode_revenu_history (terrain_id, ancien_mode, nouveau_mode, fait_par, note)
     VALUES (?, ?, ?, ?, ?)`, [id, from, mode, actorId || null, String(body.note || '').slice(0, 500)]);
-  return queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [id]);
+  return await queryOne(database, 'SELECT * FROM terrains WHERE id = ?', [id]);
 }
 
-function listHistory(database) {
+async function listHistory(database) {
   try {
-    return queryAll(database, `SELECT h.*, t.nom AS terrain_nom, u.nom AS auteur
+    return await queryAll(database, `SELECT h.*, t.nom AS terrain_nom, u.nom AS auteur
     FROM mode_revenu_history h
     LEFT JOIN terrains t ON t.id = h.terrain_id
     LEFT JOIN users u ON u.id = h.fait_par
