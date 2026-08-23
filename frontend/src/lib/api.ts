@@ -412,6 +412,10 @@ export const terrainsApi = {
     return await request(`/terrains/${id}`);
   },
 
+  async commoditesCatalog() {
+    return await request('/commodites');
+  },
+
   async getCreneaux(id: number | string, date: string, opts?: { duree_minutes?: number }) {
     const q = new URLSearchParams({ date });
     if (opts?.duree_minutes != null) q.set("duree_minutes", String(opts.duree_minutes));
@@ -831,6 +835,14 @@ export const gerantApi = {
     return await request('/gerant/dettes');
   },
 
+  /** Shell — Mohamed branche la logique backend POST /gerant/dettes/payer */
+  async payerDette(body: { periode: string; montant: number; methode?: string }) {
+    return await request('/gerant/dettes/payer', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
   async confirmerManuellement(id: number | string, note?: string) {
     return await request(`/gerant/reservations/${id}/confirmer-manuellement`, {
       method: 'POST',
@@ -1057,8 +1069,8 @@ export const pushApi = {
     return await request('/push/preferences');
   },
 
-  async updatePreferences(prefs: Record<string, boolean>) {
-    return await request('/push/preferences', { method: 'PUT', body: JSON.stringify(prefs) });
+  async updatePreferences(prefs: Record<string, boolean | number>) {
+    return await request('/push/preferences', { method: 'PATCH', body: JSON.stringify(prefs) });
   },
 
   async subscribe(subscription: PushSubscriptionJSON) {
@@ -1067,6 +1079,15 @@ export const pushApi = {
 
   async unsubscribe(endpoint: string) {
     return await request('/push/unsubscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) });
+  },
+
+  async getLogs(params?: Record<string, string | number | undefined>) {
+    const sp = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v != null && v !== '') sp.set(k, String(v));
+    });
+    const q = sp.toString();
+    return await request(`/push/logs${q ? `?${q}` : ''}`);
   },
 };
 

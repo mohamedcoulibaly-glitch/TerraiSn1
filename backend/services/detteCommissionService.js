@@ -22,6 +22,117 @@ function periodeCivile(d = new Date()) {
   return `${y}-${m}`;
 }
 
+/** Fin du mois de la période (YYYY-MM) + délai en jours → date ISO YYYY-MM-DD */
+function calculerDateEcheance(periodeYYYYMM, delaiJours = 7) {
+  const parts = String(periodeYYYYMM || periodeCivile()).split('-').map(Number);
+  const y = parts[0];
+  const m = parts[1];
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
+    const now = new Date();
+    const fin = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    fin.setDate(fin.getDate() + Math.max(0, Number(delaiJours) || 0));
+    const yy = fin.getFullYear();
+    const mm = String(fin.getMonth() + 1).padStart(2, '0');
+    const dd = String(fin.getDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+  }
+  const finMois = new Date(y, m, 0);
+  finMois.setDate(finMois.getDate() + Math.max(0, Number(delaiJours) || 0));
+  const yy = finMois.getFullYear();
+  const mm = String(finMois.getMonth() + 1).padStart(2, '0');
+  const dd = String(finMois.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+function joursRestantsDepuis(dateEcheance) {
+  if (!dateEcheance) return null;
+  const echeance = new Date(`${String(dateEcheance).slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(echeance.getTime())) return null;
+  const auj = new Date();
+  const aujMidi = new Date(auj.getFullYear(), auj.getMonth(), auj.getDate(), 12, 0, 0);
+  return Math.ceil((echeance.getTime() - aujMidi.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+async function resoudreGerantTerrain(db, terrainId) {
+  const { getGerantPrincipal } = require('./gerantService');
+  try {
+    const principal = await getGerantPrincipal(terrainId);
+    if (principal?.gerant_id) return Number(principal.gerant_id);
+  } catch (_) {
+    /* fallback ci-dessous */
+  }
+  const row = await queryOne(
+    db,
+    `SELECT e.id FROM employes e
+     WHERE e.terrain_id = ? AND COALESCE(e.is_active, 1) = 1
+     ORDER BY e.id ASC LIMIT 1`,
+    [terrainId],
+  );
+  return row ? Number(row.id) : null;
+}
+
+/**
+ * Enregistre une ligne de dette commission + upsert résumé période.
+ * Utilisé par confirmation manuelle et flux sans_avance.
+ */
+async function enregistrerDetteCommission(db, {
+  terrainId,
+  gerantId,
+  reservationId,
+  montantCommission,
+  montantAvanceManuelle = 0,
+  periode,
+  dateEcheance,
+  note = null,
+  faitPar = null,
+  roleFaitPar = 'gerant',
+  detailAudit = null,
+}) {
+  const p = periode || periodeCivile();
+  const commission = Math.max(0, Math.round(Number(montantCommission) || 0));
+  const avance = Math.max(0, Math.round(Number(montantAvanceManuelle) || 0));
+  const echeance = dateEcheance || null;
+
+  const detteResult = await runSql(
+    db,
+    `INSERT INTO dettes_commissions
+       (terrain_id, gerant_id, reservation_id, montant_commission, montant_avance_manuelle,
+        statut, periode, date_echeance, montant_regle, note, derniere_mise_a_jour)
+     VALUES (?, ?, ?, ?, ?, 'en_attente', ?, ?, 0, ?, CURRENT_TIMESTAMP)`,
+    [terrainId, gerantId, reservationId, commission, avance, p, echeance, note],
+  );
+  const detteId = Number(detteResult.lastInsertRowid || 0);
+
+  await runSql(
+    db,
+    `INSERT INTO resume_dette_periode
+       (terrain_id, gerant_id, periode, total_commission, total_regle, date_echeance, statut, updated_at)
+     VALUES (?, ?, ?, ?, 0, ?, 'en_cours', CURRENT_TIMESTAMP)
+     ON CONFLICT (terrain_id, gerant_id, periode) DO UPDATE SET
+       total_commission = resume_dette_periode.total_commission + EXCLUDED.total_commission,
+       date_echeance = COALESCE(resume_dette_periode.date_echeance, EXCLUDED.date_echeance),
+       updated_at = CURRENT_TIMESTAMP`,
+    [terrainId, gerantId, p, commission, echeance],
+  );
+
+  await runSql(
+    db,
+    `INSERT INTO audit_dette
+       (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
+     VALUES (?, ?, 'creation', ?, ?, ?, ?)`,
+    [
+      detteId,
+      terrainId,
+      commission,
+      faitPar != null ? faitPar : gerantId,
+      roleFaitPar || 'gerant',
+      detailAudit || note || 'Commission en dette',
+    ],
+  );
+
+  return { detteId, commission, periode: p, dateEcheance: echeance };
+}
+
 async function getSetting(db, cle, fallback = '') {
   const row = await queryOne(db, 'SELECT valeur FROM plateforme_settings WHERE cle = ?', [cle]);
   return row?.valeur != null ? String(row.valeur) : fallback;
@@ -38,18 +149,14 @@ async function setSetting(db, cle, valeur) {
 }
 
 async function instructionsPaiementDette(db) {
-  return getSetting(
-    db,
-    'dette_instructions',
-    '',
-  );
+  return getSetting(db, 'dette_instructions', '');
 }
 
 async function confirmerManuellement(db, { reservationId, gerantId, note }) {
   const reservation = await queryOne(
     db,
     `SELECT r.*, t.commission_pourcentage, t.pourcentage_avance, t.modele_revenus, t.commission,
-            t.acompte, t.montant_acompte
+            t.acompte, t.montant_acompte, t.delai_paiement_dette_jours
      FROM reservations r
      JOIN terrains t ON t.id = r.terrain_id
      JOIN employes e ON e.terrain_id = t.id AND e.id = ?
@@ -73,6 +180,8 @@ async function confirmerManuellement(db, { reservationId, gerantId, note }) {
   const montantAvance = Number(reservation.montant_avance || reservation.acompte || 0);
   const commission = calculerCommissionPrelevee(reservation, montantAvance);
   const periode = periodeCivile();
+  const delaiJours = Math.max(7, Math.min(90, Number(reservation.delai_paiement_dette_jours) || 30));
+  const dateEcheance = calculerDateEcheance(periode, delaiJours);
   const noteGerant = note ? String(note).slice(0, 500) : null;
 
   let code = reservation.code_reservation;
@@ -125,28 +234,19 @@ async function confirmerManuellement(db, { reservationId, gerantId, note }) {
 
   const loserIds = await annulerReservationsConcurrentes(db, { ...reservation, id: reservationId });
 
-  const detteResult = await runSql(
-    db,
-    `INSERT INTO dettes_commissions
-       (terrain_id, gerant_id, reservation_id, montant_commission, montant_avance_manuelle, statut, periode, note)
-     VALUES (?, ?, ?, ?, ?, 'en_attente', ?, ?)`,
-    [reservation.terrain_id, gerantId, reservationId, commission, montantAvance, periode, noteGerant],
-  );
-  const detteId = Number(detteResult.lastInsertRowid || 0);
-
-  await runSql(
-    db,
-    `INSERT INTO audit_dette
-       (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
-     VALUES (?, ?, 'creation', ?, ?, 'gerant', ?)`,
-    [
-      detteId,
-      reservation.terrain_id,
-      commission,
-      gerantId,
-      `Confirmation manuelle. Avance reçue hors PayTech : ${montantAvance} FCFA`,
-    ],
-  );
+  await enregistrerDetteCommission(db, {
+    terrainId: reservation.terrain_id,
+    gerantId,
+    reservationId,
+    montantCommission: commission,
+    montantAvanceManuelle: montantAvance,
+    periode,
+    dateEcheance,
+    note: noteGerant,
+    faitPar: gerantId,
+    roleFaitPar: 'gerant',
+    detailAudit: `Confirmation manuelle. Avance reçue hors PayTech : ${montantAvance} FCFA`,
+  });
 
   await runSql(
     db,
@@ -173,17 +273,55 @@ async function resumeGerant(db, gerantId, periode) {
     db,
     `SELECT COUNT(*) as nb_reservations_manuelles,
             COALESCE(SUM(montant_commission), 0) as total_dette,
-            COALESCE(SUM(CASE WHEN statut='en_attente' THEN montant_commission ELSE 0 END), 0) as dette_en_cours,
-            COALESCE(SUM(CASE WHEN statut='payee' THEN montant_commission ELSE 0 END), 0) as dette_payee
+            COALESCE(SUM(CASE WHEN statut='en_attente'
+              THEN montant_commission - COALESCE(montant_regle, 0) ELSE 0 END), 0) as dette_en_cours,
+            COALESCE(SUM(CASE WHEN statut='payee' THEN montant_commission ELSE 0 END), 0) as dette_payee,
+            MIN(date_echeance) FILTER (WHERE statut = 'en_attente') as date_echeance_dettes
      FROM dettes_commissions
      WHERE gerant_id = ? AND periode = ?`,
     [gerantId, p],
   )) || {};
+
+  const rdp = (await queryOne(
+    db,
+    `SELECT
+       COALESCE(SUM(rdp.total_commission), 0) AS total_commission,
+       COALESCE(SUM(rdp.total_regle), 0) AS total_regle,
+       COALESCE(SUM(rdp.total_commission - rdp.total_regle), 0) AS solde_restant,
+       MIN(rdp.date_echeance) AS date_echeance,
+       MAX(t.delai_paiement_dette_jours) AS delai_paiement_dette_jours
+     FROM resume_dette_periode rdp
+     JOIN terrains t ON t.id = rdp.terrain_id
+     WHERE rdp.gerant_id = ? AND rdp.periode = ?`,
+    [gerantId, p],
+  )) || {};
+
+  let dateEcheance = rdp.date_echeance || resume.date_echeance_dettes || null;
+  let delaiJours = Number(rdp.delai_paiement_dette_jours);
+  if (!Number.isFinite(delaiJours) || delaiJours < 1) {
+    const terrainDelai = await queryOne(
+      db,
+      `SELECT t.delai_paiement_dette_jours
+       FROM employes e JOIN terrains t ON t.id = e.terrain_id
+       WHERE e.id = ? LIMIT 1`,
+      [gerantId],
+    );
+    delaiJours = Number(terrainDelai?.delai_paiement_dette_jours) || 30;
+  }
+  if (!dateEcheance && Number(resume.dette_en_cours) > 0) {
+    dateEcheance = calculerDateEcheance(p, delaiJours);
+  }
+
+  const soldeFromRdp = Number(rdp.solde_restant);
+  const hasRdp = Number(rdp.total_commission || 0) > 0 || Number(rdp.total_regle || 0) > 0;
+  const detteEnCours = hasRdp ? Math.max(0, soldeFromRdp) : Number(resume.dette_en_cours || 0);
+
   const detail = await queryAll(
     db,
     `SELECT d.*, r.code_reservation, r.created_at as resa_date, r.note_gerant,
             r.date as match_date, r.heure_debut,
-            COALESCE(u.prenom, r.joueur_nom) as joueur_nom
+            COALESCE(u.prenom, r.joueur_nom) as joueur_nom,
+            (COALESCE(d.montant_commission, 0) - COALESCE(d.montant_regle, 0)) as solde_ligne
      FROM dettes_commissions d
      JOIN reservations r ON r.id = d.reservation_id
      LEFT JOIN users u ON u.id = r.joueur_id
@@ -195,7 +333,10 @@ async function resumeGerant(db, gerantId, periode) {
     db,
     `SELECT periode,
             COALESCE(SUM(montant_commission), 0) AS total,
-            SUM(CASE WHEN statut='en_attente' THEN 1 ELSE 0 END) AS nb_attente
+            COALESCE(SUM(CASE WHEN statut='en_attente'
+              THEN montant_commission - COALESCE(montant_regle, 0) ELSE 0 END), 0) AS solde,
+            SUM(CASE WHEN statut='en_attente' THEN 1 ELSE 0 END) AS nb_attente,
+            MAX(payee_at) AS date_reglement
      FROM dettes_commissions
      WHERE gerant_id = ? AND periode < ?
      GROUP BY periode
@@ -203,12 +344,20 @@ async function resumeGerant(db, gerantId, periode) {
      LIMIT 6`,
     [gerantId, p],
   );
+
   return {
     resume: {
       nb_reservations_manuelles: Number(resume.nb_reservations_manuelles || 0),
       total_dette: Number(resume.total_dette || 0),
-      dette_en_cours: Number(resume.dette_en_cours || 0),
+      dette_en_cours: detteEnCours,
       dette_payee: Number(resume.dette_payee || 0),
+      total_commission: Number(rdp.total_commission || resume.total_dette || 0),
+      total_regle: Number(rdp.total_regle || 0),
+      solde_restant: detteEnCours,
+      date_echeance: dateEcheance,
+      jours_restants: joursRestantsDepuis(dateEcheance),
+      delai_paiement_dette_jours: delaiJours,
+      statut_periode: detteEnCours <= 0 ? 'solde' : 'en_cours',
     },
     detail,
     historique,
@@ -375,6 +524,11 @@ async function confirmationsManuellesProprio(db, terrainIds, periode) {
 
 module.exports = {
   periodeCivile,
+  calculerDateEcheance,
+  joursRestantsDepuis,
+  resoudreGerantTerrain,
+  enregistrerDetteCommission,
+  creerLigneDette: enregistrerDetteCommission,
   confirmerManuellement,
   resumeGerant,
   resumeSuperadminMois,

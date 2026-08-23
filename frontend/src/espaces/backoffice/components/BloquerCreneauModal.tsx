@@ -5,6 +5,7 @@ import { gerantApi, terrainsApi } from "@/lib/api";
 import { localYmd } from "@/lib/localDate";
 import { cn } from "@/lib/utils";
 import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
+import { featureEnabled } from "@/lib/terrainFeatures";
 
 type Blocage = {
   id: number;
@@ -46,6 +47,8 @@ type Props = {
   terrainId?: number;
   blocages?: Blocage[];
   onChanged?: () => void;
+  /** Feature flags terrain (dashboard gérant). */
+  features?: Record<string, boolean> | null;
 };
 
 const MOTIFS = [
@@ -117,7 +120,10 @@ export default function BloquerCreneauModal({
   terrainId,
   blocages = [],
   onChanged,
+  features,
 }: Props) {
+  const allowAbonnement = featureEnabled(features, "abonnements", false);
+  const allowTournoi = featureEnabled(features, "tournois", true);
   const [mode, setMode] = useState<Mode>("manuel");
   const [date, setDate] = useState(localYmd());
   const [motif, setMotif] = useState<(typeof MOTIFS)[number]["value"] | null>("pluie");
@@ -127,6 +133,11 @@ export default function BloquerCreneauModal({
   const [busy, setBusy] = useState(false);
   const [showList, setShowList] = useState(false);
   const [localBlocages, setLocalBlocages] = useState<Blocage[]>(blocages);
+
+  useEffect(() => {
+    if (mode === "abonnement" && !allowAbonnement) setMode("manuel");
+    if (mode === "tournoi" && !allowTournoi) setMode("manuel");
+  }, [mode, allowAbonnement, allowTournoi]);
   const [groupes, setGroupes] = useState<Groupe[]>([]);
   const [confirmBlock, setConfirmBlock] = useState(false);
 
@@ -357,10 +368,22 @@ export default function BloquerCreneauModal({
                 {(
                   [
                     { id: "manuel" as const, label: "Marquer indisponible", desc: "Pluie, maintenance, fermeture exceptionnelle", Icon: CloudRain, color: "var(--g-danger)" },
-                    { id: "tournoi" as const, label: "Réserver pour un tournoi", desc: "Événement compétitif, journée ou demi-journée", Icon: Trophy, color: "var(--g-accent)" },
-                    { id: "abonnement" as const, label: "Créer un abonnement", desc: "Même créneau chaque semaine", Icon: Repeat, color: "var(--g-info)" },
-                  ] as const
-                ).map((t) => {
+                    allowTournoi
+                      ? ({ id: "tournoi" as const, label: "Réserver pour un tournoi", desc: "Événement compétitif, journée ou demi-journée", Icon: Trophy, color: "var(--g-accent)" } as const)
+                      : null,
+                    allowAbonnement
+                      ? ({ id: "abonnement" as const, label: "Créer un abonnement", desc: "Même créneau chaque semaine", Icon: Repeat, color: "var(--g-info)" } as const)
+                      : null,
+                  ] as Array<{
+                    id: Mode;
+                    label: string;
+                    desc: string;
+                    Icon: typeof CloudRain;
+                    color: string;
+                  } | null>
+                )
+                  .filter((t): t is NonNullable<typeof t> => t != null)
+                  .map((t) => {
                   const selected = mode === t.id;
                   return (
                     <button

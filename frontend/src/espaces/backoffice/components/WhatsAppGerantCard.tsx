@@ -111,83 +111,110 @@ export default function WhatsAppGerantCard() {
   const waitingScan = Boolean((qr || pairingCode) && !connected && !mock);
 
   return (
-    <section className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 space-y-3">
+    <section
+      className="rounded-2xl p-4 space-y-5"
+      style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold inline-flex items-center gap-2">
-            <MessageCircle className="w-4 h-4 text-[#25D366]" />
-            WhatsApp expéditeur
+          <h2 className="text-base font-semibold inline-flex items-center gap-2" style={{ color: "var(--g-text)" }}>
+            <MessageCircle className="w-5 h-5 text-[#25D366]" />
+            Ton WhatsApp professionnel
           </h2>
-          <p className="text-xs text-[var(--color-text-secondary)] mt-1">
-            Scannez le QR, ou utilisez le code. Ne fermez pas cette page pendant la liaison.
+          <p className="text-sm mt-1" style={{ color: "var(--g-muted)" }}>
+            Relie ton téléphone pour envoyer les notifications du terrain.
           </p>
         </div>
         <span
-          className={`shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-full ${
-            mock
-              ? "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]"
-              : connected
-                ? "bg-[color-mix(in_srgb,#25D366_16%,white)] text-[#128C7E]"
-                : waitingScan
-                  ? "bg-[color-mix(in_srgb,#25D366_16%,white)] text-[#128C7E]"
-                  : "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]"
-          }`}
+          className="shrink-0 text-xs font-bold px-3 py-1.5 rounded-full"
+          style={{
+            background: connected ? "rgba(37, 211, 102, 0.16)" : "rgba(220, 38, 38, 0.12)",
+            color: connected ? "#128C7E" : "#dc2626",
+          }}
         >
-          {mock ? "Mode test" : connected ? "Connecté" : waitingScan ? "En attente du scan" : "À connecter"}
+          {connected ? "🟢 WhatsApp Connecté" : "🔴 Non Connecté"}
         </span>
       </div>
 
       {phone ? (
-        <p className="text-sm font-medium" style={{ fontFamily: "var(--font-display)" }}>
-          {phone}
-        </p>
+        <div className="rounded-xl p-3" style={{ background: "var(--g-surface-2)" }}>
+          <p className="text-sm" style={{ color: "var(--g-muted)" }}>Numéro lié</p>
+          <p className="text-base font-semibold mt-0.5" style={{ color: "var(--g-text)" }}>{phone}</p>
+        </div>
       ) : null}
 
+      {!connected ? (
+        <div className="space-y-3">
+          {[
+            ["1", "Ouvre WhatsApp", "Sur ton téléphone principal (celui que tu utilises tous les jours)."],
+            ["2", "Appareils connectés", "Va dans Paramètres → Appareils connectés."],
+            ["3", "Scanne le QR", "Touche « Connecter un appareil », puis scanne le code ci-dessous."],
+          ].map(([number, title, text]) => (
+            <div key={number} className="flex items-start gap-3 min-h-[64px]">
+              <span
+                className="w-10 h-10 rounded-full shrink-0 inline-flex items-center justify-center text-base font-bold text-white"
+                style={{ background: "#25D366" }}
+              >
+                {number}
+              </span>
+              <div className="pt-0.5">
+                <p className="text-base font-semibold" style={{ color: "var(--g-text)" }}>{title}</p>
+                <p className="text-sm mt-0.5" style={{ color: "var(--g-muted)" }}>{text}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div
+          className="rounded-2xl p-4 text-center"
+          style={{ background: "rgba(37, 211, 102, 0.12)", color: "#128C7E" }}
+        >
+          <p className="text-base font-semibold">Tout est prêt !</p>
+          <p className="text-sm mt-1">Ton terrain peut envoyer ses messages WhatsApp.</p>
+        </div>
+      )}
+
       {busy && !qr && !connected ? (
-        <p className="text-sm text-[var(--color-text-secondary)] inline-flex items-center gap-2">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Génération du QR…
+        <p className="text-base inline-flex items-center gap-2" style={{ color: "var(--g-muted)" }}>
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Préparation du QR…
         </p>
       ) : null}
 
       {qr && !connected && !mock && status?.waState !== "authenticating" && status?.waState !== "restarting" ? (
-        <div className="flex flex-col items-center gap-2 py-2">
+        <div className="flex flex-col items-center gap-3 py-2">
           <img
             key={qr.slice(-48)}
             src={qr}
-            alt="QR WhatsApp"
-            className="w-52 h-52 rounded-lg border border-[var(--color-border)] bg-white p-2"
+            alt="QR à scanner avec WhatsApp"
+            className="w-60 h-60 max-w-full rounded-2xl bg-white p-3"
+            style={{ border: "1px solid var(--g-border)" }}
           />
-          <p className="text-xs text-center text-[var(--color-text-secondary)] max-w-xs">
-            Sur le <strong>téléphone principal</strong> (pas un appareil déjà lié) :
-            WhatsApp → Paramètres → Appareils connectés → Connecter un appareil, puis scannez
-            <strong> ce </strong> QR. Si WhatsApp refuse, attendez 2 minutes, retirez un ancien appareil
-            lié, puis cliquez sur Nouveau QR.
+          <p className="text-sm text-center max-w-sm" style={{ color: "var(--g-muted)" }}>
+            Garde cette page ouverte pendant le scan. La connexion se confirmera automatiquement.
           </p>
         </div>
       ) : null}
 
       {(status?.waState === "authenticating" || status?.waState === "restarting") && !connected ? (
-        <p className="text-sm text-[var(--color-text-secondary)] inline-flex items-center gap-2">
-          <Loader2 className="w-4 h-4 animate-spin" />
+        <p className="text-base inline-flex items-center gap-2" style={{ color: "var(--g-muted)" }}>
+          <Loader2 className="w-5 h-5 animate-spin" />
           {status?.waState === "restarting"
-            ? "Finalisation de la liaison… ne fermez pas cette page."
-            : "Validation en cours sur le téléphone… ne fermez pas cette page."}
+            ? "Finalisation de la liaison… garde cette page ouverte."
+            : "Validation en cours sur ton téléphone…"}
         </p>
       ) : null}
 
       {pairingCode && !connected && !mock ? (
-        <div className="rounded-xl border border-[#25D366]/40 bg-[color-mix(in_srgb,#25D366_8%,white)] p-4 text-center space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#128C7E]">
-            Ou code d’appairage
-          </p>
+        <div className="rounded-2xl p-4 text-center space-y-2" style={{ background: "rgba(37, 211, 102, 0.1)", border: "1px solid rgba(37, 211, 102, 0.4)" }}>
+          <p className="text-sm font-semibold uppercase tracking-wide text-[#128C7E]">Ou utilise ce code</p>
           <p
-            className="text-3xl font-bold tracking-[0.2em] text-[var(--color-text-primary)]"
-            style={{ fontFamily: "var(--font-display)" }}
+            className="text-3xl font-bold tracking-[0.2em]"
+            style={{ fontFamily: "var(--font-display)", color: "var(--g-text)" }}
           >
             {formatPairingCode(pairingCode)}
           </p>
-          <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+          <p className="text-sm leading-relaxed" style={{ color: "var(--g-muted)" }}>
             Connecter un appareil → <strong>Lier avec un numéro de téléphone</strong>
             {status?.pairingPhone || phone ? (
               <>
@@ -199,16 +226,22 @@ export default function WhatsAppGerantCard() {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
+      {mock ? (
+        <p className="rounded-xl p-3 text-sm" style={{ background: "var(--g-surface-2)", color: "var(--g-muted)" }}>
+          {WHATSAPP_INFRA_MESSAGE}
+        </p>
+      ) : null}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {!connected && !waitingScan && (
           <button
             type="button"
             onClick={() => connect(false)}
             disabled={busy || mock}
-            className="min-h-[44px] px-4 rounded-[var(--radius-sm)] bg-[#25D366] text-white text-sm font-medium inline-flex items-center gap-2 disabled:opacity-60"
+            className="min-h-[52px] px-4 rounded-xl bg-[#25D366] text-white text-base font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-60 sm:col-span-2"
           >
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
-            {busy ? "Préparation…" : "Connecter mon WhatsApp"}
+            {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <QrCode className="w-5 h-5" />}
+            {busy ? "Préparation…" : "Afficher mon QR"}
           </button>
         )}
         {waitingScan && (
@@ -216,10 +249,11 @@ export default function WhatsAppGerantCard() {
             type="button"
             onClick={() => connect(true)}
             disabled={busy || mock}
-            className="min-h-[44px] px-4 rounded-[var(--radius-sm)] border border-[var(--color-border)] text-sm font-medium inline-flex items-center gap-2 disabled:opacity-60"
+            className="min-h-[48px] px-4 rounded-xl text-base font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-60 sm:col-span-2"
+            style={{ border: "1px solid var(--g-border)", color: "var(--g-text)" }}
           >
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
-            Nouveau QR
+            {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <QrCode className="w-5 h-5" />}
+            Générer un nouveau QR
           </button>
         )}
         {connected && !mock && (
@@ -227,10 +261,11 @@ export default function WhatsAppGerantCard() {
             type="button"
             onClick={disconnect}
             disabled={busy}
-            className="min-h-[44px] px-4 rounded-[var(--radius-sm)] border border-[var(--color-border)] text-sm font-medium inline-flex items-center gap-2"
+            className="min-h-[48px] px-4 rounded-xl text-base font-semibold inline-flex items-center justify-center gap-2 sm:col-span-2"
+            style={{ border: "1px solid var(--g-border)", color: "var(--g-text)" }}
           >
-            <Unplug className="w-4 h-4" />
-            Déconnecter
+            {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <Unplug className="w-5 h-5" />}
+            Déconnecter WhatsApp
           </button>
         )}
       </div>

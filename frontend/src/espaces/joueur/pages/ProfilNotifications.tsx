@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 import { notificationsApi, pushApi } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
+import PushPreferencesPanel from "@/components/pwa/PushPreferencesPanel";
 import {
   isPushSupported,
   subscribeToPushNotifications,
@@ -140,32 +141,9 @@ const ProfilNotifications = () => {
       </div>
 
       <div className="max-w-2xl mx-auto">
-        {pushSupported && (
-          <div className="responsive-padding mt-2">
-            <div className="glass-card p-4 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center">
-                  <Wifi className="w-5 h-5 text-[var(--color-primary)]" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium">Notifications push</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {pushEnabled ? 'Actives sur cet appareil' : 'Recevez des rappels même app fermée'}
-                  </p>
-                </div>
-              </div>
-              {pushEnabled ? (
-                <button type="button" onClick={disableAllPush} className="text-xs text-[var(--color-danger)] min-h-[44px] px-3">
-                  Désactiver
-                </button>
-              ) : (
-                <button type="button" onClick={enablePush} className="text-xs text-[var(--color-primary)] font-medium min-h-[44px] px-3">
-                  Activer
-                </button>
-              )}
-            </div>
-          </div>
-        )}
+        <div className="responsive-padding mt-2">
+          <PushPreferencesPanel />
+        </div>
 
         <div className="responsive-padding mt-4">
           <h3 className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-wider">

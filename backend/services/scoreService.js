@@ -109,6 +109,12 @@ async function recalculerScore(gerant_id, terrain_id, options = {}) {
   const inputs = await getScoreInputs(db, Number(gerant_id), Number(terrain_id));
   const periode = currentPeriod();
 
+  const existant = await queryOne(db, `
+    SELECT score FROM score_confiance
+     WHERE gerant_id = ? AND terrain_id = ? AND periode = ?
+  `, [Number(gerant_id), Number(terrain_id), periode]);
+  const scoreAvant = existant ? Number(existant.score) : 100;
+
   await runSql(db, `
     INSERT INTO score_confiance
       (gerant_id, terrain_id, periode, reservations_confirmees,
@@ -133,6 +139,24 @@ async function recalculerScore(gerant_id, terrain_id, options = {}) {
 
   if (options.notify !== false) {
     await verifierAlerteScore(db, Number(gerant_id), Number(terrain_id), inputs.score);
+    try {
+      const infos = await queryOne(db, `
+        SELECT t.nom AS terrain_nom, COALESCE(e.prenom, e.nom) AS gerant_prenom
+          FROM terrains t
+          LEFT JOIN employes e ON e.id = ?
+         WHERE t.id = ?
+      `, [Number(gerant_id), Number(terrain_id)]);
+      const pushService = require('../pushService');
+      await pushService.notifySanteTransition({
+        terrainId: Number(terrain_id),
+        gerantPrenom: infos?.gerant_prenom,
+        score: inputs.score,
+        scoreAvant,
+        terrainNom: infos?.terrain_nom,
+      });
+    } catch (err) {
+      console.warn('[PUSH] sante', err.message || err);
+    }
   }
 
   try {

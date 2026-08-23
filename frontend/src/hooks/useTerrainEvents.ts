@@ -11,7 +11,7 @@ export type TerrainEventPayload = {
 };
 
 /**
- * Abonnement SSE aux changements d’un terrain (horaires, blocages, résas, tarifs).
+ * Abonnement SSE aux changements d’un terrain (horaires, blocages, réservations, tarifs).
  * Reconnexion automatique avec backoff simple.
  */
 export function useTerrainEvents(

@@ -80,7 +80,7 @@ export function hotColumn(cards: FluxReservation[]): OperationalStage {
 }
 
 export const FLUX_MOBILE_TABS: { id: OperationalStage; label: string; short: string }[] = [
-  { id: "reserved", label: "Réservations", short: "Résas" },
+  { id: "reserved", label: "Réservations", short: "Réservations" },
   { id: "checkin", label: "Arrivées", short: "In" },
   { id: "match", label: "Terrain", short: "Match" },
   { id: "checkout", label: "Sorties", short: "Out" },

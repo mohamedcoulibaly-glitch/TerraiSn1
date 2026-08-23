@@ -162,6 +162,16 @@ function isAccountBlocked(account, accountType) {
   return statut === 'bloque' || statut === 'suspendu';
 }
 
+/** bcrypt.compareSync plante si le hash n'est pas une string (ex. NULL en PG → typeof null === 'object'). */
+function passwordMatches(password, hash) {
+  if (typeof hash !== 'string' || !hash) return false;
+  try {
+    return bcrypt.compareSync(String(password || ''), hash);
+  } catch {
+    return false;
+  }
+}
+
 function parsePhotos(raw) {
   if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
   if (typeof raw === 'string' && raw.trim()) {
@@ -651,7 +661,7 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
     }
 
     if (!account) return res.status(401).json({ error: 'Identifiants incorrects' });
-    if (!bcrypt.compareSync(password, account.password_hash)) {
+    if (!passwordMatches(password, account.password_hash)) {
       return res.status(401).json({ error: 'Identifiants incorrects' });
     }
     if (isAccountBlocked(account, resolvedType || 'user')) {
@@ -731,18 +741,20 @@ app.post('/api/backoffice/auth/login', authRateLimit, async (req, res) => {
 
     // Un même numéro peut exister sur plusieurs tables (proprio + gérant + joueur).
     // On collecte tous les candidats, puis on garde ceux dont le mot de passe matche.
+    // Priorité : super_admin > propriétaire > gérant (évite d'ouvrir l'espace gérant
+    // quand le même téléphone existe aussi sur un compte propriétaire).
     const candidates = [
       ...(await queryAll(db, 'SELECT * FROM employes')).map((row) => ({
         account: row,
         resolvedType: 'employe',
         role: 'gerant',
-        priority: 1,
+        priority: 2,
       })),
       ...(await queryAll(db, 'SELECT * FROM proprietaires')).map((row) => ({
         account: row,
         resolvedType: 'proprietaire',
         role: 'proprietaire',
-        priority: 2,
+        priority: 1,
       })),
       ...(await queryAll(db, 'SELECT * FROM users')).map((row) => {
         let role = row.role === 'superadmin' ? 'super_admin' : (row.role || 'joueur');
@@ -751,13 +763,13 @@ app.post('/api/backoffice/auth/login', authRateLimit, async (req, res) => {
           account: row,
           resolvedType: 'user',
           role,
-          priority: role === 'super_admin' ? 3 : 9,
+          priority: role === 'super_admin' ? 0 : 9,
         };
       }),
     ].filter((c) => matchesIdentifier(c.account));
 
     const authenticated = candidates
-      .filter((c) => bcrypt.compareSync(password, c.account.password_hash))
+      .filter((c) => passwordMatches(password, c.account.password_hash))
       .filter((c) => c.role !== 'joueur' && c.role !== 'user')
       .sort((a, b) => a.priority - b.priority);
 
@@ -1018,6 +1030,27 @@ function serializeCommodites(raw) {
   return '[]';
 }
 
+// Catalogue public commodités (actif) — pour pickers / affichage
+app.get('/api/commodites', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = await commoditesService.listCommodites(db, { actif: 1 });
+    res.json(
+      rows.map((r) => ({
+        id: r.id,
+        cle: r.cle,
+        label_fr: r.label_fr,
+        icone: r.icone,
+        description: r.description,
+        ordre: r.ordre,
+      })),
+    );
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // Liste publique
 app.get('/api/terrains', async (req, res) => {
   try {
@@ -1185,8 +1218,15 @@ app.get('/api/terrains/:id', async (req, res) => {
     const employe = await queryOne(db, 'SELECT whatsapp_number, nom FROM employes WHERE terrain_id = ? AND is_active = 1 LIMIT 1', [terrain.id]);
 
     const photoRows = await listTerrainPhotos(db, terrain.id);
+    const formatsService = require('./services/formatsTerrainService');
+    const featuresService = require('./services/terrainFeaturesService');
+    const { formats, durees } = await formatsService.attachFormatsToTerrainPayload(db, terrain);
+    const features = await featuresService.featuresFlags(db, terrain.id);
     res.json({
       ...serializeTerrain(terrain, photoRows, await commoditesService.publicCommodites(db, terrain.id)),
+      formats,
+      durees,
+      features,
       horaires,
       avis,
       employe,
@@ -1310,7 +1350,7 @@ app.get('/api/terrains/:id/devis', async (req, res) => {
     const date = String(req.query.date || '');
     const heure_debut = normalizeHourString(req.query.heure_debut || req.query.debut || '');
     const heure_fin = normalizeHourString(req.query.heure_fin || req.query.fin || '');
-    const format_terrain = req.query.format === 'moitie' ? 'moitie' : 'entier';
+    const format_terrain = String(req.query.format || 'entier').trim() || 'entier';
     if (!date || !heure_debut || !heure_fin) {
       return res.status(400).json({ error: 'date, heure_debut et heure_fin requis' });
     }
@@ -1537,21 +1577,39 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
       return res.status(409).json({ error: 'Terrain temporairement fermé — réservation impossible' });
     }
 
+    if (creePar === 'joueur') {
+      const featuresService = require('./services/terrainFeaturesService');
+      const flags = await featuresService.featuresFlags(db, terrain.id);
+      if (!featuresService.isFeatureEnabled(flags, 'reservations_en_ligne', true)) {
+        return res.status(403).json({
+          error: 'Les réservations en ligne sont désactivées pour ce terrain. Contacte le gérant.',
+          code: 'FEATURE_DISABLED',
+        });
+      }
+    }
+
     if (!date || !heure_debut || !heure_fin) return res.status(400).json({ error: 'Créneau invalide' });
     const heureDebutNorm = normalizeHourString(heure_debut);
     const heureFinNorm = normalizeHourString(heure_fin);
     const dureeMin = creneauService.dureeMinutesOf(heureDebutNorm, heureFinNorm);
     if (!(dureeMin > 0)) return res.status(400).json({ error: 'Créneau invalide' });
-    if (!['moitie', 'entier'].includes(format_terrain)) return res.status(400).json({ error: 'Format de terrain invalide' });
-    const montant = await calculerPrixReservation(db, terrain, date, heureDebutNorm, heureFinNorm, format_terrain);
-    // Bloquer sur place : tout encaissé au match (avance 0). Paiement lien : avance calculée.
-    const montantAvance = mode === 'bloquer' ? 0 : calculerMontantAvance(terrain, montant);
+    const formatsService = require('./services/formatsTerrainService');
+    const formatRow = await formatsService.getFormatByCle(db, terrain.id, format_terrain);
+    if (!formatRow) return res.status(400).json({ error: 'Format de terrain invalide' });
+    const montant = await calculerPrixReservation(db, terrain, date, heureDebutNorm, heureFinNorm, formatRow.cle);
+    const politiqueSansAvance =
+      creePar === 'joueur' &&
+      mode === 'paiement' &&
+      String(terrain.politique_paiement || 'avance') === 'sans_avance';
+    // Bloquer sur place : tout encaissé au match (avance 0). Sans avance : confirmé sans PayTech.
+    // Paiement lien : avance calculée.
+    const montantAvance = mode === 'bloquer' || politiqueSansAvance ? 0 : calculerMontantAvance(terrain, montant);
     const montantRestant = Math.max(0, montant - montantAvance);
     const delaiVerrouMin = normaliserDelaiVerrouPaiementMin(terrain.delai_verrou_paiement_min);
     const lockMs = delaiVerrouMs(delaiVerrouMin);
-    const verrouExpireAt = mode === 'bloquer' ? null : Date.now() + lockMs;
-    const statutInitial = mode === 'bloquer' ? 'confirme' : 'en_attente';
-    // Paiement / manuel : hold en_attente_paiement. Bloquer : on occupe puis on confirme en reserve.
+    const verrouExpireAt = mode === 'bloquer' || politiqueSansAvance ? null : Date.now() + lockMs;
+    const statutInitial = mode === 'bloquer' || politiqueSansAvance ? 'confirme' : 'en_attente';
+    // Paiement / manuel : hold en_attente_paiement. Bloquer / sans_avance : on occupe puis on confirme.
     const occupySlot = true;
 
     // Lier au compte joueur pour que la résa apparaisse dans Mes réservations + push.
@@ -1667,13 +1725,52 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
       reservation = { ...reservation, code_reservation: code, qr_code_payload: qrPayload };
     }
 
-    if (mode === 'bloquer') {
+    if (mode === 'bloquer' || politiqueSansAvance) {
       await transaction(db, async () => {
         await confirmerCreneauxReservation(db, reservation);
       });
     }
 
-    if (mode === 'paiement') {
+    if (politiqueSansAvance) {
+      try {
+        const detteService = require('./services/detteCommissionService');
+        const { calculerCommissionPrelevee } = require('./pricingService');
+        const avanceTheorique = calculerMontantAvance(terrain, montant);
+        const commission = calculerCommissionPrelevee(terrain, avanceTheorique);
+        const periode = detteService.periodeCivile();
+        const delaiJours = Math.max(7, Math.min(90, Number(terrain.delai_paiement_dette_jours) || 30));
+        const dateEcheance = detteService.calculerDateEcheance(periode, delaiJours);
+        const gerantId = await detteService.resoudreGerantTerrain(db, terrainId);
+        if (gerantId) {
+          await detteService.enregistrerDetteCommission(db, {
+            terrainId,
+            gerantId,
+            reservationId: reservation.id,
+            montantCommission: commission,
+            montantAvanceManuelle: 0,
+            periode,
+            dateEcheance,
+            note: 'Réservation sans avance — politique terrain',
+            faitPar: resolvedJoueurId || null,
+            roleFaitPar: 'joueur',
+            detailAudit: `Sans avance. Avance théorique ${avanceTheorique} FCFA → commission ${commission} FCFA`,
+          });
+        }
+        await runSql(
+          db,
+          "UPDATE reservations SET mode_paiement = 'sans_avance', confirme_at = COALESCE(confirme_at, CURRENT_TIMESTAMP) WHERE id = ?",
+          [reservation.id],
+        );
+        reservation = { ...reservation, mode_paiement: 'sans_avance', sans_avance: true };
+        await notificationService.envoyerConfirmationSansAvance(reservation.id).catch((err) => {
+          logger.error('index.js', 'WhatsApp confirmation sans avance', err);
+        });
+      } catch (detteErr) {
+        logger.error('index.js', 'Dette commission sans avance', detteErr);
+      }
+    }
+
+    if (mode === 'paiement' && !politiqueSansAvance) {
       try {
         const payment = await paytechService.creerLienPaiement(reservation);
         await runSql(db, 'UPDATE reservations SET lien_paiement = ?, reference_paytech = ? WHERE id = ?', [
@@ -1697,7 +1794,7 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     }
 
     // Notif in-app / push joueur (lien paiement en attente)
-    if (resolvedJoueurId && mode === 'paiement') {
+    if (resolvedJoueurId && mode === 'paiement' && !politiqueSansAvance) {
       try {
         await runSql(
           db,
@@ -1708,16 +1805,15 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
             `Nouvelle réservation au ${reservation.terrain_nom} le ${date} à ${heureDebutNorm} — avance à payer : ${montantAvance} FCFA`,
           ],
         );
-        await pushService.sendToUser(
+        await pushService.envoyerPush(
           resolvedJoueurId,
+          'RESA_EN_ATTENTE',
           {
-            title: 'Réservation créée — paiement',
-            body: `${reservation.terrain_nom} le ${date} à ${heureDebutNorm}. Ouvre Mes réservations pour payer.`,
+            corps: `${reservation.terrain_nom} le ${date} à ${heureDebutNorm}. Ouvre Mes réservations pour payer.`,
             url: '/reservations',
-            tag: `resa-pending-${reservation.id}`,
-            type: 'reservation_pending',
+            data: { reservation_id: reservation.id },
           },
-          'reservation_confirmation',
+          'user',
         );
       } catch (pushErr) {
         logger.error('index.js', 'Push / notif joueur réservation', pushErr);
@@ -1781,6 +1877,8 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     notifyTerrain(terrainId, 'reservation', { date, action: 'created', reservation_id: reservation.id });
     res.status(201).json({
       ...reservation,
+      sans_avance: Boolean(politiqueSansAvance),
+      mode_paiement: politiqueSansAvance ? 'sans_avance' : reservation.mode_paiement,
       verrou_expire_at: verrouExpireAt,
       delai_verrou_paiement_min: delaiVerrouMin,
     });
@@ -2044,7 +2142,9 @@ app.get('/api/reservations/mes', optionalAuth, async (req, res) => {
       SELECT r.*, t.nom as terrain_nom, t.ville as terrain_ville, t.type as terrain_type, t.prix_heure,
              t.delai_remboursement_heures
       FROM reservations r JOIN terrains t ON t.id = r.terrain_id
-      WHERE r.joueur_id = ? ORDER BY r.created_at DESC
+      WHERE r.joueur_id = ?
+        AND r.statut <> 'expire'
+      ORDER BY r.created_at DESC
     `, [req.user.id]);
     res.json(
       reservations.map((row) => ({
@@ -2443,7 +2543,14 @@ app.get('/api/proprietaire/sante/:terrain_id', authMiddleware, requireRole('prop
     const terrainId = Number(req.params.terrain_id);
     const terrain = await queryOne(db, 'SELECT id FROM terrains WHERE id = ? AND proprietaire_id = ?', [terrainId, req.user.id]);
     if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
-    res.json(await scoreService.getSanteTerrain(db, terrainId));
+    const featuresService = require('./services/terrainFeaturesService');
+    const features = await featuresService.featuresFlags(db, terrainId);
+    const sante = await scoreService.getSanteTerrain(db, terrainId);
+    res.json({
+      ...sante,
+      features,
+      score_sante_enabled: featuresService.isFeatureEnabled(features, 'score_sante', true),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -2538,8 +2645,18 @@ app.get('/api/gerant/dashboard', authMiddleware, requireRole('gerant'), async (r
     const blocages = await queryAll(db, 'SELECT * FROM blocages_creneaux WHERE terrain_id = ? ORDER BY date DESC', [terrainId]);
     const pendingCount = await queryOne(db, "SELECT COUNT(*) as count FROM reservations WHERE terrain_id = ? AND statut = 'en_attente'", [terrainId]);
     const monthCount = await queryOne(db, "SELECT COUNT(*) as count FROM reservations WHERE terrain_id = ?", [terrainId]);
+    const featuresService = require('./services/terrainFeaturesService');
+    const features = await featuresService.featuresFlags(db, terrainId);
 
-    res.json({ terrain, reservations, horaires, blocages, pendingCount: pendingCount.count, monthReservations: monthCount.count });
+    res.json({
+      terrain,
+      reservations,
+      horaires,
+      blocages,
+      pendingCount: pendingCount.count,
+      monthReservations: monthCount.count,
+      features,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -2808,6 +2925,14 @@ function notifyBlocageLosers(loserIds, context) {
 app.post('/api/gerant/blocages/abonnement', authMiddleware, requireRole('gerant'), async (req, res) => {
   try {
     const db = await getDb();
+    const featuresService = require('./services/terrainFeaturesService');
+    const flags = await featuresService.featuresFlags(db, req.user.terrain_id);
+    if (!featuresService.isFeatureEnabled(flags, 'abonnements', false)) {
+      return res.status(403).json({
+        error: 'Les abonnements sont désactivés pour ce terrain.',
+        code: 'FEATURE_DISABLED',
+      });
+    }
     const result = await createPeriode(db, {
       ...req.body,
       terrain_id: req.user.terrain_id,
@@ -2831,6 +2956,14 @@ app.post('/api/gerant/blocages/abonnement', authMiddleware, requireRole('gerant'
 app.post('/api/gerant/blocages/tournoi', authMiddleware, requireRole('gerant'), async (req, res) => {
   try {
     const db = await getDb();
+    const featuresService = require('./services/terrainFeaturesService');
+    const flags = await featuresService.featuresFlags(db, req.user.terrain_id);
+    if (!featuresService.isFeatureEnabled(flags, 'tournois', true)) {
+      return res.status(403).json({
+        error: 'Les tournois sont désactivés pour ce terrain.',
+        code: 'FEATURE_DISABLED',
+      });
+    }
     const result = await createPeriode(db, {
       ...req.body,
       terrain_id: req.user.terrain_id,
@@ -2960,6 +3093,13 @@ app.put('/api/notifications/:id/lire', authMiddleware, async (req, res) => {
 // ============================================================
 // WEB PUSH
 // ============================================================
+function pushActor(req) {
+  return {
+    userId: req.user.id,
+    accountType: pushService.accountTypeFromUser(req.user),
+  };
+}
+
 app.get('/api/push/vapid-public-key', (req, res) => {
   const publicKey = pushService.getPublicKey();
   if (!publicKey) {
@@ -2967,10 +3107,18 @@ app.get('/api/push/vapid-public-key', (req, res) => {
   }
   res.json({ publicKey });
 });
+app.get('/api/push/vapid-key', (req, res) => {
+  const publicKey = pushService.getPublicKey();
+  if (!publicKey) {
+    return res.status(503).json({ error: 'Web Push non configuré sur ce serveur' });
+  }
+  res.json({ publicKey });
+});
 
-app.get('/api/push/preferences', authMiddleware, requireRole('joueur'), async (req, res) => {
+app.get('/api/push/preferences', authMiddleware, async (req, res) => {
   try {
-    const prefs = await pushService.getPreferences(req.user.id);
+    const { userId, accountType } = pushActor(req);
+    const prefs = await pushService.getPreferences(userId, accountType, { withPolicy: true });
     res.json(prefs);
   } catch (err) {
     logger.error('index.js', 'GET push preferences', err);
@@ -2978,21 +3126,28 @@ app.get('/api/push/preferences', authMiddleware, requireRole('joueur'), async (r
   }
 });
 
-app.put('/api/push/preferences', authMiddleware, requireRole('joueur'), async (req, res) => {
+async function savePushPreferences(req, res) {
   try {
-    const prefs = await pushService.updatePreferences(req.user.id, req.body || {});
+    const { userId, accountType } = pushActor(req);
+    await pushService.updatePreferences(userId, req.body || {}, accountType);
+    const prefs = await pushService.getPreferences(userId, accountType, { withPolicy: true });
     res.json(prefs);
   } catch (err) {
-    logger.error('index.js', 'PUT push preferences', err);
+    logger.error('index.js', 'save push preferences', err);
     res.status(500).json({ error: 'Erreur serveur' });
   }
-});
+}
+app.put('/api/push/preferences', authMiddleware, savePushPreferences);
+app.patch('/api/push/preferences', authMiddleware, savePushPreferences);
 
-app.post('/api/push/subscribe', authMiddleware, requireRole('joueur'), async (req, res) => {
+app.post('/api/push/subscribe', authMiddleware, async (req, res) => {
   try {
-    const { subscription } = req.body || {};
-    if (!subscription) return res.status(400).json({ error: 'Subscription manquante' });
-    await pushService.upsertSubscription(req.user.id, subscription, req.headers['user-agent'] || '');
+    const raw = req.body?.subscription || req.body || {};
+    if (!raw.endpoint && !raw.keys) {
+      return res.status(400).json({ error: 'Subscription manquante' });
+    }
+    const { userId, accountType } = pushActor(req);
+    await pushService.upsertSubscription(userId, raw, req.headers['user-agent'] || '', accountType);
     res.json({ message: 'Abonnement push enregistré' });
   } catch (err) {
     logger.error('index.js', 'POST push subscribe', err);
@@ -3000,14 +3155,32 @@ app.post('/api/push/subscribe', authMiddleware, requireRole('joueur'), async (re
   }
 });
 
-app.delete('/api/push/unsubscribe', authMiddleware, requireRole('joueur'), async (req, res) => {
+app.delete('/api/push/unsubscribe', authMiddleware, async (req, res) => {
   try {
-    const { endpoint } = req.body || {};
+    const endpoint = req.body?.endpoint;
     if (!endpoint) return res.status(400).json({ error: 'Endpoint manquant' });
-    await pushService.removeSubscription(req.user.id, endpoint);
+    const { userId, accountType } = pushActor(req);
+    await pushService.removeSubscription(userId, endpoint, accountType);
     res.json({ message: 'Désabonnement effectué' });
   } catch (err) {
     logger.error('index.js', 'DELETE push unsubscribe', err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.get('/api/push/logs', authMiddleware, requireRole('super_admin'), async (req, res) => {
+  try {
+    const logs = await pushService.listPushLogs({
+      userId: req.query.user_id,
+      type: req.query.type,
+      statut: req.query.statut,
+      depuis: req.query.depuis,
+      jusqua: req.query.jusqua,
+      limit: req.query.limit,
+    });
+    res.json(logs);
+  } catch (err) {
+    logger.error('index.js', 'GET push logs', err);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -3421,16 +3594,23 @@ function programmerRappelsReservations() {
     return;
   }
 
-  cron.schedule('*/15 * * * *', async () => {
+  const run = (name, fn) => async () => {
     try {
-      const result = await pushService.envoyerRappelsReservations();
-      if (result.processed > 0) {
-        logger.info('index.js', `Rappels push envoyes: ${result.processed}`);
+      const result = await fn();
+      if (result?.processed > 0) {
+        logger.info('index.js', `${name}: ${result.processed}`);
       }
     } catch (error) {
-      logger.error('index.js', 'Rappels push reservations', error);
+      logger.error('index.js', name, error);
     }
-  });
+  };
+
+  cron.schedule('*/15 * * * *', run('push match imminent', () => pushService.cronMatchImminent()));
+  cron.schedule('*/30 * * * *', run('push rappel H-2', () => pushService.cronRappelH2()));
+  cron.schedule('0 20 * * *', run('push rappel J-1', () => pushService.cronRappelJ1()));
+  cron.schedule('0 9 * * *', run('push rappels dettes', () => pushService.cronRappelsDettes()));
+  cron.schedule('0 9 * * *', run('push rappels abonnements', () => pushService.cronRappelsAbonnements()));
+  cron.schedule('0 9 * * *', run('push rappels essai', () => pushService.cronRappelsEssai()));
 }
 
 async function ensureSeedData(db) {

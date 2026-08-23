@@ -139,6 +139,15 @@ router.post('/gerant/reservations/:id/confirmer-manuellement', authMiddleware, r
   try {
     const db = await getDb();
     const reservationId = Number(req.params.id);
+    const terrainId = req.user.terrain_id;
+    const featuresService = require('../services/terrainFeaturesService');
+    const flags = await featuresService.featuresFlags(db, terrainId);
+    if (!featuresService.isFeatureEnabled(flags, 'confirmations_manuelles', true)) {
+      return res.status(403).json({
+        error: 'Les confirmations manuelles sont désactivées pour ce terrain.',
+        code: 'FEATURE_DISABLED',
+      });
+    }
     const result = await transaction(db, async () => await detteService.confirmerManuellement(db, {
       reservationId,
       gerantId: req.user.id,
@@ -268,7 +277,7 @@ router.get('/gerant/devis', authMiddleware, requireRole('gerant'), async (req, r
     const date = String(req.query.date || '');
     const heure_debut = normalizeHourString(req.query.heure_debut || '');
     const heure_fin = normalizeHourString(req.query.heure_fin || '');
-    const format_terrain = req.query.format === 'moitie' ? 'moitie' : 'entier';
+    const format_terrain = String(req.query.format || 'entier').trim() || 'entier';
     if (!date || !heure_debut || !heure_fin) {
       return res.status(400).json({ error: 'date, heure_debut et heure_fin requis' });
     }

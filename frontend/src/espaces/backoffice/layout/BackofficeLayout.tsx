@@ -32,7 +32,7 @@ const NAV_BY_ROLE: Record<Exclude<AppRole, "joueur">, NavItem[]> = {
   gerant: [
     { to: "/backoffice/gerant", label: "Dashboard", icon: LayoutDashboard, end: true },
     { to: "/backoffice/gerant/creneaux", label: "Creneaux", icon: Calendar },
-    { to: "/backoffice/gerant/reservations", label: "Resa manuelle", icon: HandCoins },
+    { to: "/backoffice/gerant/reservations", label: "Réservation manuelle", icon: HandCoins },
   ],
   proprietaire: [
     { to: "/backoffice/proprietaire", label: "Dashboard", icon: LayoutDashboard, end: true },

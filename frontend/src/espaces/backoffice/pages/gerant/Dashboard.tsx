@@ -12,7 +12,7 @@
   Wrench,
 } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeRole } from "@/auth/roles";
 import { useAuth } from "@/hooks/use-auth";
@@ -669,7 +669,7 @@ function FileAttenteBlocks({
             border: "1px solid var(--g-primary)",
           }}
         >
-          Nouvelle réservation
+          Réserver
         </button>
       </div>
     );
@@ -761,6 +761,7 @@ function FileAttenteBlocks({
 
 const ManagerDashboard = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, isAuthenticated } = useAuth();
   const [dashboard, setDashboard] = useState<any>(null);
   const [todayPayload, setTodayPayload] = useState<{
@@ -1003,7 +1004,7 @@ const ManagerDashboard = () => {
     return [{ date: filtreJourSemaine, reservations: existing?.reservations || [] }];
   }, [parJour, filtreJourSemaine]);
 
-  /** Résas confirmées imminentes — bouton scanner header (seul le plus prioritaire) */
+  /** Réservations confirmées imminentes — bouton scanner header (seul le plus prioritaire) */
   const imminentes = queueBlocks.imminente;
   const prioriteScanIdHeader = idPrioriteScannable(
     imminentes.map((r) => ({
@@ -1042,6 +1043,15 @@ const ManagerDashboard = () => {
     setScanTarget(prochaineImminente);
     setScannerOpen(true);
   };
+
+  /** Deep-link push / SW : /backoffice/gerant#scanner */
+  useEffect(() => {
+    if (loading) return;
+    if (location.hash !== "#scanner") return;
+    setScanTarget(prochaineImminente);
+    setScannerOpen(true);
+    navigate({ pathname: location.pathname, search: location.search, hash: "" }, { replace: true });
+  }, [loading, location.hash, location.pathname, location.search, navigate, prochaineImminente]);
 
   /** Depuis une card : Mode B avec réservation connue. */
   const openScanner = (resa: TodayReservation) => {
@@ -1150,7 +1160,7 @@ const ManagerDashboard = () => {
           style={{ background: "var(--g-primary)" }}
         >
           <PlusCircle className="w-5 h-5" />
-          Nouvelle résa
+          Réserver
         </button>
         <button
           type="button"
@@ -1376,6 +1386,7 @@ const ManagerDashboard = () => {
         onClose={() => setBlockOpen(false)}
         terrainId={dashboard?.terrain?.id}
         blocages={dashboard?.blocages || []}
+        features={dashboard?.features || null}
         onChanged={() => {
           loadDashboard();
           loadToday();

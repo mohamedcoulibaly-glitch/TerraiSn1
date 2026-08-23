@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, MessageCircle, Search } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { gerantApi } from "@/lib/api";
 import { formatPhoneDisplay, toLocal9 } from "@/auth/phone";
 import { FicheBlocageGroupe } from "@/espaces/backoffice/components/FicheBlocageGroupe";
+import { featureEnabled } from "@/lib/terrainFeatures";
 
 type Onglet = "reservations" | "joueurs";
 type ResaSous = "matchs" | "abonnements" | "tournois";
@@ -55,9 +56,9 @@ const RESA_SOUS: ReadonlyArray<{ id: ResaSous; label: string }> = [
 ];
 
 const RESA_FILTERS = [
-  { id: "all", label: "Toutes" },
+  { id: "all", label: "Historique" },
   { id: "confirme", label: "Confirmées" },
-  { id: "en_attente", label: "En attente" },
+  { id: "en_attente", label: "Paiement en cours" },
   { id: "joue", label: "Jouées" },
   { id: "annulee", label: "Annulées" },
 ] as const;
@@ -73,7 +74,7 @@ function statusUi(statut?: string) {
     return { label: "Confirmée", color: "var(--g-reserve)", bg: "var(--g-reserve-bg)" };
   }
   if (statut === "en_attente") {
-    return { label: "En attente de paiement", color: "var(--g-en-attente)", bg: "var(--g-en-attente-bg)" };
+    return { label: "Paiement en cours (éphémère)", color: "var(--g-en-attente)", bg: "var(--g-en-attente-bg)" };
   }
   if (statut === "match_joue" || statut === "joue") {
     return { label: "Jouée", color: "var(--g-termine)", bg: "var(--g-termine-bg)" };
@@ -381,6 +382,38 @@ export default function JoueursReservationsPage() {
   const [joueurs, setJoueurs] = useState<JoueurRow[]>([]);
   const [joueursLoading, setJoueursLoading] = useState(false);
   const [joueursError, setJoueursError] = useState("");
+  const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
+
+  const resaSousTabs = useMemo(() => {
+    return RESA_SOUS.filter((t) => {
+      if (t.id === "abonnements") return featureEnabled(features, "abonnements", false);
+      if (t.id === "tournois") return featureEnabled(features, "tournois", true);
+      return true;
+    });
+  }, [features]);
+
+  useEffect(() => {
+    let mounted = true;
+    gerantApi
+      .dashboard()
+      .then((dash) => {
+        if (!mounted) return;
+        const f = (dash as { features?: Record<string, boolean> })?.features;
+        setFeatures(f && typeof f === "object" ? f : {});
+      })
+      .catch(() => {
+        if (mounted) setFeatures({});
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!features) return;
+    const allowed = resaSousTabs.some((t) => t.id === resaSous);
+    if (!allowed) setResaSous("matchs");
+  }, [features, resaSous, resaSousTabs]);
 
   useEffect(() => {
     const t = window.setTimeout(() => setResaDebounced(resaQ), 300);
@@ -510,7 +543,7 @@ export default function JoueursReservationsPage() {
 
       {onglet === "reservations" ? (
         <>
-          <Pills items={RESA_SOUS} value={resaSous} onChange={setResaSous} />
+          <Pills items={resaSousTabs} value={resaSous} onChange={setResaSous} />
           {resaSous === "matchs" ? (
             <>
               <PhoneSearch value={resaQ} onChange={setResaQ} placeholder="7X XXX XX XX" />

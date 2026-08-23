@@ -44,7 +44,7 @@ type Props = {
   open: boolean;
   onClose: () => void;
   reservations: ManualReservation[];
-  /** Depuis la fiche détail : pré-sélectionne cette résa */
+  /** Depuis la fiche détail : pré-sélectionne cette réservation */
   preselectedId?: number | null;
   onSuccess?: (reservation?: {
     id?: number;

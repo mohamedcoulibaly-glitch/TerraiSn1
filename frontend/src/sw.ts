@@ -108,46 +108,80 @@ self.addEventListener('sync', (event) => {
 interface PushPayload {
   title?: string;
   body?: string;
-  url?: string;
+  icon?: string;
+  badge?: string;
+  vibrate?: number[];
   tag?: string;
+  renotify?: boolean;
+  requireInteraction?: boolean;
+  url?: string;
   type?: string;
+  data?: Record<string, unknown>;
+  actions?: { action: string; title: string }[];
 }
 
 self.addEventListener('push', (event) => {
-  let data: PushPayload = {};
-  try {
-    data = event.data?.json() ?? {};
-  } catch {
-    data = { body: event.data?.text() };
-  }
+  if (!event.data) return;
 
-  event.waitUntil(
-    self.registration.showNotification(data.title || 'TerrainSN', {
-      body: data.body || 'Nouvelle notification',
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-96.png',
-      data: { url: data.url || '/reservations' },
-      tag: data.tag || data.type || 'terrainsn',
-      vibrate: [100, 50, 100],
-      requireInteraction: data.type === 'rappel_reservation',
-    }),
-  );
+  event.waitUntil((async () => {
+    let notif: PushPayload = {};
+    try {
+      notif = event.data.json() as PushPayload;
+    } catch {
+      notif = { body: event.data.text() };
+    }
+
+    const data = {
+      url: (notif.data?.url as string) || notif.url || '/',
+      type: notif.type || (notif.data?.type as string) || '',
+      ...(notif.data || {}),
+    };
+
+    await self.registration.showNotification(notif.title || 'TerrainSN', {
+      body: notif.body || 'Nouvelle notification',
+      icon: notif.icon || '/icons/icon-192.png',
+      badge: notif.badge || '/icons/icon-72.png',
+      vibrate: notif.vibrate || [200],
+      tag: notif.tag || data.type || 'terrainsn',
+      renotify: Boolean(notif.renotify),
+      requireInteraction: Boolean(notif.requireInteraction),
+      data,
+      actions: notif.actions || [],
+    });
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data?.url as string) || '/reservations';
+  const payload = (event.notification.data || {}) as Record<string, unknown>;
+  const action = event.action;
+
+  let url = String(payload.url || '/');
+  if (action === 'scanner') {
+    url = '/backoffice/gerant#scanner';
+  } else if (action === 'qr') {
+    url = String(payload.url || '/reservations');
+  } else if (action === 'voir' || action === 'traiter') {
+    url = String(payload.url || '/');
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
-        if ('focus' in client) {
-          return (client as WindowClient).focus();
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
+          const focused = client as WindowClient;
+          focused.focus();
+          if ('navigate' in focused) {
+            return focused.navigate(url);
+          }
+          return focused;
         }
       }
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl);
-      }
+      return self.clients.openWindow(url);
     }),
   );
+});
+
+self.addEventListener('notificationclose', () => {
+  /* stats optionnelles — no-op volontaire */
 });

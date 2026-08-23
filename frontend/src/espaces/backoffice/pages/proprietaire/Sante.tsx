@@ -35,6 +35,7 @@ type SanteTerrain = {
   activite_recente: ActiviteRecente[];
   reservations_non_scannees?: ReservationNonScannee[];
   reservations_non_scannes?: ReservationNonScannee[];
+  score_sante_enabled?: boolean;
 };
 
 const TONE_COLOR = {
@@ -213,6 +214,15 @@ export default function SanteProprietaire() {
       <ProprioEmptyState
         title="Pas encore assez de données 😊"
         subtitle="Le tableau de bord se remplit au fur et à mesure des réservations."
+      />
+    );
+  }
+
+  if (health.score_sante_enabled === false) {
+    return (
+      <ProprioEmptyState
+        title="Score de santé désactivé"
+        subtitle="Cette fonctionnalité n’est pas activée pour ce terrain. Contacte l’administration TerrainSN si besoin."
       />
     );
   }

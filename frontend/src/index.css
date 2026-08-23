@@ -717,8 +717,11 @@
   --g-gold-glow:       rgba(217,119,6,0.10);
 
   --g-danger:          #DC2626;
+  --g-danger-bg:       rgba(220,38,38,0.10);
   --g-warning:         #D97706;
   --g-warning-bg:      rgba(217,119,6,0.10);
+  --g-success:         #059669;
+  --g-success-bg:      rgba(5,150,105,0.10);
   --g-info:            #2563EB;
 
   /* Statuts matchs (sémantiques, distincts du primaire) */
@@ -1217,6 +1220,63 @@
 .leaflet-container {
   width: 100%;
   height: 100%;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  z-index: 0 !important;
+}
+
+/* Contenir les panes Leaflet (z-index élevés) dans la carte, pas au-dessus de la galerie */
+.map-terrain-shell,
+.localisation-map-shell {
+  isolation: isolate;
+  z-index: 0;
+  position: relative;
+}
+.map-terrain-shell .leaflet-pane,
+.localisation-map-shell .leaflet-pane,
+.map-terrain-shell .leaflet-top,
+.map-terrain-shell .leaflet-bottom,
+.localisation-map-shell .leaflet-top,
+.localisation-map-shell .leaflet-bottom {
+  z-index: auto;
+}
+
+.map-terrain-pin {
+  width: 40px;
+  height: 48px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  filter: drop-shadow(0 2px 4px rgba(10, 22, 40, 0.28));
+}
+.map-terrain-pin span {
+  width: 22px;
+  height: 22px;
+  margin-top: 4px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--pin, #059669);
+  border: 2.5px solid #fff;
+  box-sizing: border-box;
+}
+
+.leaflet-tooltip.map-terrain-tooltip {
+  background: #0d1b2a;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 4px 14px rgba(10, 22, 40, 0.28);
+}
+.leaflet-tooltip.map-terrain-tooltip::before {
+  border-top-color: #0d1b2a;
+}
+
+/* Galerie photos fullscreen — au-dessus de toute carte Leaflet */
+.fiche-terrain-gallery {
+  z-index: 10050 !important;
 }
 
 .sa-switch {

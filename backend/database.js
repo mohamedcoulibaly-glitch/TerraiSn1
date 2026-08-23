@@ -67,8 +67,9 @@ async function getDb() {
 function saveDb() {}
 
 function rowsModified(database) {
-  const db = database || runner();
-  return lastChanges.get(db) || 0;
+  // Toujours lire le compteur du runner ALS (client tx), pas le pool passé en argument.
+  void database;
+  return lastChanges.get(runner()) || 0;
 }
 
 async function queryAll(database, sql, params = []) {
@@ -574,6 +575,10 @@ async function initSchema(poolOrClient) {
   `);
   await c.query('CREATE INDEX IF NOT EXISTS idx_abonnements_terrain ON abonnements(terrain_id)');
   await c.query('CREATE INDEX IF NOT EXISTS idx_abonnements_echeance ON abonnements(date_echeance, statut)');
+  await addColumnIfMissing(c, 'abonnements', 'notif_abo_j7', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing(c, 'abonnements', 'notif_abo_j3', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing(c, 'abonnements', 'notif_abo_j1', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing(c, 'abonnements', 'notif_abo_retard', 'INTEGER DEFAULT 0');
 
   await c.query(`
     CREATE TABLE IF NOT EXISTS terrain_photos (
@@ -661,6 +666,34 @@ async function initSchema(poolOrClient) {
       UNIQUE(terrain_id, feature_cle)
     )
   `);
+
+  await c.query(`
+    CREATE TABLE IF NOT EXISTS terrain_formats (
+      id SERIAL PRIMARY KEY,
+      terrain_id INTEGER NOT NULL REFERENCES terrains(id) ON DELETE CASCADE,
+      cle TEXT NOT NULL,
+      label TEXT NOT NULL,
+      prix_heure DECIMAL(10, 2) NOT NULL DEFAULT 0,
+      map_grille TEXT,
+      ordre INTEGER DEFAULT 0,
+      actif INTEGER DEFAULT 1,
+      UNIQUE(terrain_id, cle)
+    )
+  `);
+  await c.query('CREATE INDEX IF NOT EXISTS idx_terrain_formats_terrain ON terrain_formats(terrain_id)');
+
+  await c.query(`
+    CREATE TABLE IF NOT EXISTS terrain_durees (
+      id SERIAL PRIMARY KEY,
+      terrain_id INTEGER NOT NULL REFERENCES terrains(id) ON DELETE CASCADE,
+      minutes INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      ordre INTEGER DEFAULT 0,
+      actif INTEGER DEFAULT 1,
+      UNIQUE(terrain_id, minutes)
+    )
+  `);
+  await c.query('CREATE INDEX IF NOT EXISTS idx_terrain_durees_terrain ON terrain_durees(terrain_id)');
 
   await seedDefaultCommodites(c);
   await migrateJsonCommodites(c);
@@ -865,7 +898,7 @@ async function initSchema(poolOrClient) {
   await c.query(`
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id),
+      user_id INTEGER NOT NULL,
       endpoint TEXT NOT NULL UNIQUE,
       p256dh TEXT NOT NULL,
       auth TEXT NOT NULL,
@@ -873,6 +906,11 @@ async function initSchema(poolOrClient) {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await c.query(`ALTER TABLE push_subscriptions DROP CONSTRAINT IF EXISTS push_subscriptions_user_id_fkey`);
+  await addColumnIfMissing(c, 'push_subscriptions', 'account_type', "VARCHAR(20) NOT NULL DEFAULT 'user'");
+  await addColumnIfMissing(c, 'push_subscriptions', 'actif', 'INTEGER DEFAULT 1');
+  await addColumnIfMissing(c, 'push_subscriptions', 'last_used_at', 'TIMESTAMPTZ');
+  await c.query(`CREATE INDEX IF NOT EXISTS idx_push_sub_actor ON push_subscriptions (account_type, user_id, actif)`);
 
   await c.query(`
     CREATE TABLE IF NOT EXISTS push_preferences (
@@ -884,6 +922,51 @@ async function initSchema(poolOrClient) {
       avis_reponse INTEGER DEFAULT 1
     )
   `);
+
+  await c.query(`
+    CREATE TABLE IF NOT EXISTS notif_preferences (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      account_type VARCHAR(20) NOT NULL DEFAULT 'user',
+      push_resa_confirmee INTEGER DEFAULT 1,
+      push_resa_annulee INTEGER DEFAULT 1,
+      push_rappel_match INTEGER DEFAULT 1,
+      push_remboursement INTEGER DEFAULT 1,
+      push_nouvelle_resa INTEGER DEFAULT 1,
+      push_match_imminent INTEGER DEFAULT 1,
+      push_reversement INTEGER DEFAULT 1,
+      push_dette_rappel INTEGER DEFAULT 1,
+      push_revenus INTEGER DEFAULT 1,
+      push_sante_gerant INTEGER DEFAULT 1,
+      push_abonnement INTEGER DEFAULT 1,
+      push_retrait_demande INTEGER DEFAULT 1,
+      push_payout_echec INTEGER DEFAULT 1,
+      push_alertes_terrain INTEGER DEFAULT 1,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (account_type, user_id)
+    )
+  `);
+
+  await c.query(`
+    CREATE TABLE IF NOT EXISTS push_logs (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER,
+      account_type VARCHAR(20) DEFAULT 'user',
+      type_notif TEXT NOT NULL,
+      titre TEXT NOT NULL,
+      corps TEXT NOT NULL,
+      data TEXT,
+      statut VARCHAR(20) DEFAULT 'envoye' CHECK (statut IN ('envoye','echoue','clique','ferme')),
+      erreur TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await c.query(`CREATE INDEX IF NOT EXISTS idx_push_logs_user ON push_logs (user_id, created_at DESC)`);
+  await c.query(`CREATE INDEX IF NOT EXISTS idx_push_logs_type ON push_logs (type_notif, created_at DESC)`);
+
+  await addColumnIfMissing(c, 'reservations', 'push_rappel_j1', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing(c, 'reservations', 'push_rappel_h2', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing(c, 'reservations', 'push_match_imminent', 'INTEGER DEFAULT 0');
 
   await c.query(`
     CREATE TABLE IF NOT EXISTS reservation_reminders (
@@ -909,26 +992,81 @@ async function initSchema(poolOrClient) {
   // Colonnes éventuelles manquantes sur bases déjà créées
   await addColumnIfMissing(c, 'regles_tarifs', 'source', "TEXT DEFAULT 'manuelle'");
 
+  // Politique sans avance + délai paiement dette commission (canonique : avance | sans_avance)
+  await addColumnIfMissing(c, 'terrains', 'politique_paiement', "TEXT DEFAULT 'avance'");
+  await addColumnIfMissing(c, 'terrains', 'delai_paiement_dette_jours', 'INTEGER DEFAULT 30');
+  await c.query(`
+    UPDATE terrains
+       SET politique_paiement = CASE
+         WHEN politique_paiement IN ('sans_avance') THEN 'sans_avance'
+         ELSE 'avance'
+       END
+     WHERE politique_paiement IS NULL
+        OR politique_paiement = ''
+        OR politique_paiement NOT IN ('avance', 'sans_avance')
+  `);
+  await c.query(`
+    UPDATE terrains
+       SET politique_paiement = 'avance'
+     WHERE politique_paiement = 'avec_avance'
+  `);
+  await c.query(`
+    UPDATE terrains
+       SET delai_paiement_dette_jours = 30
+     WHERE delai_paiement_dette_jours IS NULL OR delai_paiement_dette_jours < 1
+  `);
+
+  await addColumnIfMissing(c, 'dettes_commissions', 'date_echeance', 'DATE');
+  await addColumnIfMissing(c, 'dettes_commissions', 'montant_regle', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing(c, 'dettes_commissions', 'derniere_mise_a_jour', 'TIMESTAMPTZ');
+
+  await c.query(`
+    CREATE TABLE IF NOT EXISTS resume_dette_periode (
+      id SERIAL PRIMARY KEY,
+      terrain_id INTEGER NOT NULL REFERENCES terrains(id),
+      gerant_id INTEGER NOT NULL,
+      periode TEXT NOT NULL,
+      total_commission INTEGER DEFAULT 0,
+      total_regle INTEGER DEFAULT 0,
+      solde_restant INTEGER GENERATED ALWAYS AS (total_commission - total_regle) STORED,
+      date_echeance DATE,
+      statut TEXT DEFAULT 'en_cours'
+        CHECK (statut IN ('en_cours','partiellement_regle','solde','en_retard')),
+      notif_j7_envoyee INTEGER DEFAULT 0,
+      notif_j3_envoyee INTEGER DEFAULT 0,
+      notif_j1_envoyee INTEGER DEFAULT 0,
+      notif_retard_envoyee INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(terrain_id, gerant_id, periode)
+    )
+  `);
+  await c.query(`
+    CREATE INDEX IF NOT EXISTS idx_resume_dette_terrain
+      ON resume_dette_periode(terrain_id, periode, statut)
+  `);
+  await addColumnIfMissing(c, 'resume_dette_periode', 'notif_retard_envoyee', 'INTEGER DEFAULT 0');
+
   console.log('✅ Schéma PostgreSQL initialisé.');
 }
 
 const DEFAULT_COMMODITES = [
-  ['eclairage', 'Éclairage nocturne', 'Zap', 1],
-  ['vestiaires', 'Vestiaires', 'Users', 2],
-  ['douches', 'Douches', 'Droplets', 3],
-  ['parking', 'Parking', 'Car', 4],
-  ['buvette', 'Buvette', 'Coffee', 5],
-  ['tribune', 'Tribune', 'Armchair', 6],
+  ['eclairage', 'Éclairage nocturne', 'Lightbulb', 1],
+  ['vestiaires', 'Vestiaires', 'Shirt', 2],
+  ['douches', 'Douches', 'ShowerHead', 3],
+  ['parking', 'Parking', 'SquareParking', 4],
+  ['buvette', 'Buvette', 'Utensils', 5],
+  ['tribune', 'Tribune', 'Users', 6],
   ['wifi', 'Wi-Fi', 'Wifi', 7],
-  ['arbitre', 'Arbitre disponible', 'Flag', 8],
+  ['arbitre', 'Arbitre disponible', 'Award', 8],
   ['ballon', 'Ballon fourni', 'CircleDot', 9],
-  ['securite', 'Agent de sécurité', 'Shield', 10],
+  ['securite', 'Agent de sécurité', 'ShieldCheck', 10],
   ['dossards', 'Dossards fournis', 'Shirt', 11],
   ['eau', 'Eau à la mi-temps', 'Droplet', 12],
   ['toilettes', 'Toilettes', 'Bath', 13],
-  ['priere', 'Espace de prière', 'Moon', 14],
+  ['priere', 'Espace de prière', 'Building2', 14],
   ['glacons', 'Glaçons / Glacière', 'Snowflake', 15],
-  ['secours', 'Premiers secours', 'Ambulance', 16],
+  ['secours', 'Premiers secours', 'Cross', 16],
   ['video', 'Enregistrement vidéo', 'Video', 17],
 ];
 

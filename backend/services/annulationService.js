@@ -107,29 +107,30 @@ async function executerAnnulation(db, reservation, { traitePar = null } = {}) {
   const shouldRefund = Boolean(politique.eligible && payment && ref && methode === 'paytech');
 
   await transaction(db, async () => {
+    let upd;
     if (traitePar) {
-      await runSql(
+      upd = await runSql(
         db,
         "UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')",
         [traitePar, reservation.id],
       );
     } else {
-      await runSql(
+      upd = await runSql(
         db,
         "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')",
         [reservation.id],
       );
     }
-    if (rowsModified(db) !== 1) {
+    const changed = Number(upd?.changes || 0) || rowsModified(db);
+    if (changed !== 1) {
       const error = new Error('Réservation ne peut pas être annulée');
       error.statusCode = 400;
       throw error;
     }
-    if (reservation.statut === 'en_attente') {
-      await libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
-    } else {
-      await libererCreneauxReservation(db, reservation, ['reserve', 'en_attente_paiement']);
-    }
+    // Libère toujours le créneau (y compris pendant la fenêtre de validation).
+    await libererCreneauxReservation(db, reservation, ['en_attente_paiement', 'reserve'], {
+      force: true,
+    });
   });
 
   let rembourse = false;

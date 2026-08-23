@@ -8,6 +8,7 @@ import { localYmd } from "@/lib/localDate";
 import { cn, formatFcfa } from "@/lib/utils";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import { WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
+import { featureEnabled } from "@/lib/terrainFeatures";
 
 type JoueurConnu = {
   id: number;
@@ -65,7 +66,7 @@ function getEndTime(startSlot: string, durationHours: number) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-const DUREES_EXPRESS = [
+const DUREES_EXPRESS_FALLBACK = [
   { label: "1h", hours: 1 },
   { label: "1h30", hours: 1.5 },
   { label: "2h", hours: 2 },
@@ -130,13 +131,26 @@ export default function ReservationExpressModal({
   const [modeHoraire, setModeHoraire] = useState<"liste" | "manuel">("liste");
   const [verifState, setVerifState] = useState<"idle" | "loading" | "ok" | "conflit">("idle");
   const [verifMsg, setVerifMsg] = useState<string | null>(null);
-  const [formatTerrain, setFormatTerrain] = useState<"moitie" | "entier">("entier");
+  const [formatTerrain, setFormatTerrain] = useState<string>("moitie");
+  const [formatsOpts, setFormatsOpts] = useState<
+    { cle: string; label: string; prix_heure: number; map_grille?: string | null }[]
+  >([
+    { cle: "moitie", label: "Demi-terrain", prix_heure: 0, map_grille: "demi" },
+    { cle: "entier", label: "Terrain entier", prix_heure: 0, map_grille: "entier" },
+  ]);
+  const [dureesOpts, setDureesOpts] = useState<{ label: string; hours: number }[]>([
+    ...DUREES_EXPRESS_FALLBACK,
+  ]);
   const [creneaux, setCreneaux] = useState<Slot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [terrainPrix, setTerrainPrix] = useState<{ moitie: number; entier: number }>({
     moitie: 0,
     entier: 0,
   });
+  const [politiquePaiement, setPolitiquePaiement] = useState<"avance" | "sans_avance">("avance");
+  const [features, setFeatures] = useState<Record<string, boolean>>({});
+  const sansAvance = politiquePaiement === "sans_avance";
+  const canConfirmManual = featureEnabled(features, "confirmations_manuelles", true);
 
   const [joueurTel, setJoueurTel] = useState("");
   const [joueurPrenom, setJoueurPrenom] = useState("");
@@ -201,12 +215,12 @@ export default function ReservationExpressModal({
         parseInt(prefill.heure_fin.slice(3, 5) || "0", 10);
       let durH = (endM - startM) / 60;
       if (!(durH > 0)) durH = 1;
-      const match = DUREES_EXPRESS.find((d) => Math.abs(d.hours - durH) < 0.01);
+      const match = dureesOpts.find((d) => Math.abs(d.hours - durH) < 0.01);
       setSelectedDuration(match ? match.hours : Math.min(3, Math.max(1, Math.round(durH))));
     } else {
       setSelectedDuration(1);
     }
-    setFormatTerrain("entier");
+    setFormatTerrain("moitie");
     setJoueurTel("");
     setJoueurPrenom("");
     setJoueurNomFamille("");
@@ -214,6 +228,8 @@ export default function ReservationExpressModal({
     setJoueurConnu(null);
     setLookupState("idle");
     setDevis(null);
+    setPayChoice("lien");
+    setNoteManuel("");
     setBusy(false);
     setDoneMsg(null);
     gerantApi
@@ -231,9 +247,56 @@ export default function ReservationExpressModal({
           moitie: Number(t?.prix_moitie || 0),
           entier: Number(t?.prix_entier || t?.prix_heure || 0),
         });
+        setPolitiquePaiement(
+          ["sans_avance", "sans_acompte"].includes(String(t?.politique_paiement || "").trim())
+            ? "sans_avance"
+            : "avance",
+        );
+        setFeatures((t?.features && typeof t.features === "object" ? t.features : {}) as Record<string, boolean>);
+        const formats =
+          Array.isArray(t?.formats) && t.formats.length
+            ? t.formats.map((f: any) => ({
+                cle: String(f.cle),
+                label: String(f.label || f.cle),
+                prix_heure: Number(f.prix_heure || 0),
+                map_grille: f.map_grille || null,
+              }))
+            : [
+                { cle: "moitie", label: "Demi-terrain", prix_heure: Number(t?.prix_moitie || 0), map_grille: "demi" },
+                {
+                  cle: "entier",
+                  label: "Terrain entier",
+                  prix_heure: Number(t?.prix_entier || t?.prix_heure || 0),
+                  map_grille: "entier",
+                },
+              ];
+        setFormatsOpts(formats);
+        const preferred = formats.find((f: any) => f.cle === "moitie") || formats[0];
+        if (preferred) setFormatTerrain(preferred.cle);
+        const durees =
+          Array.isArray(t?.durees) && t.durees.length
+            ? t.durees.map((d: any) => ({
+                label: String(d.label || `${d.minutes} min`),
+                hours: Number(d.minutes) / 60,
+              }))
+            : [...DUREES_EXPRESS_FALLBACK];
+        setDureesOpts(durees);
+        if (!prefill?.heure_debut) {
+          const d1 = durees.find((d: any) => Math.abs(d.hours - 1) < 0.01) || durees[0];
+          if (d1) setSelectedDuration(d1.hours);
+        }
       })
-      .catch(() => setTerrainPrix({ moitie: 0, entier: 0 }));
-  }, [open, terrainId]);
+      .catch(() => {
+        setTerrainPrix({ moitie: 0, entier: 0 });
+        setPolitiquePaiement("avance");
+        setFeatures({});
+      });
+  }, [open, terrainId, prefill?.heure_debut]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (sansAvance) setPayChoice("manuel");
+  }, [open, sansAvance]);
 
   useEffect(() => {
     if (!open || !terrainId || !selectedDate) return;
@@ -409,14 +472,26 @@ export default function ReservationExpressModal({
             });
             return;
           }
-          const hourly = formatTerrain === "moitie" ? terrainPrix.moitie : terrainPrix.entier;
+          const fmt = formatsOpts.find((f) => f.cle === formatTerrain);
+          const hourly =
+            formatTerrain === "moitie"
+              ? terrainPrix.moitie
+              : formatTerrain === "entier"
+                ? terrainPrix.entier
+                : Number(fmt?.prix_heure || terrainPrix.entier || 0);
           const total = Math.round(hourly * selectedDuration);
           const av = Math.round(total * 0.125);
           setDevis({ montant: total, montant_avance: av, montant_restant: Math.max(0, total - av) });
         })
         .catch(() => {
           if (cancelled) return;
-          const hourly = formatTerrain === "moitie" ? terrainPrix.moitie : terrainPrix.entier;
+          const fmt = formatsOpts.find((f) => f.cle === formatTerrain);
+          const hourly =
+            formatTerrain === "moitie"
+              ? terrainPrix.moitie
+              : formatTerrain === "entier"
+                ? terrainPrix.entier
+                : Number(fmt?.prix_heure || terrainPrix.entier || 0);
           const total = hourly > 0 ? Math.round(hourly * selectedDuration) : 0;
           const av = Math.round(total * 0.125);
           setDevis(total > 0 ? { montant: total, montant_avance: av, montant_restant: total - av } : null);
@@ -435,6 +510,7 @@ export default function ReservationExpressModal({
     selectedDuration,
     terrainPrix.moitie,
     terrainPrix.entier,
+    formatsOpts,
   ]);
 
   if (!open) return null;
@@ -535,8 +611,35 @@ export default function ReservationExpressModal({
       toast.error(errPhone);
       return;
     }
+    if (!sansAvance && !canConfirmManual) {
+      toast.error("Les confirmations manuelles sont désactivées pour ce terrain");
+      return;
+    }
     setBusy(true);
     try {
+      if (sansAvance) {
+        const created = (await reservationsApi.createGerant({
+          terrain_id: terrainId,
+          date: selectedDate,
+          heure_debut: heureDebutEffective,
+          heure_fin: heureFin,
+          joueur_nom: nom,
+          joueur_prenom: joueurPrenom.trim() || undefined,
+          joueur_telephone: toLocal9(joueurTel),
+          format_terrain: formatTerrain,
+          joueur_id: joueurId || undefined,
+          mode: "bloquer",
+        })) as { reservation_id?: number };
+        if (!created?.reservation_id) throw new Error("Réservation non créée");
+        onCreated?.();
+        setDoneMsg("Réservation confirmée ✓ — paiement sur place");
+        toast.success("Réservation confirmée — total à encaisser sur place");
+        window.setTimeout(() => {
+          onClose();
+          navigate(`/backoffice/gerant/reservations/${created.reservation_id}`);
+        }, 900);
+        return;
+      }
       const created = (await reservationsApi.createGerant({
         terrain_id: terrainId,
         date: selectedDate,
@@ -594,7 +697,7 @@ export default function ReservationExpressModal({
                   <ArrowLeft className="h-4 w-4" />
                 </button>
               )}
-              <h2 className="text-base font-bold text-[var(--text-primary)]">Nouvelle réservation</h2>
+              <h2 className="text-base font-bold text-[var(--text-primary)]">Réserver</h2>
             </div>
             <p className="mt-0.5 text-xs text-neutral-400">
               Étape {step}/3
@@ -682,7 +785,7 @@ export default function ReservationExpressModal({
                       Durée
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      {DUREES_EXPRESS.map((d) => (
+                      {dureesOpts.map((d) => (
                         <button
                           key={d.label}
                           type="button"
@@ -702,6 +805,11 @@ export default function ReservationExpressModal({
                         </button>
                       ))}
                     </div>
+                    {selectedDuration !== 1 ? (
+                      <p className="mt-2 text-[11px] text-amber-700">
+                        Durée ≠ 1 h (habituel) — vérifie avant de continuer.
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="flex gap-2">
@@ -836,7 +944,10 @@ export default function ReservationExpressModal({
                   {devis ? (
                     <p className="text-xs text-neutral-500">
                       Durée : {formatDureeLabel(selectedDuration)} · Prix :{" "}
-                      {formatFcfa(devis.montant)} · Avance : {formatFcfa(devis.montant_avance)}
+                      {formatFcfa(devis.montant)}
+                      {sansAvance
+                        ? " · Paiement sur place (sans avance)"
+                        : ` · Avance : ${formatFcfa(devis.montant_avance)}`}
                     </p>
                   ) : null}
                 </div>
@@ -938,18 +1049,19 @@ export default function ReservationExpressModal({
                       Type de terrain
                     </p>
                     <div className="grid grid-cols-2 gap-2">
-                      {(
-                        [
-                          ["moitie", "Demi-terrain", terrainPrix.moitie],
-                          ["entier", "Terrain entier", terrainPrix.entier],
-                        ] as const
-                      ).map(([value, label, price]) => {
-                        const active = formatTerrain === value;
+                      {formatsOpts.map((fmt) => {
+                        const active = formatTerrain === fmt.cle;
+                        const price =
+                          fmt.cle === "moitie" || fmt.map_grille === "demi"
+                            ? terrainPrix.moitie || fmt.prix_heure
+                            : fmt.cle === "entier" || fmt.map_grille === "entier"
+                              ? terrainPrix.entier || fmt.prix_heure
+                              : fmt.prix_heure;
                         return (
                           <button
-                            key={value}
+                            key={fmt.cle}
                             type="button"
-                            onClick={() => setFormatTerrain(value)}
+                            onClick={() => setFormatTerrain(fmt.cle)}
                             className={cn(
                               "min-h-[64px] rounded-xl border p-3 text-left",
                               active
@@ -957,7 +1069,7 @@ export default function ReservationExpressModal({
                                 : "border-gray-200 bg-white",
                             )}
                           >
-                            <span className="block text-sm font-semibold">{label}</span>
+                            <span className="block text-sm font-semibold">{fmt.label}</span>
                             <span className="text-[11px] opacity-80">
                               {price > 0 ? `${formatFcfa(price)}/h` : "—"}
                             </span>
@@ -965,13 +1077,31 @@ export default function ReservationExpressModal({
                         );
                       })}
                     </div>
+                    {formatTerrain !== "moitie" ? (
+                      <p className="mt-2 text-[11px] text-amber-700">
+                        Format sélectionné :{" "}
+                        {formatsOpts.find((f) => f.cle === formatTerrain)?.label || formatTerrain}
+                      </p>
+                    ) : null}
                   </div>
 
                   {devis && (
-                    <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm font-medium text-amber-900">
-                      Avance : {formatFcfa(devis.montant_avance)} — Reste sur place :{" "}
-                      {formatFcfa(devis.montant_restant)}
-                    </p>
+                    <div className="rounded-xl border-2 border-[var(--g-primary)] bg-[var(--g-primary-glow)] px-3 py-3 space-y-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--g-primary)]">
+                        Prix à confirmer
+                      </p>
+                      <p
+                        className="text-xl font-bold"
+                        style={{ color: "var(--g-text)", fontFamily: "var(--font-display)" }}
+                      >
+                        {formatFcfa(devis.montant)}
+                      </p>
+                      <p className="text-xs text-amber-900">
+                        {sansAvance
+                          ? `Sans avance — total à encaisser sur place : ${formatFcfa(devis.montant)}`
+                          : `Avance : ${formatFcfa(devis.montant_avance)} — Reste sur place : ${formatFcfa(devis.montant_restant)}`}
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
@@ -1000,39 +1130,60 @@ export default function ReservationExpressModal({
               )}
               {step === 3 && (
                 <>
+                  {devis ? (
+                    <div className="rounded-xl bg-[var(--g-primary-glow)] px-3 py-2 text-center">
+                      <p className="text-[11px] font-semibold text-[var(--g-primary)]">Total</p>
+                      <p className="text-lg font-bold" style={{ color: "var(--g-text)" }}>
+                        {formatFcfa(devis.montant)}
+                      </p>
+                    </div>
+                  ) : null}
                   <p className="text-[13px] font-semibold" style={{ color: "var(--g-text)" }}>
-                    Comment le joueur a payé ?
+                    {sansAvance ? "Confirmer la réservation" : "Comment le joueur a payé ?"}
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => setPayChoice("lien")}
-                    className="w-full rounded-xl px-3 py-3 text-left text-sm"
-                    style={{
-                      border: payChoice === "lien" ? "1.5px solid var(--g-primary)" : "1px solid var(--g-border, #e5e7eb)",
-                      background: payChoice === "lien" ? "var(--g-primary-glow)" : "transparent",
-                    }}
-                  >
-                    Envoyer le lien de paiement WhatsApp
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPayChoice("manuel")}
-                    className="w-full rounded-xl px-3 py-3 text-left"
-                    style={{
-                      border: payChoice === "manuel" ? "1.5px solid var(--g-warning)" : "1px solid var(--g-border, #e5e7eb)",
-                      background: payChoice === "manuel" ? "var(--g-warning-bg)" : "transparent",
-                    }}
-                  >
-                    <span className="inline-flex items-center gap-2 text-sm font-semibold">
-                      <AlertTriangle size={16} style={{ color: "var(--g-warning)" }} />
-                      Le joueur a déjà payé directement
-                    </span>
-                    <p className="mt-1 text-[12px]" style={{ color: "var(--g-warning)" }}>
-                      La commission de {formatFcfa(devis?.montant_commission || 0)} sera comptabilisée en dette.
-                      Tu devras la régler en fin de mois.
+                  {sansAvance ? (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      Politique sans avance : le match est confirmé tout de suite, le total se paie sur place.
                     </p>
-                  </button>
-                  {payChoice === "manuel" ? (
+                  ) : null}
+                  {!sansAvance ? (
+                    <button
+                      type="button"
+                      onClick={() => setPayChoice("lien")}
+                      className="w-full rounded-xl px-3 py-3 text-left text-sm"
+                      style={{
+                        border: payChoice === "lien" ? "1.5px solid var(--g-primary)" : "1px solid var(--g-border, #e5e7eb)",
+                        background: payChoice === "lien" ? "var(--g-primary-glow)" : "transparent",
+                      }}
+                    >
+                      Envoyer le lien de paiement WhatsApp
+                    </button>
+                  ) : null}
+                  {(sansAvance || canConfirmManual) ? (
+                    <button
+                      type="button"
+                      onClick={() => setPayChoice("manuel")}
+                      className="w-full rounded-xl px-3 py-3 text-left"
+                      style={{
+                        border: payChoice === "manuel" ? "1.5px solid var(--g-warning)" : "1px solid var(--g-border, #e5e7eb)",
+                        background: payChoice === "manuel" ? "var(--g-warning-bg)" : "transparent",
+                      }}
+                    >
+                      <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                        <AlertTriangle size={16} style={{ color: "var(--g-warning)" }} />
+                        {sansAvance
+                          ? "Confirmer — paiement sur place"
+                          : "Le joueur a déjà payé directement"}
+                      </span>
+                      {!sansAvance ? (
+                        <p className="mt-1 text-[12px]" style={{ color: "var(--g-warning)" }}>
+                          La commission de {formatFcfa(devis?.montant_commission || 0)} sera comptabilisée en dette.
+                          Tu devras la régler en fin de mois.
+                        </p>
+                      ) : null}
+                    </button>
+                  ) : null}
+                  {payChoice === "manuel" && !sansAvance ? (
                     <textarea
                       value={noteManuel}
                       onChange={(e) => setNoteManuel(e.target.value)}
@@ -1041,7 +1192,7 @@ export default function ReservationExpressModal({
                       style={{ border: "1px solid var(--g-border, #e5e7eb)" }}
                     />
                   ) : null}
-                  {payChoice === "lien" ? (
+                  {payChoice === "lien" && !sansAvance ? (
                     <button
                       type="button"
                       disabled={busy}
@@ -1053,12 +1204,16 @@ export default function ReservationExpressModal({
                   ) : (
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || (!sansAvance && !canConfirmManual)}
                       onClick={() => void submitManuel()}
                       className="flex min-h-[48px] w-full items-center justify-center rounded-xl text-sm font-semibold text-white disabled:opacity-50"
                       style={{ background: "var(--g-warning)" }}
                     >
-                      {busy ? "Confirmation…" : "Confirmer la réservation manuellement"}
+                      {busy
+                        ? "Confirmation…"
+                        : sansAvance
+                          ? "Confirmer la réservation"
+                          : "Confirmer la réservation manuellement"}
                     </button>
                   )}
                   <button
@@ -1072,9 +1227,11 @@ export default function ReservationExpressModal({
                     Annuler
                   </button>
                   <p className="text-center text-[11px] text-neutral-400">
-                    {payChoice === "lien"
-                      ? "Le créneau reste libre jusqu'à confirmation du paiement"
-                      : "Le créneau est verrouillé immédiatement après confirmation"}
+                    {sansAvance
+                      ? "Le créneau est verrouillé immédiatement"
+                      : payChoice === "lien"
+                        ? "Le créneau reste libre jusqu'à confirmation du paiement"
+                        : "Le créneau est verrouillé immédiatement après confirmation"}
                   </p>
                 </>
               )}

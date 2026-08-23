@@ -10,6 +10,7 @@ import { estDansLaFenetreCheckIn, calculerFenetreCheckIn } from "@/lib/checkInFe
 import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import { confirmWhatsappAction, WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
+import { featureEnabled } from "@/lib/terrainFeatures";
 
 type PolitiqueRemboursement = {
   eligible?: boolean;
@@ -64,10 +65,18 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
     className: "bg-[var(--color-primary)] text-white",
   },
   en_attente: {
-    label: "En attente de paiement",
+    label: "Paiement en cours",
     className: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
   },
+  acceptee: {
+    label: "Réservé ✓",
+    className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
+  },
   annule: {
+    label: "Annulée",
+    className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
+  },
+  annulee: {
     label: "Annulée",
     className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
   },
@@ -127,7 +136,11 @@ export default function DetailReservation() {
   const [encaissing, setEncaissing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmEncaisser, setConfirmEncaisser] = useState(false);
+  const [confirmManualOpen, setConfirmManualOpen] = useState(false);
+  const [confirmingManual, setConfirmingManual] = useState(false);
   const [methode, setMethode] = useState<"especes" | "wave" | "orange_money">("especes");
+  const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
   const { down: waDown } = useWhatsappInfra(true);
 
   const load = useCallback(async () => {
@@ -148,6 +161,23 @@ export default function DetailReservation() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let mounted = true;
+    gerantApi
+      .dashboard()
+      .then((dash) => {
+        if (!mounted) return;
+        const f = (dash as { features?: Record<string, boolean> })?.features;
+        setFeatures(f && typeof f === "object" ? f : {});
+      })
+      .catch(() => {
+        if (mounted) setFeatures({});
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   if (loading) return <DetailSkeleton />;
 
@@ -200,16 +230,18 @@ export default function DetailReservation() {
       }
     : badge;
 
+  const canValidateEntree =
+    ["confirme", "acceptee"].includes(reservation.statut) &&
+    !reservation.qr_code_scanne_at &&
+    dansFenetre;
   const canScan =
-    ["confirme", "acceptee"].includes(reservation.statut) &&
-    !reservation.qr_code_scanne_at &&
-    (typeof reservation.scannable_now === "boolean" ? reservation.scannable_now : dansFenetre);
-  const bloqueParPriorite =
-    ["confirme", "acceptee"].includes(reservation.statut) &&
-    !reservation.qr_code_scanne_at &&
-    dansFenetre &&
-    (reservation.scan_bloque_par_priorite === true || reservation.scannable_now === false);
+    canValidateEntree &&
+    (typeof reservation.scannable_now === "boolean" ? reservation.scannable_now : true);
+  const bloqueParPriorite = canValidateEntree && !canScan;
   const canResendPaymentLink = reservation.statut === "en_attente";
+  const canConfirmManual =
+    reservation.statut === "en_attente" &&
+    featureEnabled(features, "confirmations_manuelles", true);
   const canResendQr =
     Boolean(reservation.code_reservation) &&
     ["confirme", "acceptee"].includes(reservation.statut) &&
@@ -217,7 +249,9 @@ export default function DetailReservation() {
   const horsFenetreConfirmée =
     ["confirme", "acceptee"].includes(reservation.statut) && !reservation.qr_code_scanne_at && !dansFenetre;
   const canEncaisser =
-    reste > 0 && ["confirme", "acceptee", "match_joue", "joue"].includes(reservation.statut);
+    reste > 0 &&
+    ["confirme", "acceptee", "match_joue", "joue"].includes(reservation.statut) &&
+    (dejaScanne || dansFenetre);
   const canAnnuler = ["en_attente", "confirme", "acceptee"].includes(reservation.statut);
 
   const fenetreLabel = (() => {
@@ -252,6 +286,24 @@ export default function DetailReservation() {
     }
   };
 
+  const handleConfirmManual = async () => {
+    if (!reservation) return;
+    setConfirmingManual(true);
+    try {
+      await gerantApi.confirmerManuellement(
+        reservation.id,
+        "Avance reçue hors PayTech (confirmation manuelle depuis la fiche)",
+      );
+      toast.success("Réservation confirmée — le joueur va recevoir le QR");
+      setConfirmManualOpen(false);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Confirmation manuelle impossible");
+    } finally {
+      setConfirmingManual(false);
+    }
+  };
+
   const handleResendQr = async () => {
     if (waDown) {
       toast.error(WHATSAPP_INFRA_MESSAGE);
@@ -273,6 +325,7 @@ export default function DetailReservation() {
     try {
       await gerantApi.encaisserRestant(reservation.id, methode);
       toast.success(`Reste encaissé (${methode.replace("_", " ")})`);
+      setConfirmEncaisser(false);
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Encaissement impossible");
@@ -343,7 +396,7 @@ export default function DetailReservation() {
           className="text-3xl font-bold text-[var(--color-primary)] tracking-wide"
           style={{ fontFamily: "var(--font-display)" }}
         >
-          {reservation.code_reservation || `Résa #${reservation.id}`}
+          {reservation.code_reservation || `Réservation #${reservation.id}`}
         </h1>
       </section>
 
@@ -367,7 +420,7 @@ export default function DetailReservation() {
           <p className="text-xs text-[var(--color-success)]">Lié au compte joueur #{reservation.joueur_id} (visible dans Mes réservations)</p>
         ) : (
           <p className="text-xs text-[var(--color-warning)]">
-            Non lié à un compte app — le joueur ne verra pas cette résa dans Mes réservations.
+            Non lié à un compte app — le joueur ne verra pas cette réservation dans Mes réservations.
           </p>
         )}
         {reservation.joueur_telephone ? (
@@ -435,7 +488,7 @@ export default function DetailReservation() {
             <button
               type="button"
               disabled={encaissing}
-              onClick={handleEncaisser}
+              onClick={() => setConfirmEncaisser(true)}
               className="w-full min-h-[48px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium disabled:opacity-60"
             >
               {encaissing ? "Encaissement…" : `Encaisser ${formatFcfa(reste)}`}
@@ -498,12 +551,30 @@ export default function DetailReservation() {
         <button
           type="button"
           onClick={handleResendPaymentLink}
-          disabled={resending}
+          disabled={resending || confirmingManual}
           className="w-full min-h-[52px] rounded-[var(--radius-md)] bg-[#25D366] text-white text-sm font-medium inline-flex items-center justify-center gap-2 disabled:opacity-60"
         >
           <MessageCircle className="w-5 h-5" />
           {resending ? "Envoi en cours..." : "Renvoyer le lien WhatsApp"}
         </button>
+      )}
+
+      {canConfirmManual && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setConfirmManualOpen(true)}
+            disabled={confirmingManual}
+            className="w-full min-h-[52px] rounded-[var(--radius-md)] text-white text-sm font-semibold disabled:opacity-60"
+            style={{ background: "var(--g-warning, #d97706)" }}
+          >
+            {confirmingManual ? "Confirmation…" : "Confirmer manuellement (avance déjà reçue)"}
+          </button>
+          <p className="text-xs text-center" style={{ color: "var(--color-text-muted)" }}>
+            À utiliser seulement si le joueur a déjà payé l&apos;avance (espèces, Wave, OM…).
+            La commission TerrainSN sera mise en dette.
+          </p>
+        </div>
       )}
 
       {canResendQr && (
@@ -518,7 +589,7 @@ export default function DetailReservation() {
         </button>
       )}
 
-      {!hideScanner && ["confirme", "acceptee"].includes(reservation.statut) && (
+      {!hideScanner && canValidateEntree && (
         <>
           {canScan ? (
             <button
@@ -530,15 +601,18 @@ export default function DetailReservation() {
               📷 Valider l&apos;entrée — Scanner QR
             </button>
           ) : null}
-          {canScan || !bloqueParPriorite ? (
-            <button
-              type="button"
-              onClick={() => setManualOpen(true)}
-              disabled={bloqueParPriorite}
-              className="w-full min-h-[48px] rounded-[var(--radius-md)] border border-[var(--color-primary)] text-[var(--color-primary)] text-sm font-medium disabled:opacity-50"
-            >
-              Valider l&apos;entrée manuellement
-            </button>
+          <button
+            type="button"
+            onClick={() => setManualOpen(true)}
+            disabled={bloqueParPriorite}
+            className="w-full min-h-[48px] rounded-[var(--radius-md)] border border-[var(--color-primary)] text-[var(--color-primary)] text-sm font-medium disabled:opacity-50"
+          >
+            Valider l&apos;entrée manuellement
+          </button>
+          {bloqueParPriorite ? (
+            <p className="text-xs text-[var(--color-text-muted)] text-center">
+              Un autre créneau est prioritaire — valide-le d&apos;abord.
+            </p>
           ) : null}
         </>
       )}
@@ -619,7 +693,7 @@ export default function DetailReservation() {
             .join("\n\n")
         }
         labelAnnuler="Garder la réservation"
-        labelConfirmer={cancelling ? "Annulation…" : "Confirmer l'annulation"}
+        labelConfirmer={cancelling ? "Annulation…" : "Oui, annuler — créneau libéré"}
         variante={
           reservation.politique_remboursement?.type_annulation === "avec_remboursement"
             ? "warning"
@@ -627,6 +701,34 @@ export default function DetailReservation() {
         }
         onAnnuler={() => setConfirmCancel(false)}
         onConfirmer={() => void handleAnnuler()}
+      />
+
+      <ConfirmationModal
+        ouvert={confirmEncaisser}
+        titre="Encaisser le reste sur place ?"
+        texte={`Tu vas enregistrer un encaissement de ${formatFcfa(reste)} (${methode.replace("_", " ")}). Vérifie le montant avant de confirmer.`}
+        labelAnnuler="Annuler"
+        labelConfirmer={encaissing ? "Encaissement…" : `Confirmer ${formatFcfa(reste)}`}
+        variante="warning"
+        onAnnuler={() => setConfirmEncaisser(false)}
+        onConfirmer={() => void handleEncaisser()}
+      />
+
+      <ConfirmationModal
+        ouvert={confirmManualOpen}
+        titre="Confirmer cette réservation manuellement ?"
+        texte={[
+          "Tu confirmes que l’avance a déjà été reçue hors PayTech (espèces, Wave, Orange Money…).",
+          `Avance attendue : ${formatFcfa(reservation.montant_avance)}.`,
+          "Le créneau sera verrouillé, le joueur recevra son QR, et la commission TerrainSN sera ajoutée à ta dette du mois.",
+        ].join("\n\n")}
+        labelAnnuler="Annuler"
+        labelConfirmer={confirmingManual ? "Confirmation…" : "Oui, confirmer"}
+        variante="warning"
+        onAnnuler={() => {
+          if (!confirmingManual) setConfirmManualOpen(false);
+        }}
+        onConfirmer={() => void handleConfirmManual()}
       />
     </div>
   );

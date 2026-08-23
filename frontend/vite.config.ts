@@ -9,8 +9,14 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    // Autorise les tunnels ngrok / Cloudflare (sinon 403 Blocked request)
+    allowedHosts: true,
     hmr: {
       overlay: false,
+      // Derrière ngrok HTTPS
+      protocol: process.env.NGROK_URL ? "wss" : undefined,
+      clientPort: process.env.NGROK_URL ? 443 : undefined,
+      host: process.env.NGROK_HOST || undefined,
     },
     proxy: {
       '/api': {

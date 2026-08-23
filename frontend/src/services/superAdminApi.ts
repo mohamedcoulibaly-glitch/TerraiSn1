@@ -93,6 +93,14 @@ export const superAdminApi = {
       method: "PATCH",
       body: JSON.stringify({ delai_remboursement_heures }),
     }),
+  politiquePaiement: (
+    terrainId: number,
+    data: { politique_paiement: "avance" | "sans_avance"; delai_paiement_dette_jours?: number },
+  ) =>
+    adminRequest(`/admin/terrains/${terrainId}/politique-paiement`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
   delaiVerrouPaiement: (terrainId: number, delai_verrou_paiement_min: number) =>
     adminRequest(`/admin/terrains/${terrainId}/delai-verrou-paiement`, {
       method: "PATCH",
@@ -125,6 +133,15 @@ export const superAdminApi = {
     adminRequest(`/admin/terrains/${terrainId}/grille-tarifs`, {
       method: "PUT",
       body: JSON.stringify(data),
+    }),
+  terrainFormats: (terrainId: number) => adminRequest(`/admin/terrains/${terrainId}/formats`),
+  saveTerrainFormats: (
+    terrainId: number,
+    body: { formats: unknown[]; durees: unknown[] },
+  ) =>
+    adminRequest(`/admin/terrains/${terrainId}/formats`, {
+      method: "PUT",
+      body: JSON.stringify(body),
     }),
   validerPropositionTarif: (id: number) =>
     adminRequest(`/admin/propositions-tarifs/${id}/valider`, { method: "POST" }),
@@ -252,6 +269,14 @@ export const superAdminApi = {
     adminRequest("/admin/superadmins", { method: "POST", body: JSON.stringify(body) }),
   patchSuperadmin: (id: number, body: Record<string, unknown>) =>
     adminRequest(`/admin/superadmins/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  pushLogs: (params?: Record<string, string | number | undefined>) => {
+    const sp = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v != null && v !== "") sp.set(k, String(v));
+    });
+    const q = sp.toString();
+    return adminRequest(`/push/logs${q ? `?${q}` : ""}`);
+  },
 };
 
 export type TerrainGerant = {

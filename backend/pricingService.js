@@ -66,21 +66,13 @@ function rangeHourSegments(heureDebut, heureFin) {
 }
 
 async function calculerPrixReservation(database, terrain, date, heureDebut, heureFin, format = 'entier') {
-  const segments = rangeHourSegments(heureDebut, heureFin);
-  if (!segments.length) {
-    const slots = hourlySlots(heureDebut, heureFin);
-    let sum = 0;
-    for (const slot of slots) {
-      sum += await prixDepuisRegleOuGrille(database, terrain, date, slot.heure_debut, format);
-    }
-    return sum;
-  }
-  let sum = 0;
-  for (const seg of segments) {
-    const prixH = await prixDepuisRegleOuGrille(database, terrain, date, seg.heure_debut, format);
-    sum += Math.round(prixH * seg.fraction);
-  }
-  return sum;
+  const devis = await calculerDevis(database, terrain, {
+    date,
+    heure_debut: heureDebut,
+    heure_fin: heureFin,
+    format_terrain: format,
+  });
+  return Number(devis.montant || 0);
 }
 
 function calculerMontantAvance(terrain, prixChoisi) {
@@ -93,7 +85,20 @@ function calculerMontantAvance(terrain, prixChoisi) {
 }
 
 async function calculerDevis(database, terrain, { date, heure_debut, heure_fin, format_terrain = 'entier' }) {
-  const format = format_terrain === 'moitie' ? 'moitie' : 'entier';
+  const formatCle = String(format_terrain || 'entier').trim() || 'entier';
+  const formatsService = require('./services/formatsTerrainService');
+  const formatRow = await formatsService.getFormatByCle(database, terrain.id, formatCle);
+  const grilleKey =
+    formatRow?.map_grille === 'demi'
+      ? 'moitie'
+      : formatRow?.map_grille === 'entier'
+        ? 'entier'
+        : formatCle === 'moitie'
+          ? 'moitie'
+          : formatCle === 'entier'
+            ? 'entier'
+            : null;
+
   const segments = rangeHourSegments(heure_debut, heure_fin);
   if (!segments.length) {
     const err = new Error('Créneau invalide');
@@ -103,15 +108,22 @@ async function calculerDevis(database, terrain, { date, heure_debut, heure_fin, 
   const { getPrixActif } = require('./services/tarifService');
   const detail = [];
   for (const seg of segments) {
-    const actif = await getPrixActif(database, terrain.id, date, seg.heure_debut);
-    const prixH = format === 'moitie' ? Number(actif.prix_demi_terrain || 0) : Number(actif.prix_terrain_entier || 0);
+    let prixH = 0;
+    let nomTarif = formatRow?.label || formatCle;
+    if (grilleKey === 'moitie' || grilleKey === 'entier') {
+      const actif = await getPrixActif(database, terrain.id, date, seg.heure_debut);
+      prixH = grilleKey === 'moitie' ? Number(actif.prix_demi_terrain || 0) : Number(actif.prix_terrain_entier || 0);
+      nomTarif = actif.nom_tarif || nomTarif;
+    } else {
+      prixH = Number(formatRow?.prix_heure || prixBaseTerrain(terrain, 'entier') || 0);
+    }
     const prix = Math.round(prixH * seg.fraction);
     detail.push({
       heure: seg.heure_debut,
       heure_fin: seg.heure_fin,
       prix,
       minutes: seg.minutes,
-      nom_tarif: actif.nom_tarif,
+      nom_tarif: nomTarif,
     });
   }
   const montant = detail.reduce((sum, row) => sum + Number(row.prix || 0), 0);
@@ -121,7 +133,7 @@ async function calculerDevis(database, terrain, { date, heure_debut, heure_fin, 
     date,
     heure_debut: segments[0].heure_debut,
     heure_fin: segments[segments.length - 1].heure_fin,
-    format_terrain: format,
+    format_terrain: formatCle,
     duree_minutes: dureeMinutesOf(heure_debut, heure_fin),
     montant,
     montant_avance,

@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const { getDb, queryOne, runSql, transaction, rowsModified } = require('../database');
 const paytechService = require('../paytechService');
 const notificationService = require('../notificationService');
-const pushService = require('../pushService');
 const logger = require('../logger');
 const { calculerFenetreCheckIn } = require('../services/checkInFenetre');
 const { serializeQrPayload } = require('../services/qrPayload');
@@ -70,7 +69,7 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand) {
 
     loserIds = await annulerReservationsConcurrentes(db, { ...currentReservation, id: reservationId });
 
-    const terrain = await queryOne(db, `SELECT t.id AS terrain_id, t.acompte, t.montant_acompte, t.commission,
+    const terrain = await queryOne(db, `SELECT t.id AS terrain_id, t.nom, t.acompte, t.montant_acompte, t.commission,
         t.pourcentage_avance, t.modele_revenus, t.commission_pourcentage,
         e.id AS gerant_id, e.telephone AS gerant_tel, e.whatsapp_number AS gerant_whatsapp, e.nom AS gerant_nom
         FROM terrains t
@@ -125,6 +124,8 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand) {
         telephone: terrain.gerant_whatsapp || terrain.gerant_tel,
         nom: terrain.gerant_nom,
         gerant_id: terrain.gerant_id,
+        terrain_id: terrain.terrain_id,
+        terrain_nom: terrain.nom || null,
         montant_avance: montantAvance,
         montant_commission: montantCommission,
         montant_reverse: montantReverse,
@@ -152,9 +153,6 @@ async function confirmerPaiementEtNotifier(reservationId, refCommand) {
     });
     await notificationService.envoyerConfirmation(reservationId).catch((error) => {
       logger.error('payments/flow.js', 'Notification confirmation', error);
-    });
-    await pushService.envoyerConfirmationPush(reservationId).catch((error) => {
-      logger.error('payments/flow.js', 'Push confirmation', error);
     });
     if (reversementInfo) {
       await notificationService.envoyerReversement(reversementInfo).catch((error) => {
@@ -190,9 +188,9 @@ async function annulerReservationApresAnnulationPaytech(reservationId, refComman
   if (reservation.statut !== 'en_attente') return { action: 'ignore' };
 
   await transaction(db, async () => {
-    await runSql(db, "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
+    await runSql(db, "UPDATE reservations SET statut = 'expire' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
     if (rowsModified(db) === 1) {
-      await libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
+      await libererCreneauxReservation(db, reservation, ['en_attente_paiement'], { force: true });
       await runSql(
         db,
         `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)

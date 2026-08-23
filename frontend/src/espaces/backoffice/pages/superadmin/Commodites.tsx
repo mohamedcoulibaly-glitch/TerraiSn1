@@ -21,7 +21,7 @@ type Commodite = {
   modifiable_gerant?: number;
 };
 
-const emptyForm = { cle: "", label_fr: "", icone: "Star", description: "", ordre: "10", modifiable_gerant: true };
+const emptyForm = { cle: "", label_fr: "", icone: "CheckCircle2", description: "", ordre: "10", modifiable_gerant: true };
 
 export default function CommoditesPage() {
   useSaCrumbs([{ label: "Commodités", to: "/backoffice/superadmin/commodites" }]);

@@ -19,6 +19,23 @@ async function listFeatures(database, terrainId) {
   }));
 }
 
+/** Map { cle: boolean } pour les écrans cibles. */
+async function featuresFlags(database, terrainId) {
+  const list = await listFeatures(database, terrainId);
+  const out = {};
+  for (const f of list) out[f.cle] = Boolean(f.actif);
+  return out;
+}
+
+function isFeatureEnabled(flags, cle, fallback = true) {
+  if (!flags || typeof flags !== 'object') return fallback;
+  if (!(cle in flags)) {
+    const def = FEATURES.find((f) => f.cle === cle);
+    return def ? Boolean(def.defaut) : fallback;
+  }
+  return Boolean(flags[cle]);
+}
+
 async function saveFeatures(database, terrainId, items, actorId) {
   const wanted = Array.isArray(items) ? items : [];
   for (const item of wanted) {
@@ -39,4 +56,4 @@ async function saveFeatures(database, terrainId, items, actorId) {
   return listFeatures(database, terrainId);
 }
 
-module.exports = { FEATURES, listFeatures, saveFeatures };
+module.exports = { FEATURES, listFeatures, featuresFlags, isFeatureEnabled, saveFeatures };

@@ -6,6 +6,7 @@ import { superAdminApi, type TerrainPhoto } from "@/services/superAdminApi";
 import { useAuth } from "@/hooks/use-auth";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
 import GrilleTarifaireAdmin from "@/espaces/backoffice/components/GrilleTarifaireAdmin";
+import FormatsTerrainEditor from "@/espaces/backoffice/components/superadmin/FormatsTerrainEditor";
 import ContratPaiementTab from "@/espaces/backoffice/components/superadmin/ContratPaiementTab";
 import EssaiGratuitSection from "@/espaces/backoffice/components/superadmin/EssaiGratuitSection";
 import FeatureFlag, { type TerrainFeature } from "@/espaces/backoffice/components/superadmin/FeatureFlag";
@@ -26,7 +27,8 @@ const TABS = [
   { id: "localisation", label: "Localisation" },
   { id: "contrat", label: "Contrat paiement" },
   { id: "features", label: "Fonctionnalités" },
-  { id: "tarifs", label: "Tarifs" },
+  { id: "formats", label: "Formats & prix" },
+  { id: "tarifs", label: "Grille horaires" },
   { id: "gerants", label: "Gérants" },
   { id: "audit", label: "Audit" },
   { id: "historique", label: "Historique" },
@@ -346,6 +348,8 @@ export default function TerrainFiche() {
           </div>
         </div>
       ) : null}
+
+      {tab === "formats" ? <FormatsTerrainEditor terrainId={terrain.id} /> : null}
 
       {tab === "tarifs" ? (
         <GrilleTarifaireAdmin terrainId={terrain.id} terrainNom={terrain.nom} onClose={() => navigate(`/backoffice/superadmin/terrains/${terrain.id}?tab=contrat`)} />

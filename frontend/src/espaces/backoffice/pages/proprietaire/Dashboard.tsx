@@ -30,6 +30,7 @@ type Sante = {
   matchs_scannes: number;
   total_confirmes: number;
   activite_recente?: Array<{ action: string; created_at?: string }>;
+  score_sante_enabled?: boolean;
 };
 
 const OwnerDashboard = () => {
@@ -170,7 +171,7 @@ const OwnerDashboard = () => {
         health: santes[String(terrain.id)],
         gerant: gerantByTerrain[String(terrain.id)],
       }))
-      .filter((row) => row.health)
+      .filter((row) => row.health && row.health.score_sante_enabled !== false)
       .slice(0, 4);
   }, [terrains, selectedTerrainId, santes, gerantByTerrain]);
 
@@ -366,7 +367,7 @@ const OwnerDashboard = () => {
                 <p className="mt-2 text-[22px] font-bold leading-none" style={{ fontFamily: "var(--font-display)", color: "var(--p-text)" }}>
                   {aVenir}
                 </p>
-                <p className="text-[11px] mt-1" style={{ color: "var(--p-muted)" }}>Résas confirmées</p>
+                <p className="text-[11px] mt-1" style={{ color: "var(--p-muted)" }}>Réservations confirmées</p>
               </>
             )}
           </div>

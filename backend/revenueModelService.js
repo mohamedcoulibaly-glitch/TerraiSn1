@@ -22,7 +22,7 @@ async function ensurePendingAbonnement(database, terrainId, montant) {
 }
 
 async function marquerAbonnementPaye(database, abonnementId) {
-  const abonnement = await queryOne(database, `SELECT a.*, t.modele_revenus, t.abonnement_montant
+  const abonnement = await queryOne(database, `SELECT a.*, t.modele_revenus, t.abonnement_montant, t.is_active
     FROM abonnements a JOIN terrains t ON t.id = a.terrain_id
     WHERE a.id = ?`, [abonnementId]);
   if (!abonnement) {
@@ -32,6 +32,7 @@ async function marquerAbonnementPaye(database, abonnementId) {
   }
   if (abonnement.statut === 'paye') return abonnement;
 
+  const etaitSuspendu = Number(abonnement.is_active) === 0;
   const nextDueDate = prochaineEcheanceMensuelle();
   await runSql(database, "UPDATE abonnements SET statut = 'paye', paye_le = CURRENT_TIMESTAMP WHERE id = ?", [abonnementId]);
   await runSql(database, 'UPDATE terrains SET is_active = 1, abonnement_prochain_paiement = ? WHERE id = ?', [nextDueDate, abonnement.terrain_id]);
@@ -39,6 +40,15 @@ async function marquerAbonnementPaye(database, abonnementId) {
   if (abonnement.modele_revenus === 'abonnement') {
     const nextAmount = Number(abonnement.abonnement_montant || abonnement.montant || 0);
     await runSql(database, 'INSERT INTO abonnements (terrain_id, montant, date_echeance, statut) VALUES (?, ?, ?, ?)', [abonnement.terrain_id, nextAmount, nextDueDate, 'en_attente']);
+  }
+
+  if (etaitSuspendu) {
+    try {
+      const pushService = require('./pushService');
+      await pushService.notifyTerrainReactive(abonnement.terrain_id);
+    } catch (err) {
+      console.warn('[PUSH] terrain reactive', err.message || err);
+    }
   }
 
   return await queryOne(database, 'SELECT * FROM abonnements WHERE id = ?', [abonnementId]);
@@ -74,6 +84,18 @@ async function appliquerSuspensionsAbonnements(database) {
   await runSql(database, `UPDATE abonnements
     SET statut = 'en_retard'
     WHERE statut = 'en_attente' AND CURRENT_DATE > date_echeance`);
+
+  const aSuspendre = await queryAll(database, `
+    SELECT t.id, t.nom
+      FROM terrains t
+     WHERE t.modele_revenus = 'abonnement'
+       AND COALESCE(t.is_active, 1) = 1
+       AND t.id IN (
+         SELECT terrain_id FROM abonnements
+         WHERE statut != 'paye' AND CURRENT_DATE > (date_echeance + INTERVAL '${GRACE_DAYS} days')
+       )
+  `);
+
   await runSql(database, `UPDATE terrains
     SET is_active = 0
     WHERE modele_revenus = 'abonnement'
@@ -81,6 +103,16 @@ async function appliquerSuspensionsAbonnements(database) {
         SELECT terrain_id FROM abonnements
         WHERE statut != 'paye' AND CURRENT_DATE > (date_echeance + INTERVAL '${GRACE_DAYS} days')
       )`);
+
+  for (const row of aSuspendre) {
+    try {
+      const pushService = require('./pushService');
+      await pushService.notifyTerrainSuspendu(row.id, { motif: 'abonnement' });
+    } catch (err) {
+      console.warn('[PUSH] terrain suspendu', err.message || err);
+    }
+  }
+  return aSuspendre.length;
 }
 
 async function abonnementsAvecEtat(database) {

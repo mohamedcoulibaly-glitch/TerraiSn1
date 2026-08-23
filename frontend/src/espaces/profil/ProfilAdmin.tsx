@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { profilApi } from "@/lib/api";
 import { PasswordBlock, ProfileAccount, ProfileError, ProfileLoading, ProfileShell, StatGrid, formatDate, readonlyInput } from "./ProfileBlocks";
+import PushPreferencesPanel from "@/components/pwa/PushPreferencesPanel";
 
 type AdminProfile = {
   account: ProfileAccount;
@@ -70,6 +71,9 @@ export default function ProfilAdmin() {
         <Button type="submit" variant="hero" className="w-full" disabled={saving}>{saving ? "Enregistrement..." : "Enregistrer"}</Button>
       </form>
       <PasswordBlock requireOld />
+      <div className="mt-6">
+        <PushPreferencesPanel />
+      </div>
       <StatGrid stats={[{ label: "Membre depuis", value: formatDate(data.stats.membre_depuis) }]} />
     </ProfileShell>
   );

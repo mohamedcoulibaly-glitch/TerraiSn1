@@ -3,6 +3,13 @@ const path = require('path');
 const QRCode = require('qrcode');
 const client = require('./whatsappClient');
 const { getDb, queryOne, runSql } = require('./database');
+const pushService = require('./pushService');
+
+function firePush(work) {
+  Promise.resolve()
+    .then(work)
+    .catch((err) => console.warn('[PUSH]', err.message || err));
+}
 const { UPLOAD_ROOT } = require('./terrainPhotoService');
 const { serializeQrPayload } = require('./services/qrPayload');
 const { calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
@@ -113,7 +120,7 @@ async function resolvePlayerOutboundSession(reservation = {}) {
 }
 
 /**
- * Attache le gérant de garde (source de vérité multi-gérants) aux détails résa.
+ * Attache le gérant de garde (source de vérité multi-gérants) aux détails réservation.
  * Ne lit plus le premier employes.terrain_id au hasard.
  */
 async function attachGerantDeGarde(data) {
@@ -263,7 +270,7 @@ async function envoyerLienPaiement(reservationId) {
   await envoyerWhatsApp(
     tel,
     `👋 Salut ${prenom} !\n\n` +
-      `Le gérant de *${data.terrain_nom}* a enregistré ta résa ` +
+      `Le gérant de *${data.terrain_nom}* a enregistré ta réservation ` +
       `pour le ${formaterDate(data.date)} ` +
       `à ${formaterHeure(data.heure_debut)}.\n\n` +
       `Pour confirmer ta place, paie ton avance de ` +
@@ -274,6 +281,7 @@ async function envoyerLienPaiement(reservationId) {
       `⚠️ Ce lien est valable *2 heures*. Après ça, la place repart.`,
     waKey
   );
+  firePush(() => pushService.notifyLienPaiement(reservationId));
 }
 
 /** Template 2 — Confirmation réservation avec QR code */
@@ -336,6 +344,7 @@ async function envoyerConfirmation(reservationId) {
       console.warn('⚠️ Notif gérant après confirmation:', err.message || err);
     });
   }
+  firePush(() => pushService.notifyReservationConfirmee(reservationId));
 }
 
 /** Template — confirmation manuelle (avance reçue hors PayTech) */
@@ -387,6 +396,7 @@ async function envoyerConfirmationManuelle(reservationId) {
       await envoyerImageWhatsApp(tel, imageUrl, caption, waKey);
     }
   }
+  firePush(() => pushService.notifyReservationConfirmee(reservationId));
 }
 
 /** Template — créneau confirmé par un autre joueur (perdant non payé) */
@@ -408,6 +418,7 @@ async function envoyerCreneauPris(reservationId) {
       `On t'en trouve un autre 💪`,
     sessionKeyFromReservation(data)
   );
+  firePush(() => pushService.notifyCreneauPris(reservationId));
 }
 
 /** Template 4 — Remboursement créneau pris */
@@ -428,6 +439,7 @@ async function envoyerRemboursement(reservationId) {
       `On t'en trouve un autre 💪`,
     sessionKeyFromReservation(data)
   );
+  firePush(() => pushService.notifyRemboursement(reservationId));
 }
 
 /** Template 5 — Reversement solde gérant */
@@ -444,6 +456,9 @@ async function envoyerReversement({
   reservationId,
   montant_acompte,
   montant_avance,
+  gerant_id,
+  terrain_nom,
+  terrain_id,
 }) {
   const reverse = montantReverse ?? montant_reverse;
   const commission = montantCommission ?? montant_commission;
@@ -459,6 +474,15 @@ async function envoyerReversement({
       `*Crédité sur ton compte : ${formaterMontant(reverse)}*\n\n` +
       `Solde disponible : *${formaterMontant(solde)}*`
   );
+  if (gerant_id) {
+    firePush(() =>
+      pushService.notifyReversement(gerant_id, {
+        montant: reverse,
+        terrainNom: terrain_nom,
+        terrainId: terrain_id,
+      }),
+    );
+  }
 }
 
 /** Annulation joueur / gérant — messages selon politique terrain + notif gérants. */
@@ -519,6 +543,7 @@ async function envoyerAnnulation(
       `Type : *${typeLabel}*\n` +
       `Créneau libéré — disponible pour une nouvelle réservation.`,
   );
+  firePush(() => pushService.notifyAnnulation(reservationId, { traiteParGerant }));
 }
 
 /**
@@ -583,6 +608,69 @@ async function envoyerResumeSemaine(terrainId, message) {
   }
 }
 
+/** Template — confirmation sans avance (paiement intégral sur place) */
+async function envoyerConfirmationSansAvance(reservationId) {
+  const qrUrl = await assurerQrCodeUrl(reservationId);
+  const data = await details(reservationId);
+  if (!data) return;
+  if (qrUrl) data.qr_code_url = qrUrl;
+
+  const prenom = prenomJoueur(data);
+  const tel = telephoneJoueur(data);
+  const quartier = data.adresse || data.ville || '';
+  const lienMaps =
+    data.latitude && data.longitude
+      ? `https://maps.google.com/?q=${data.latitude},${data.longitude}`
+      : null;
+  const total = Number(data.montant_total || data.prix_total || data.montant || 0);
+
+  const message =
+    `⚽ C'est confirmé ${prenom} !\n\n` +
+    `Ton terrain t'attend :\n` +
+    `📍 ${data.terrain_nom} — ${quartier}\n` +
+    `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
+    `🏷️ Code : *${data.code_reservation}*\n\n` +
+    (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
+    `💵 Règlement complet sur place : ${formaterMontant(total)}\n` +
+    `(pas d'avance en ligne pour ce terrain)\n\n` +
+    `📌 Viens *30 minutes avant* avec ce QR code 😄\n` +
+    `⚠️ Ce QR code est à usage unique.`;
+
+  const waKey = await resolvePlayerOutboundSession(data);
+  await envoyerWhatsApp(tel, message, waKey);
+
+  if (data.qr_code_url) {
+    const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
+    const relative = String(data.qr_code_url).replace(/^\/uploads\//, '');
+    const absolutePath = path.join(UPLOAD_ROOT, relative);
+    const caption = `QR Code — ${data.code_reservation}`;
+
+    if (fs.existsSync(absolutePath) && String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
+      await client.sendImageForSession(waKey, formatNumero(tel), {
+        filePath: absolutePath,
+        mimetype: 'image/png',
+        caption,
+      });
+    } else {
+      const imageUrl = data.qr_code_url.startsWith('http')
+        ? data.qr_code_url
+        : `${domain}${data.qr_code_url}`;
+      await envoyerImageWhatsApp(tel, imageUrl, caption, waKey);
+    }
+  }
+
+  if (data.terrain_id) {
+    await notifierGerantTerrain(
+      data.terrain_id,
+      `Réservation sans avance confirmée. Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}. Total sur place : ${formaterMontant(total)}.`,
+      'platform',
+    ).catch((err) => {
+      console.warn('⚠️ Notif gérant après confirmation sans avance:', err.message || err);
+    });
+  }
+  firePush(() => pushService.notifyReservationConfirmee(reservationId, { sansAvance: true }));
+}
+
 module.exports = {
   formatNumero,
   normalizeTelephoneStore,
@@ -597,6 +685,7 @@ module.exports = {
   envoyerLienPaiement,
   envoyerConfirmation,
   envoyerConfirmationManuelle,
+  envoyerConfirmationSansAvance,
   envoyerCreneauPris,
   envoyerRemboursement,
   envoyerAnnulation,

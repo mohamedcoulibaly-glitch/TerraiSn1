@@ -2,8 +2,11 @@ import { useMemo, useState } from "react";
 import {
   ArrowRightLeft,
   Check,
+  CreditCard,
   DollarSign,
+  Handshake,
   RefreshCw,
+  ShieldCheck,
   Smartphone,
   Zap,
   Hand,
@@ -32,6 +35,7 @@ import {
 import { usePreviewContrat } from "@/hooks/usePreviewContrat";
 
 type GerantInfo = { nom: string; telephone?: string } | null;
+type PolitiquePaiement = "avance" | "sans_avance";
 
 type Props = {
   terrain: any;
@@ -40,6 +44,19 @@ type Props = {
   onChange: (next: ContratOverlay) => void;
   auteur: string;
 };
+
+function apercuEcheanceDette(delaiJours: number) {
+  const now = new Date();
+  const finMois = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  finMois.setDate(finMois.getDate() + Math.max(0, delaiJours));
+  const moisCourant = now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+  const echeance = finMois.toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  return `Pour ${moisCourant} → échéance le ${echeance}`;
+}
 
 function Pill({
   active,
@@ -109,6 +126,10 @@ function CheckRow({ ok, label }: { ok: boolean; label: string }) {
 }
 
 export default function ContratPaiementTab({ terrain, contrat, gerant, onChange, auteur }: Props) {
+  const initialPolitique: PolitiquePaiement =
+    terrain.politique_paiement === "sans_avance" ? "sans_avance" : "avance";
+  const [politiquePaiement, setPolitiquePaiement] = useState<PolitiquePaiement>(initialPolitique);
+  const [delaiDette, setDelaiDette] = useState(String(terrain.delai_paiement_dette_jours ?? 30));
   const [avance, setAvance] = useState(String(terrain.pourcentage_avance ?? 8));
   const [commission, setCommission] = useState(String(terrain.commission_pourcentage ?? 10));
   const [saving, setSaving] = useState<string | null>(null);
@@ -127,6 +148,8 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
   const [confirmVerif, setConfirmVerif] = useState<"wave" | "om" | null>(null);
   const [histOpen, setHistOpen] = useState(false);
 
+  const sansAvance = politiquePaiement === "sans_avance";
+  const delaiDetteNum = Math.max(7, Math.min(90, Number(delaiDette) || 30));
   const pctAvance = Number(avance) || 0;
   const pctCommission = Number(commission) || 0;
   const preview = usePreviewContrat({
@@ -142,10 +165,10 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
   const waveStatut = contrat.wave_statut;
   const omStatut = contrat.om_statut;
 
-  const commercialOk = pctAvance > 0 && pctCommission >= 0;
-  const numerosOk = waveStatut === "verifie" || omStatut === "verifie";
-  const politiqueOk = !remb || Number(delai) > 0;
-  const modeOk = mode === "auto" || mode === "retrait";
+  const commercialOk = sansAvance ? pctCommission >= 0 : pctAvance > 0 && pctCommission >= 0;
+  const numerosOk = sansAvance || waveStatut === "verifie" || omStatut === "verifie";
+  const politiqueOk = sansAvance || !remb || Number(delai) > 0;
+  const modeOk = sansAvance || mode === "auto" || mode === "retrait";
   const allOk = commercialOk && numerosOk && politiqueOk && modeOk;
   const production = contrat.production_paiement;
 
@@ -157,11 +180,53 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
     return next;
   }
 
+  async function savePolitiquePaiementMode() {
+    setSaving("politique-paiement");
+    try {
+      const updated = (await superAdminApi.politiquePaiement(terrain.id, {
+        politique_paiement: politiquePaiement,
+        delai_paiement_dette_jours: delaiDetteNum,
+      })) as { politique_paiement?: string; delai_paiement_dette_jours?: number };
+      const nextPol =
+        String(updated?.politique_paiement || politiquePaiement) === "sans_avance" ? "sans_avance" : "avance";
+      setPolitiquePaiement(nextPol);
+      setDelaiDette(String(updated?.delai_paiement_dette_jours ?? delaiDetteNum));
+      await persist(
+        {},
+        "Politique paiement",
+        `${terrain.politique_paiement || "avance"} · ${terrain.delai_paiement_dette_jours || 30} j`,
+        `${nextPol} · ${updated?.delai_paiement_dette_jours ?? delaiDetteNum} j`,
+      );
+      toast.success("Politique de paiement enregistrée");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function saveDelaiDetteSeul() {
+    setSaving("delai-dette");
+    try {
+      const updated = (await superAdminApi.politiquePaiement(terrain.id, {
+        delai_paiement_dette_jours: delaiDetteNum,
+      })) as { delai_paiement_dette_jours?: number };
+      if (updated?.delai_paiement_dette_jours != null) {
+        setDelaiDette(String(updated.delai_paiement_dette_jours));
+      }
+      toast.success(`Délai dette : ${delaiDetteNum} jours`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
+    } finally {
+      setSaving(null);
+    }
+  }
+
   async function saveCommercial() {
     setSaving("commercial");
     try {
       await superAdminApi.updateTarifs(terrain.id, {
-        pourcentage_avance: pctAvance,
+        pourcentage_avance: sansAvance ? Number(terrain.pourcentage_avance ?? pctAvance) : pctAvance,
         commission_pourcentage: pctCommission,
         modele_revenus: terrain.modele_revenus || "commission",
       });
@@ -317,6 +382,140 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
         />
       ) : null}
 
+      {/* BLOC 0 — Politique de paiement */}
+      <section
+        className="rounded-xl p-5"
+        style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-warning)" }}
+      >
+        <h3 className="flex items-center gap-2 text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
+          <CreditCard size={16} style={{ color: "var(--sa-warning)" }} />
+          Politique de paiement
+        </h3>
+
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => setPolitiquePaiement("avance")}
+            className="text-left rounded-xl p-4"
+            style={{
+              border: politiquePaiement === "avance" ? "2px solid var(--sa-success)" : "1px solid var(--sa-border)",
+              background: politiquePaiement === "avance" ? "var(--sa-success-subtle)" : "var(--sa-surface)",
+            }}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <ShieldCheck size={18} style={{ color: "var(--sa-success)" }} />
+              <span className="text-[13px] font-semibold" style={{ color: "var(--sa-text)" }}>
+                Avec avance (standard)
+              </span>
+            </div>
+            <p className="text-[12px] font-medium" style={{ color: "var(--sa-text)" }}>
+              Paiement en ligne obligatoire
+            </p>
+            <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+              Le joueur paie une avance via Wave ou Orange Money avant que sa réservation soit confirmée.
+              Commission prélevée automatiquement.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setPolitiquePaiement("sans_avance")}
+            className="text-left rounded-xl p-4"
+            style={{
+              border: politiquePaiement === "sans_avance" ? "2px solid var(--sa-warning)" : "1px solid var(--sa-border)",
+              background: politiquePaiement === "sans_avance" ? "var(--sa-warning-subtle)" : "var(--sa-surface)",
+            }}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <Handshake size={18} style={{ color: "var(--sa-warning)" }} />
+              <span className="text-[13px] font-semibold" style={{ color: "var(--sa-text)" }}>
+                Sans avance (sur parole)
+              </span>
+            </div>
+            <p className="text-[12px] font-medium" style={{ color: "var(--sa-text)" }}>
+              Confirmation sans paiement
+            </p>
+            <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+              La réservation est confirmée directement sans paiement en ligne. Le joueur paie sur place.
+              La commission s&apos;accumule en dette mensuelle.
+            </p>
+            {sansAvance ? (
+              <p className="mt-2 text-[11px]" style={{ color: "var(--sa-warning)" }}>
+                ⚠️ Ce mode désactive PayTech pour ce terrain. La commission sera facturée en fin de période.
+              </p>
+            ) : null}
+          </button>
+        </div>
+
+        {sansAvance ? (
+          <div className="mt-4 space-y-3">
+            <label className="block max-w-xs">
+              <span className="text-[12px] font-medium" style={{ color: "var(--sa-text-2)" }}>
+                Délai de paiement de la dette commission (jours)
+              </span>
+              <input
+                type="number"
+                min={7}
+                max={90}
+                value={delaiDette}
+                onChange={(e) => setDelaiDette(e.target.value)}
+                className="mt-1 w-full h-11 rounded-lg px-3 text-sm"
+                style={{ border: "1px solid var(--sa-border)", color: "var(--sa-text)" }}
+              />
+              <span className="mt-1 block text-[11px]" style={{ color: "var(--sa-muted)" }}>
+                Le gérant dispose de {delaiDetteNum} jours après la fin du mois pour régler sa dette commission.
+              </span>
+              <span className="mt-1 block text-[12px] font-medium" style={{ color: "var(--sa-text-2)" }}>
+                {apercuEcheanceDette(delaiDetteNum)}
+              </span>
+            </label>
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          disabled={saving === "politique-paiement"}
+          onClick={savePolitiquePaiementMode}
+          className="mt-4 min-h-[44px] px-4 rounded-lg text-[13px] font-semibold text-white"
+          style={{ background: "var(--sa-primary)" }}
+        >
+          {saving === "politique-paiement" ? "Enregistrement…" : "Enregistrer la politique"}
+        </button>
+
+        <div
+          className="mt-5 rounded-xl p-4"
+          style={{ background: "var(--sa-surface-2)", border: "1px solid var(--sa-border)" }}
+        >
+          <p className="text-[13px] font-semibold" style={{ color: "var(--sa-text)" }}>
+            Délai dette commission
+          </p>
+          <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+            Délai accordé au gérant pour régler la dette commission (confirmations manuelles et sans avance).
+          </p>
+          <label className="mt-3 block max-w-xs">
+            <span className="text-[12px] font-medium" style={{ color: "var(--sa-text-2)" }}>Jours</span>
+            <input
+              type="number"
+              min={7}
+              max={90}
+              value={delaiDette}
+              onChange={(e) => setDelaiDette(e.target.value)}
+              className="mt-1 w-full h-11 rounded-lg px-3 text-sm"
+              style={{ border: "1px solid var(--sa-border)", color: "var(--sa-text)", background: "var(--sa-surface)" }}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={saving === "delai-dette"}
+            onClick={saveDelaiDetteSeul}
+            className="mt-3 min-h-[40px] px-3 rounded-lg text-[12px] font-semibold"
+            style={{ background: "var(--sa-primary-glow)", color: "var(--sa-primary)" }}
+          >
+            {saving === "delai-dette" ? "Enregistrement…" : "Enregistrer le délai"}
+          </button>
+        </div>
+      </section>
+
       {/* BLOC 1 */}
       <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-primary)" }}>
         <h3 className="flex items-center gap-2 text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
@@ -324,49 +523,53 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
           Commercial
         </h3>
         <div className="mt-4 space-y-4">
-          <PctMontantPair
-            label="Avance joueur"
-            labelMontant="Montant avance"
-            hint="Proportion du prix total payée en ligne par le joueur"
-            pct={avance}
-            onPctChange={setAvance}
-            base={preview.prix}
-          />
+          {!sansAvance ? (
+            <PctMontantPair
+              label="Avance joueur"
+              labelMontant="Montant avance"
+              hint="Proportion du prix total payée en ligne par le joueur"
+              pct={avance}
+              onPctChange={setAvance}
+              base={preview.prix}
+            />
+          ) : null}
           <PctMontantPair
             label="Commission TerrainSN"
             labelMontant="Montant commission"
-            hint="Prélevée uniquement sur l'avance"
+            hint={sansAvance ? "Calculée sur l'avance théorique (même sans encaissement)" : "Prélevée uniquement sur l'avance"}
             pct={commission}
             onPctChange={setCommission}
             base={preview.avance}
           />
         </div>
 
-        <div className="mt-4 rounded-[10px] p-4" style={{ background: "var(--sa-primary-glow)" }}>
-          <p className="text-[13px] font-semibold mb-2" style={{ color: "var(--sa-text)" }}>
-            Aperçu sur un créneau à 40 000 FCFA
-          </p>
-          <dl className="space-y-1 text-[13px]">
-            {[
-              ["Prix du créneau", fcfa(preview.prix)],
-              ["Avance joueur", `${fcfa(preview.avance)} (${pctAvance}%)`],
-              ["Reste sur place", fcfa(preview.reste)],
-              ["Commission TerrainSN", fcfa(preview.commission)],
-              ["Base gérant", fcfa(preview.baseGerant)],
-            ].map(([k, v]) => (
-              <div key={k} className="flex justify-between gap-4">
-                <dt style={{ color: "var(--sa-text-2)" }}>{k}</dt>
-                <dd className="font-medium" style={{ color: "var(--sa-text)" }}>{v}</dd>
-              </div>
-            ))}
-          </dl>
-          <p className="mt-3 text-[12px]" style={{ color: "var(--sa-muted)" }}>
-            Bénéficiaire (non modifiable) :{" "}
-            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: "var(--sa-primary-glow)", color: "var(--sa-primary)" }}>
-              Gérant — {gerantPrenomNom}
-            </span>
-          </p>
-        </div>
+        {!sansAvance ? (
+          <div className="mt-4 rounded-[10px] p-4" style={{ background: "var(--sa-primary-glow)" }}>
+            <p className="text-[13px] font-semibold mb-2" style={{ color: "var(--sa-text)" }}>
+              Aperçu sur un créneau à 40 000 FCFA
+            </p>
+            <dl className="space-y-1 text-[13px]">
+              {[
+                ["Prix du créneau", fcfa(preview.prix)],
+                ["Avance joueur", `${fcfa(preview.avance)} (${pctAvance}%)`],
+                ["Reste sur place", fcfa(preview.reste)],
+                ["Commission TerrainSN", fcfa(preview.commission)],
+                ["Base gérant", fcfa(preview.baseGerant)],
+              ].map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-4">
+                  <dt style={{ color: "var(--sa-text-2)" }}>{k}</dt>
+                  <dd className="font-medium" style={{ color: "var(--sa-text)" }}>{v}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="mt-3 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+              Bénéficiaire (non modifiable) :{" "}
+              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: "var(--sa-primary-glow)", color: "var(--sa-primary)" }}>
+                Gérant — {gerantPrenomNom}
+              </span>
+            </p>
+          </div>
+        ) : null}
 
         <button
           type="button"
@@ -380,7 +583,21 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
       </section>
 
       {/* BLOC 2 */}
-      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-wave)" }}>
+      <section
+        className="rounded-xl p-5 relative"
+        style={{
+          background: "var(--sa-surface)",
+          boxShadow: "var(--sa-shadow)",
+          borderTop: "3px solid var(--sa-wave)",
+          opacity: sansAvance ? 0.55 : 1,
+          pointerEvents: sansAvance ? "none" : undefined,
+        }}
+      >
+        {sansAvance ? (
+          <p className="mb-3 text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
+            Non requis en mode sans avance — le paiement se fait sur place
+          </p>
+        ) : null}
         <h3 className="flex items-center gap-2 text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
           <Smartphone size={16} style={{ color: "var(--sa-wave)" }} />
           Reversement — Numéros du gérant
@@ -474,7 +691,21 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
       </section>
 
       {/* BLOC 3 */}
-      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-warning)" }}>
+      <section
+        className="rounded-xl p-5"
+        style={{
+          background: "var(--sa-surface)",
+          boxShadow: "var(--sa-shadow)",
+          borderTop: "3px solid var(--sa-warning)",
+          opacity: sansAvance ? 0.55 : 1,
+          pointerEvents: sansAvance ? "none" : undefined,
+        }}
+      >
+        {sansAvance ? (
+          <p className="mb-3 text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
+            Non applicable — pas de paiement en ligne à rembourser
+          </p>
+        ) : null}
         <h3 className="flex items-center gap-2 text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
           <RefreshCw size={16} style={{ color: "var(--sa-warning)" }} />
           Politique d'annulation
@@ -565,7 +796,21 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
       </section>
 
       {/* BLOC 4 */}
-      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-success)" }}>
+      <section
+        className="rounded-xl p-5"
+        style={{
+          background: "var(--sa-surface)",
+          boxShadow: "var(--sa-shadow)",
+          borderTop: "3px solid var(--sa-success)",
+          opacity: sansAvance ? 0.55 : 1,
+          pointerEvents: sansAvance ? "none" : undefined,
+        }}
+      >
+        {sansAvance ? (
+          <p className="mb-3 text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
+            La commission est réglée manuellement en fin de période
+          </p>
+        ) : null}
         <h3 className="flex items-center gap-2 text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
           <ArrowRightLeft size={16} style={{ color: "var(--sa-success)" }} />
           Mode de reversement et frais

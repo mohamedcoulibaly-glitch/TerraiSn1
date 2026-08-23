@@ -233,6 +233,80 @@ router.patch('/terrains/:id/politique-annulation', async (req, res) => {
   res.json(await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
 });
 
+/** Politique de paiement ('avance' | 'sans_avance') + délai dette commission */
+router.patch('/terrains/:id/politique-paiement', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = await queryOne(
+      db,
+      'SELECT id, politique_paiement, delai_paiement_dette_jours FROM terrains WHERE id = ?',
+      [terrainId],
+    );
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+
+    const body = req.body || {};
+    let politique = body.politique_paiement != null
+      ? String(body.politique_paiement).trim()
+      : String(terrain.politique_paiement || 'avance');
+    if (politique === 'avec_avance') politique = 'avance';
+    if (!['avance', 'sans_avance'].includes(politique)) {
+      return res.status(400).json({ error: "politique_paiement doit être 'avance' ou 'sans_avance'" });
+    }
+
+    let delai = body.delai_paiement_dette_jours != null
+      ? Number(body.delai_paiement_dette_jours)
+      : Number(terrain.delai_paiement_dette_jours || 30);
+    if (!Number.isFinite(delai) || delai < 7 || delai > 90) {
+      return res.status(400).json({ error: 'delai_paiement_dette_jours doit être entre 7 et 90' });
+    }
+    delai = Math.round(delai);
+
+    await runSql(
+      db,
+      `UPDATE terrains SET politique_paiement = ?, delai_paiement_dette_jours = ? WHERE id = ?`,
+      [politique, delai, terrainId],
+    );
+
+    try {
+      await runSql(
+        db,
+        `INSERT INTO audit_logs (acteur_type, acteur_id, action, table_cible, enregistrement_id, details)
+         VALUES (?, ?, ?, 'terrains', ?, ?)`,
+        [
+          req.user?.role || 'super_admin',
+          req.user?.id || null,
+          'politique_paiement',
+          terrainId,
+          JSON.stringify({
+            avant: {
+              politique_paiement: terrain.politique_paiement,
+              delai_paiement_dette_jours: terrain.delai_paiement_dette_jours,
+            },
+            apres: { politique_paiement: politique, delai_paiement_dette_jours: delai },
+          }),
+        ],
+      );
+    } catch (_) {
+      /* table audit_logs optionnelle selon l'environnement */
+    }
+
+    try {
+      syncApresModificationTerrain(terrainId, 'contrat_paiement', {
+        politique_paiement: politique,
+        delai_paiement_dette_jours: delai,
+      });
+    } catch (_) {
+      /* sync optionnel */
+    }
+
+    res.json(await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
 /** Délai d'indisponibilité du créneau pendant l'attente de confirmation paiement (minutes). */
 router.patch('/terrains/:id/delai-verrou-paiement', async (req, res) => {
   const db = await getDb();
@@ -496,6 +570,38 @@ router.put('/terrains/:id/grille-tarifs', async (req, res) => {
       prix_entier_base: base.prix_entier_base,
       prix_moitie_base: base.prix_moitie_base,
     });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.get('/terrains/:id/formats', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const formatsService = require('../services/formatsTerrainService');
+    const [formats, durees] = await Promise.all([
+      formatsService.listFormats(db, terrainId),
+      formatsService.listDurees(db, terrainId),
+    ]);
+    res.json({ formats, durees });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.put('/terrains/:id/formats', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const formatsService = require('../services/formatsTerrainService');
+    const result = await formatsService.replaceFormatsEtDurees(db, terrainId, {
+      formats: req.body?.formats,
+      durees: req.body?.durees,
+    });
+    const { notifyTerrain } = require('../realtimeHub');
+    notifyTerrain(terrainId, 'tarifs');
+    res.json({ message: 'Formats et durées enregistrés', ...result });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
   }

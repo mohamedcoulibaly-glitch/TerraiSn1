@@ -68,7 +68,7 @@ function prioriteScanKey(row: PrioriteScanRow) {
   return `${date}|${heure}|${id}`;
 }
 
-/** Parmi les résas confirmées non scannées déjà dans la fenêtre : l’id du seul créneau scannable. */
+/** Parmi les réservations confirmées non scannées déjà dans la fenêtre : l’id du seul créneau scannable. */
 export function idPrioriteScannable(
   rows: PrioriteScanRow[],
   maintenant: number = Date.now(),

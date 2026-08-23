@@ -52,8 +52,8 @@ function mountPaymentRoutes(app) {
 
       if (action !== 'success') {
         await transaction(db, async () => {
-          await runSql(db, "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
-          await libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
+          await runSql(db, "UPDATE reservations SET statut = 'expire' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
+          await libererCreneauxReservation(db, reservation, ['en_attente_paiement'], { force: true });
         });
         return res.json({ redirect_url: `${domain}/reservation/annule?terrain_id=${reservation.terrain_id}` });
       }
@@ -89,8 +89,8 @@ function mountPaymentRoutes(app) {
 
       if (action === 'cancel') {
         await transaction(db, async () => {
-          await runSql(db, "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
-          await libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
+          await runSql(db, "UPDATE reservations SET statut = 'expire' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
+          await libererCreneauxReservation(db, reservation, ['en_attente_paiement'], { force: true });
         });
         return res.json({ redirect_url: `${domain}/reservation/annule?terrain_id=${reservation.terrain_id}` });
       }

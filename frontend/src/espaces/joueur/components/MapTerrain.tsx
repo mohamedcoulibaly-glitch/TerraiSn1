@@ -6,9 +6,22 @@ type MapTerrainProps = {
   longitude?: number | null;
   nom?: string;
   quartier?: string;
+  /** Si false, la carte n'est pas montée (évite conflit z-index avec galerie fullscreen). */
+  active?: boolean;
 };
 
-export default function MapTerrain({ latitude, longitude, nom, quartier }: MapTerrainProps) {
+/** Tuiles Carto Voyager (lisibilité labels + retina). */
+const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+const TILE_ATTR =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+export default function MapTerrain({
+  latitude,
+  longitude,
+  nom,
+  quartier,
+  active = true,
+}: MapTerrainProps) {
   const lat = Number(latitude);
   const lng = Number(longitude);
   const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
@@ -16,7 +29,10 @@ export default function MapTerrain({ latitude, longitude, nom, quartier }: MapTe
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!hasCoords) return;
+    if (!hasCoords || !active) {
+      setReady(false);
+      return;
+    }
     let cancelled = false;
     let map: { remove: () => void } | null = null;
     async function boot() {
@@ -28,31 +44,44 @@ export default function MapTerrain({ latitude, longitude, nom, quartier }: MapTe
         zoomControl: true,
         dragging: true,
         scrollWheelZoom: false,
+        preferCanvas: true,
       }).setView([lat, lng], 16);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      L.tileLayer(TILE_URL, {
+        maxZoom: 20,
+        maxNativeZoom: 20,
+        attribution: TILE_ATTR,
+        subdomains: "abcd",
+        detectRetina: true,
       }).addTo(instance);
-      const success = getComputedStyle(document.documentElement).getPropertyValue("--color-success").trim()
-        || getComputedStyle(document.documentElement).getPropertyValue("--primary").trim();
+      const success =
+        getComputedStyle(document.documentElement).getPropertyValue("--color-success").trim() ||
+        getComputedStyle(document.documentElement).getPropertyValue("--primary").trim() ||
+        "#059669";
       const icon = L.divIcon({
         className: "map-terrain-marker",
-        html: `<div style="width:36px;height:36px;border-radius:50%;background:${success};color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;border:2px solid #fff">⚽</div>`,
-        iconSize: [36, 36],
-        iconAnchor: [18, 36],
+        html: `<div class="map-terrain-pin" style="--pin:${success}"><span></span></div>`,
+        iconSize: [40, 48],
+        iconAnchor: [20, 46],
       });
       const marker = L.marker([lat, lng], { icon, draggable: false }).addTo(instance);
       const label = [nom, quartier].filter(Boolean).join(" · ");
-      if (label) marker.bindTooltip(label, { direction: "top", offset: [0, -28] });
+      if (label) {
+        marker.bindTooltip(label, {
+          direction: "top",
+          offset: [0, -40],
+          className: "map-terrain-tooltip",
+          opacity: 1,
+        });
+      }
       L.circle([lat, lng], {
-        radius: 50,
+        radius: 45,
         color: success,
         fillColor: success,
-        fillOpacity: 0.15,
-        weight: 1,
+        fillOpacity: 0.12,
+        weight: 1.5,
       }).addTo(instance);
       map = instance;
-      setTimeout(() => instance.invalidateSize(), 80);
+      setTimeout(() => instance.invalidateSize(), 100);
       setReady(true);
     }
     void boot();
@@ -60,15 +89,22 @@ export default function MapTerrain({ latitude, longitude, nom, quartier }: MapTe
       cancelled = true;
       map?.remove();
     };
-  }, [hasCoords, lat, lng, nom, quartier]);
+  }, [hasCoords, lat, lng, nom, quartier, active]);
 
   if (!hasCoords) return null;
+  if (!active) {
+    return (
+      <div className="relative overflow-hidden h-[220px] sm:h-[280px] rounded-[10px] bg-[var(--surface-2)] grid place-items-center">
+        <p className="text-xs text-[var(--color-text-muted)]">Carte masquée pendant la galerie</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="relative overflow-hidden h-[220px] sm:h-[280px] rounded-[10px] bg-[var(--surface-2)]">
-      <div ref={mapElRef} className="absolute inset-0" />
+    <div className="map-terrain-shell relative overflow-hidden h-[220px] sm:h-[280px] rounded-[10px] bg-[var(--surface-2)] isolate">
+      <div ref={mapElRef} className="absolute inset-0 z-0" />
       {!ready ? (
-        <div className="absolute inset-0 grid place-items-center bg-[var(--surface-2)]">
+        <div className="absolute inset-0 z-[1] grid place-items-center bg-[var(--surface-2)]">
           <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-muted)]" />
         </div>
       ) : null}

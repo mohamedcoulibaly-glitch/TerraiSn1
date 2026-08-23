@@ -8,6 +8,7 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import AppRouter from "@/router/AppRouter";
 import InstallPrompt from "@/components/pwa/InstallPrompt";
 import OfflineBanner from "@/components/pwa/OfflineBanner";
+import PushPermissionBanner from "@/components/pwa/PushPermissionBanner";
 import { REACT_QUERY_CONFIG } from "@/lib/optimizations";
 
 const queryClient = new QueryClient({
@@ -22,6 +23,7 @@ const App = () => (
           <Toaster />
           <Sonner />
           <OfflineBanner />
+          <PushPermissionBanner />
           <BrowserRouter>
             <AppRouter />
             <InstallPrompt />

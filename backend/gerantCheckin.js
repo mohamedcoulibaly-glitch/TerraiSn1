@@ -358,7 +358,13 @@ function reservationsGerantListSql() {
         LEFT JOIN users u ON u.id = r.joueur_id
         LEFT JOIN creneaux c ON c.id = r.creneau_id
         WHERE r.terrain_id = ?
-          AND r.statut IN ('confirme', 'match_joue', 'joue', 'en_attente')
+          AND (
+            r.statut IN ('confirme', 'match_joue', 'joue')
+            OR (
+              r.statut = 'en_attente'
+              AND (r.verrou_expire_at IS NULL OR r.verrou_expire_at > (EXTRACT(EPOCH FROM NOW()) * 1000))
+            )
+          )
   `;
 }
 
@@ -559,11 +565,12 @@ function mountGerantCheckinRoutes(app) {
       const phoneDigits = String(req.query.q || '').replace(/\D/g, '');
       const statutSql = {
         confirme: "r.statut IN ('confirme', 'acceptee')",
-        en_attente: "r.statut = 'en_attente'",
+        en_attente: "r.statut = 'en_attente' AND (r.verrou_expire_at IS NULL OR r.verrou_expire_at > (EXTRACT(EPOCH FROM NOW()) * 1000))",
         joue: "r.statut IN ('match_joue', 'joue')",
         annulee: "r.statut IN ('annulee', 'annule', 'refusee')",
-        all: "r.statut IN ('confirme', 'acceptee', 'en_attente', 'match_joue', 'joue', 'annulee', 'annule', 'refusee')",
-      }[statut] || "r.statut IN ('confirme', 'acceptee', 'en_attente', 'match_joue', 'joue', 'annulee', 'annule', 'refusee')";
+        // Historique durable : pas d'expire, pas d'en_attente (éphémères → filtre dédié)
+        all: "r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'annulee', 'annule', 'refusee')",
+      }[statut] || "r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'annulee', 'annule', 'refusee')";
 
       const params = [terrainId];
       let phoneSql = '';

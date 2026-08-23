@@ -9,6 +9,7 @@ import FinancesView, {
   type PeriodeFinances,
 } from "@/espaces/backoffice/components/FinancesView";
 import CommissionDueCard from "@/espaces/backoffice/components/CommissionDueCard";
+import { featureEnabled } from "@/lib/terrainFeatures";
 
 export default function FinancesPage() {
   const { user } = useAuth();
@@ -16,6 +17,7 @@ export default function FinancesPage() {
   const [data, setData] = useState<FinancesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
   const refreshTimer = useRef<number | null>(null);
 
   const load = useCallback((quiet = false) => {
@@ -34,6 +36,23 @@ export default function FinancesPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let mounted = true;
+    gerantApi
+      .dashboard()
+      .then((dash) => {
+        if (!mounted) return;
+        const f = (dash as { features?: Record<string, boolean> })?.features;
+        setFeatures(f && typeof f === "object" ? f : {});
+      })
+      .catch(() => {
+        if (mounted) setFeatures({});
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useTerrainEvents(user?.terrain_id, (ev) => {
     if (!["reservation", "encaissement", "blocage", "sante"].includes(String(ev.type))) return;
@@ -83,7 +102,7 @@ export default function FinancesPage() {
         </p>
       ) : data ? (
         <>
-          <CommissionDueCard />
+          <CommissionDueCard enabled={featureEnabled(features, "dette_commission", true)} />
           <FinancesView data={data} />
         </>
       ) : null}

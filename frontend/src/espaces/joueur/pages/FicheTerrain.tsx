@@ -11,6 +11,7 @@ import { resolveTerrainPhotos } from "@/espaces/joueur/components/FieldPhoto";
 import MapTerrain from "@/espaces/joueur/components/MapTerrain";
 import { favKey } from "@/espaces/joueur/components/FieldCard";
 import { useTerrainEvents } from "@/hooks/useTerrainEvents";
+import { featureEnabled } from "@/lib/terrainFeatures";
 
 function toLocalISO(d: Date) {
   const y = d.getFullYear();
@@ -34,12 +35,15 @@ function getEndTime(startSlot: string, durationHours: number) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-const DUREES = [
+const DUREES_FALLBACK = [
   { label: "1h", hours: 1, minutes: 60 },
   { label: "1h30", hours: 1.5, minutes: 90 },
   { label: "2h", hours: 2, minutes: 120 },
   { label: "3h", hours: 3, minutes: 180 },
 ] as const;
+
+type FormatOption = { cle: string; label: string; prix_heure: number; map_grille?: string | null };
+type DureeOption = { label: string; hours: number; minutes: number };
 
 const FieldDetails = () => {
   const { id } = useParams();
@@ -49,8 +53,10 @@ const FieldDetails = () => {
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(1);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-  const [selectedDuration, setSelectedDuration] = useState(2);
-  const [fieldFormat, setFieldFormat] = useState<"moitie" | "entier">("entier");
+  const [selectedDuration, setSelectedDuration] = useState(1);
+  const [fieldFormat, setFieldFormat] = useState<string>("moitie");
+  const [formatsOpts, setFormatsOpts] = useState<FormatOption[]>([]);
+  const [dureesOpts, setDureesOpts] = useState<DureeOption[]>([...DUREES_FALLBACK]);
   const [creneaux, setCreneaux] = useState<any[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [fermeMotif, setFermeMotif] = useState<string | null>(null);
@@ -82,6 +88,15 @@ const FieldDetails = () => {
       shortLabel: i === 0 ? "Auj." : i === 1 ? "Demain" : null,
     };
   });
+
+  useEffect(() => {
+    if (!galleryOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [galleryOpen]);
 
   useEffect(() => {
     loadTerrain();
@@ -198,8 +213,39 @@ const FieldDetails = () => {
 
   const loadTerrain = async () => {
     try {
-      const data = await terrainsApi.get(id!);
+      const data: any = await terrainsApi.get(id!);
       setTerrain(data);
+      const formats: FormatOption[] = Array.isArray(data?.formats) && data.formats.length
+        ? data.formats.map((f: any) => ({
+            cle: String(f.cle),
+            label: String(f.label || f.cle),
+            prix_heure: Number(f.prix_heure || 0),
+            map_grille: f.map_grille || null,
+          }))
+        : [
+            { cle: "moitie", label: "Demi-terrain", prix_heure: Number(data?.prix_moitie || 0), map_grille: "demi" },
+            {
+              cle: "entier",
+              label: "Terrain entier",
+              prix_heure: Number(data?.prix_entier || data?.prix_heure || 0),
+              map_grille: "entier",
+            },
+          ];
+      setFormatsOpts(formats);
+      const preferred = formats.find((f) => f.cle === "moitie") || formats[0];
+      if (preferred) setFieldFormat(preferred.cle);
+
+      const durees: DureeOption[] =
+        Array.isArray(data?.durees) && data.durees.length
+          ? data.durees.map((d: any) => ({
+              minutes: Number(d.minutes),
+              label: String(d.label || `${d.minutes} min`),
+              hours: Number(d.minutes) / 60,
+            }))
+          : [...DUREES_FALLBACK];
+      setDureesOpts(durees);
+      const preferredD = durees.find((d) => d.minutes === 60) || durees[0];
+      if (preferredD) setSelectedDuration(preferredD.hours);
     } catch (err) {
       console.error(err);
     } finally {
@@ -225,11 +271,28 @@ const FieldDetails = () => {
 
   const selectedSlotRow = creneaux.find((s) => (s.heure || s.heure_debut) === selectedSlot);
   const previewSlot = selectedSlotRow || creneaux.find((s) => s.disponible) || creneaux[0];
-  const hourlyPrice = previewSlot
-    ? Number(fieldFormat === "moitie" ? previewSlot.prix_moitie : previewSlot.prix_entier)
-    : terrain
-      ? Number(fieldFormat === "moitie" ? terrain.prix_moitie : terrain.prix_entier || terrain.prix_heure)
-      : 0;
+  const formatMeta = formatsOpts.find((f) => f.cle === fieldFormat) || formatsOpts[0];
+  const grilleKey =
+    formatMeta?.map_grille === "demi"
+      ? "moitie"
+      : formatMeta?.map_grille === "entier"
+        ? "entier"
+        : fieldFormat === "moitie"
+          ? "moitie"
+          : fieldFormat === "entier"
+            ? "entier"
+            : null;
+  const hourlyPrice = (() => {
+    if (grilleKey === "moitie") {
+      return Number(previewSlot?.prix_moitie ?? terrain?.prix_moitie ?? formatMeta?.prix_heure ?? 0);
+    }
+    if (grilleKey === "entier") {
+      return Number(
+        previewSlot?.prix_entier ?? terrain?.prix_entier ?? terrain?.prix_heure ?? formatMeta?.prix_heure ?? 0,
+      );
+    }
+    return Number(formatMeta?.prix_heure || 0);
+  })();
   const total =
     devis?.montant != null && Number(devis.montant) > 0
       ? Number(devis.montant)
@@ -252,12 +315,11 @@ const FieldDetails = () => {
     const dureeTxt =
       selectedDuration === 1.5 ? "1h30" : selectedDuration === 1 ? "1 heure" : `${selectedDuration} heures`;
     return {
-      primary: `${dayLabel} ${formatHourLabel(selectedSlot)} → ${formatHourLabel(slotEnd)}`,
-      secondary: `Durée ${dureeTxt} · Total ${total.toLocaleString("fr-SN")} FCFA · Avance ${deposit.toLocaleString("fr-SN")} FCFA`,
-      longNote:
-        selectedDuration > 1
-          ? `Ce créneau dure ${dureeTxt}. Le gérant vous accueille pendant toute cette durée.`
-          : null,
+      primary: `${total.toLocaleString("fr-SN")} FCFA`,
+      secondary: `${dayLabel} ${formatHourLabel(selectedSlot)} → ${formatHourLabel(slotEnd)} · ${dureeTxt} · ${
+        formatMeta?.label || fieldFormat
+      }`,
+      longNote: `Avance ${deposit.toLocaleString("fr-SN")} FCFA · Reste sur place ${Math.max(0, total - deposit).toLocaleString("fr-SN")} FCFA`,
     };
   })();
 
@@ -283,6 +345,10 @@ const FieldDetails = () => {
 
   const goToPayment = () => {
     if (!selectedSlot || !terrain) return;
+    if (!featureEnabled(terrain.features, "reservations_en_ligne", true)) {
+      toast.error("Réservations en ligne désactivées pour ce terrain");
+      return;
+    }
     const path = paymentPath();
     if (!requireLoginThen(path)) return;
     navigate(path);
@@ -327,6 +393,8 @@ const FieldDetails = () => {
   const adresseAffichee = terrain.adresse_theorique || terrain.adresse || terrain.ville || "";
   const hasCoords =
     Number.isFinite(Number(terrain.latitude)) && Number.isFinite(Number(terrain.longitude));
+  const showMap = hasCoords && featureEnabled(terrain.features, "geolocalisation", true);
+  const canBookOnline = featureEnabled(terrain.features, "reservations_en_ligne", true);
   const descriptionText = String(terrain.description || "").trim();
   const showDescription =
     descriptionText &&
@@ -414,7 +482,7 @@ const FieldDetails = () => {
                 </span>
               )}
             </div>
-            {hasCoords ? (
+            {showMap ? (
               <a
                 href={`https://maps.google.com/?q=${terrain.latitude},${terrain.longitude}`}
                 target="_blank"
@@ -458,7 +526,7 @@ const FieldDetails = () => {
           />
         </div>
 
-        {(terrain.adresse_theorique || hasCoords) ? (
+        {(terrain.adresse_theorique || showMap) ? (
           <section className={`${sectionCard} mt-4 p-4 sm:p-5`}>
             <h2 className="text-base font-bold text-[var(--color-text-primary)] mb-3" style={{ fontFamily: "var(--font-display)" }}>
               Localisation
@@ -466,13 +534,14 @@ const FieldDetails = () => {
             {terrain.adresse_theorique ? (
               <p className="text-sm text-[var(--color-text-secondary)] mb-3">{terrain.adresse_theorique}</p>
             ) : null}
-            {hasCoords ? (
+            {showMap ? (
               <>
                 <MapTerrain
                   latitude={Number(terrain.latitude)}
                   longitude={Number(terrain.longitude)}
                   nom={terrain.nom}
                   quartier={terrain.adresse_theorique || terrain.adresse || terrain.ville}
+                  active={!galleryOpen}
                 />
                 <a
                   href={`https://www.google.com/maps/dir/?api=1&destination=${terrain.latitude},${terrain.longitude}`}
@@ -493,9 +562,14 @@ const FieldDetails = () => {
           <h2 className="text-base font-bold text-[var(--color-text-primary)] mb-4" style={{ fontFamily: "var(--font-display)" }}>
             Réserver ce terrain
           </h2>
+          {!canBookOnline ? (
+            <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Les réservations en ligne sont désactivées pour ce terrain. Contacte le gérant pour réserver.
+            </p>
+          ) : null}
 
           {/* Étape A — Date */}
-          <div className="pb-4 border-b border-gray-100 dark:border-[var(--border)]">
+          <div className={`pb-4 border-b border-gray-100 dark:border-[var(--border)] ${!canBookOnline ? "opacity-50 pointer-events-none" : ""}`}>
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
               1 · Date
             </p>
@@ -524,35 +598,43 @@ const FieldDetails = () => {
           </div>
 
           {/* Étape B — Format & Durée */}
-          <div className="py-4 border-b border-gray-100 dark:border-[var(--border)] space-y-4">
+          <div className={`py-4 border-b border-gray-100 dark:border-[var(--border)] space-y-4 ${!canBookOnline ? "opacity-50 pointer-events-none" : ""}`}>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
                 2 · Format
               </p>
               <div className="grid grid-cols-2 gap-2">
-                {(
-                  [
-                    ["moitie", "Demi-terrain", previewSlot?.prix_moitie ?? terrain.prix_moitie],
-                    ["entier", "Terrain entier", previewSlot?.prix_entier ?? terrain.prix_entier ?? terrain.prix_heure],
-                  ] as const
-                ).map(([value, label, price]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setFieldFormat(value)}
-                    className={`rounded-xl p-3 text-left min-h-[64px] border transition-colors ${
-                      fieldFormat === value
-                        ? "bg-[var(--primary)] text-white border-[var(--primary)]"
-                        : "bg-white dark:bg-[var(--surface)] border-gray-200 dark:border-[var(--border)]"
-                    }`}
-                  >
-                    <span className="block text-sm font-semibold">{label}</span>
-                    <span className="text-[11px] opacity-80">
-                      {Number(price || 0).toLocaleString("fr-SN")} FCFA/h
-                    </span>
-                  </button>
-                ))}
+                {formatsOpts.map((fmt) => {
+                  const price =
+                    fmt.map_grille === "demi"
+                      ? Number(previewSlot?.prix_moitie ?? fmt.prix_heure)
+                      : fmt.map_grille === "entier"
+                        ? Number(previewSlot?.prix_entier ?? fmt.prix_heure)
+                        : Number(fmt.prix_heure);
+                  return (
+                    <button
+                      key={fmt.cle}
+                      type="button"
+                      onClick={() => setFieldFormat(fmt.cle)}
+                      className={`rounded-xl p-3 text-left min-h-[64px] border transition-colors ${
+                        fieldFormat === fmt.cle
+                          ? "bg-[var(--primary)] text-white border-[var(--primary)]"
+                          : "bg-white dark:bg-[var(--surface)] border-gray-200 dark:border-[var(--border)]"
+                      }`}
+                    >
+                      <span className="block text-sm font-semibold">{fmt.label}</span>
+                      <span className="text-[11px] opacity-80">
+                        {price.toLocaleString("fr-SN")} FCFA/h
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
+              {formatMeta && formatMeta.cle !== "moitie" ? (
+                <p className="mt-2 text-[11px] text-amber-800 dark:text-amber-200">
+                  Format sélectionné : {formatMeta.label} — vérifie le prix affiché.
+                </p>
+              ) : null}
             </div>
 
             <div>
@@ -560,7 +642,7 @@ const FieldDetails = () => {
                 Durée
               </p>
               <div className="flex flex-wrap gap-2">
-                {DUREES.map((d) => (
+                {dureesOpts.map((d) => (
                   <button
                     key={d.label}
                     type="button"
@@ -578,11 +660,16 @@ const FieldDetails = () => {
                   </button>
                 ))}
               </div>
+              {Math.abs(selectedDuration - 1) > 0.01 ? (
+                <p className="mt-2 text-[11px] text-amber-800 dark:text-amber-200">
+                  Durée différente de 1 h — le prix ci-dessous en tient compte.
+                </p>
+              ) : null}
             </div>
           </div>
 
           {/* Étape C — Créneaux */}
-          <div ref={slotsSectionRef} id="selection-creneaux" className="pt-4 scroll-mt-28">
+          <div ref={slotsSectionRef} id="selection-creneaux" className={`pt-4 scroll-mt-28 ${!canBookOnline ? "opacity-50 pointer-events-none" : ""}`}>
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
               3 · Créneaux disponibles
             </p>
@@ -695,7 +782,12 @@ const FieldDetails = () => {
             <li className="flex items-start gap-2">
               <Info className="w-4 h-4 text-[var(--primary)] shrink-0 mt-0.5" />
               <span>
-                La réservation expire après 15 min sans paiement. Annulation gratuite jusqu&apos;à 2h avant le créneau.
+                {String(terrain.politique_paiement || "avance") === "sans_avance"
+                  ? "Pas d'avance : paiement sur place."
+                  : `La réservation expire après ${Number(terrain.delai_verrou_paiement_min || 15)} min sans paiement.`}{" "}
+                {Number(terrain.delai_remboursement_heures) === 0
+                  ? "Annulation sans remboursement de l'avance."
+                  : `Remboursement possible dans les ${Number(terrain.delai_remboursement_heures ?? 24)} h après confirmation.`}
               </span>
             </li>
             {showDescription && (
@@ -784,7 +876,7 @@ const FieldDetails = () => {
       </div>
 
       {/* Barre uniquement si créneau sélectionné — sinon non rendue */}
-      {hasSlot && stickyRecap && (
+      {hasSlot && stickyRecap && canBookOnline && (
         <div
           className="fixed inset-x-0 bottom-16 md:bottom-0 z-50 px-4 py-3 animate-in slide-in-from-bottom-4 fade-in duration-300"
           style={{
@@ -831,16 +923,16 @@ const FieldDetails = () => {
         </div>
       )}
       {galleryOpen ? (
-        <div className="fixed inset-0 z-[80] bg-black/90 flex flex-col">
-          <div className="flex items-center justify-between px-4 py-3 text-white">
+        <div className="fiche-terrain-gallery fixed inset-0 bg-black/92 flex flex-col" style={{ zIndex: 10050 }}>
+          <div className="flex items-center justify-between px-4 py-3 text-white shrink-0">
             <p className="text-sm font-semibold">Photos ({photos.length})</p>
             <button type="button" onClick={() => setGalleryOpen(false)} className="w-10 h-10 grid place-items-center" aria-label="Fermer">
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto px-4 pb-8 space-y-3">
+          <div className="flex-1 overflow-y-auto px-4 pb-8 space-y-3 overscroll-contain">
             {photos.map((src, i) => (
-              <img key={`${src}-${i}`} src={src} alt={`${terrain.nom} ${i + 1}`} className="w-full rounded-xl object-cover" />
+              <img key={`${src}-${i}`} src={src} alt={`${terrain.nom} ${i + 1}`} className="w-full rounded-xl object-cover bg-black/40" />
             ))}
           </div>
         </div>

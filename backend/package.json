@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
+    "dev": "nodemon --ignore data/ --ignore uploads/ --ignore node_modules/ index.js",
     "seed": "node seed.js",
     "seed:demo": "node scripts/seed_commodites_demo.js",
     "seed:mohamed": "node scripts/seed-mohamed.js",

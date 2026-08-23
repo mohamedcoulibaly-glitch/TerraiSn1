@@ -17,7 +17,7 @@ const TABS = [
   },
   {
     id: "joueurs",
-    label: "Joueurs",
+    label: "Réservation",
     icon: Users,
     route: "/backoffice/gerant/joueurs",
   },

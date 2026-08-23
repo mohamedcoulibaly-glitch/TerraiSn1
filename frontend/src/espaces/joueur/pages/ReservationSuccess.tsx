@@ -62,7 +62,7 @@ const ReservationSuccess = () => {
     return (
       <div className="page-container flex items-center justify-center gap-2">
         <div className="skeleton w-10 h-10 rounded-full" />
-        <p className="text-sm text-[var(--color-text-muted)]">Vérification du paiement...</p>
+        <p className="text-sm text-[var(--color-text-muted)]">Vérification...</p>
       </div>
     );
   }
@@ -80,8 +80,14 @@ const ReservationSuccess = () => {
     );
   }
 
+  const sansAvance =
+    params.get("sans_avance") === "1" ||
+    reservation.sans_avance === true ||
+    reservation.mode_paiement === "sans_avance";
+
   const avance = Number(reservation.montant_avance || reservation.acompte || 0);
   const reste = Number(reservation.montant_restant || reservation.reste_a_payer || 0);
+  const total = Number(reservation.prix_total || reservation.montant || reste || 0);
   const qrUrl = qrFetched || reservation.qr_code_url;
 
   return (
@@ -91,6 +97,11 @@ const ReservationSuccess = () => {
           <h1 className="text-[20px] font-bold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
             C'est confirmé !
           </h1>
+          {sansAvance ? (
+            <p className="mt-2 text-[13px] text-[var(--color-text-secondary)]">
+              Tu paieras {total.toLocaleString()} FCFA sur place le jour du match.
+            </p>
+          ) : null}
         </div>
 
         <div className="p-6 text-center space-y-4">
@@ -119,16 +130,25 @@ const ReservationSuccess = () => {
             Montre ce QR code au gérant le jour du match
           </p>
 
-          <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
-            <p className="flex justify-between">
-              <span className="text-[var(--color-success)] font-medium">Avance payée</span>
-              <span className="text-[var(--color-success)]">{avance.toLocaleString()} FCFA</span>
-            </p>
-            <p className="flex justify-between">
-              <span className="text-[var(--color-text-secondary)]">Reste à payer sur place</span>
-              <span className="text-[var(--color-text-secondary)]">{reste.toLocaleString()} FCFA</span>
-            </p>
-          </div>
+          {sansAvance ? (
+            <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
+              <p className="flex justify-between">
+                <span className="text-[var(--color-text-secondary)]">À régler sur place</span>
+                <span className="font-semibold text-[var(--color-primary)]">{total.toLocaleString()} FCFA</span>
+              </p>
+            </div>
+          ) : (
+            <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
+              <p className="flex justify-between">
+                <span className="text-[var(--color-success)] font-medium">Avance payée</span>
+                <span className="text-[var(--color-success)]">{avance.toLocaleString()} FCFA</span>
+              </p>
+              <p className="flex justify-between">
+                <span className="text-[var(--color-text-secondary)]">Reste à payer sur place</span>
+                <span className="text-[var(--color-text-secondary)]">{reste.toLocaleString()} FCFA</span>
+              </p>
+            </div>
+          )}
 
           {qrUrl && (
             <a

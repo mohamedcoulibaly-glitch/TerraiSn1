@@ -2,6 +2,7 @@ import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { Camera, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import PushPreferencesPanel from "@/components/pwa/PushPreferencesPanel";
 import { useAuth } from "@/hooks/use-auth";
 import { profilApi, proprietaireApi } from "@/lib/api";
 
@@ -246,6 +247,10 @@ export default function ProfilProprietaire() {
         <section className="mt-6 rounded-2xl p-4 flex items-center justify-between" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
           <span className="text-sm font-medium" style={{ color: "var(--p-text)" }}>Apparence</span>
           <ThemeToggle />
+        </section>
+
+        <section className="mt-6">
+          <PushPreferencesPanel />
         </section>
 
         <button

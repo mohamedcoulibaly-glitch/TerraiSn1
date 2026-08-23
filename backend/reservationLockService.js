@@ -34,7 +34,8 @@ function delaiVerrouMs(terrainOrMinutes) {
 }
 
 /**
- * Annule les résas en_attente dont le verrou paiement a expiré et libère le créneau.
+ * Expire les résas en_attente dont le verrou paiement a dépassé le délai :
+ * créneau libéré + statut `expire` (retirées de l'historique joueur/gérant).
  * @returns {Promise<Array<{id:number,terrain_id:number,date:string}>>}
  */
 async function libererVerrousPaiementExpires(database, nowMs = Date.now()) {
@@ -51,11 +52,13 @@ async function libererVerrousPaiementExpires(database, nowMs = Date.now()) {
   for (const reservation of expired) {
     const upd = await runSql(
       database,
-      "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'",
+      "UPDATE reservations SET statut = 'expire' WHERE id = ? AND statut = 'en_attente'",
       [reservation.id],
     );
     if (upd.changes === 1) {
-      await libererCreneauxReservation(database, reservation, ['en_attente_paiement']);
+      await libererCreneauxReservation(database, reservation, ['en_attente_paiement'], {
+        force: true,
+      });
       liberated.push({
         id: reservation.id,
         terrain_id: reservation.terrain_id,
@@ -194,16 +197,26 @@ async function lockCreneauxAtomique(database, terrainId, date, heureDebut, heure
   return creneau.id;
 }
 
-async function libererCreneauxReservation(database, reservation, statuts = ['en_attente_paiement', 'reserve']) {
+async function libererCreneauxReservation(
+  database,
+  reservation,
+  statuts = ['en_attente_paiement', 'reserve'],
+  options = {},
+) {
   if (!reservation) return;
+  const force = Boolean(options.force);
   const statutList = statuts.map((s) => `'${s}'`).join(', ');
   const debut = hhmm(reservation.heure_debut);
   const fin = hhmm(reservation.heure_fin);
+  // force : libère tout sauf blocs permanents (tournoi / abonnement / blocage gérant)
+  const whereStatut = force
+    ? `statut NOT IN ('bloque', 'tournoi', 'abonnement')`
+    : `statut IN (${statutList})`;
 
   if (reservation.creneau_id) {
     await runSql(
       database,
-      `UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut IN (${statutList})`,
+      `UPDATE creneaux SET statut = 'libre' WHERE id = ? AND ${whereStatut}`,
       [reservation.creneau_id],
     );
   }
@@ -212,7 +225,7 @@ async function libererCreneauxReservation(database, reservation, statuts = ['en_
     database,
     `UPDATE creneaux SET statut = 'libre'
       WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?
-        AND statut IN (${statutList})`,
+        AND ${whereStatut}`,
     [reservation.terrain_id, reservation.date, debut, fin],
   );
 
@@ -224,7 +237,7 @@ async function libererCreneauxReservation(database, reservation, statuts = ['en_
         database,
         `UPDATE creneaux SET statut = 'libre'
           WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?
-            AND statut IN (${statutList})`,
+            AND ${whereStatut}`,
         [reservation.terrain_id, reservation.date, slot.heure_debut, slot.heure_fin],
       );
     }

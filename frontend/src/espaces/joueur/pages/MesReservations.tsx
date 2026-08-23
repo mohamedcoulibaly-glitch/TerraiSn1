@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 const statusConfig: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
-    label: "En attente",
+    label: "Paiement en cours",
     border: "border-l-[var(--color-warning)]",
     badge: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
   },
@@ -32,8 +32,13 @@ const statusConfig: Record<string, { label: string; border: string; badge: strin
     border: "border-l-[var(--color-primary)]",
     badge: "bg-[var(--color-primary)] text-white",
   },
+  match_joue: {
+    label: "Jouée",
+    border: "border-l-[var(--color-primary)]",
+    badge: "bg-[var(--color-primary)] text-white",
+  },
   acceptee: {
-    label: "Acceptée",
+    label: "Confirmée",
     border: "border-l-[var(--color-success)]",
     badge: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
@@ -146,18 +151,29 @@ const Reservations = () => {
 
   const today = startOfToday();
   const filtered = reservations.filter((r) => {
+    // Tentatives de paiement expirées : retirées de l'historique
+    if (r.statut === "expire") return false;
+    if (
+      r.statut === "en_attente" &&
+      r.verrou_expire_at != null &&
+      Number(r.verrou_expire_at) > 0 &&
+      Number(r.verrou_expire_at) < Date.now()
+    ) {
+      return false;
+    }
     const day = reservationDay(r.date);
     const isPastDay = day < today;
-    const isClosed = ["joue", "annule", "annulee", "refusee"].includes(r.statut);
+    const isClosed = ["joue", "match_joue", "annule", "annulee", "refusee"].includes(r.statut);
     if (activeTab === "Acceptées") {
-      // À venir : date >= aujourd'hui et pas clôturée
+      // À venir : date >= aujourd'hui et pas clôturée (en_attente éphémère visible ici)
       return !isPastDay && !isClosed;
     }
     if (activeTab === "Passées") {
-      // Historique : date passée ou statut terminal
-      return isPastDay || isClosed;
+      // Historique durable : passées / annulées / jouées (pas les en_attente)
+      return (isPastDay || isClosed) && r.statut !== "en_attente";
     }
-    return true;
+    // Toutes = historique durable (pas les paiements en cours)
+    return r.statut !== "en_attente";
   });
 
   const openCancel = async (reservation: any) => {
@@ -310,11 +326,14 @@ const Reservations = () => {
             ) : (
               filtered.map((r) => {
                 const status = statusConfig[r.statut] || statusConfig.en_attente;
-                const canCancel = r.statut === "en_attente";
+                const canCancel = ["en_attente", "confirme", "acceptee"].includes(r.statut);
+                const isPendingEphemere = r.statut === "en_attente";
                 return (
                   <div
                     key={r.id}
-                    className={`relative bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] border-l-4 ${status.border} shadow-[var(--shadow-sm)] overflow-hidden`}
+                    className={`relative bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] border-l-4 ${status.border} shadow-[var(--shadow-sm)] overflow-hidden ${
+                      isPendingEphemere ? "opacity-95" : ""
+                    }`}
                   >
                     <div className="p-4">
                       <div className="flex items-start justify-between gap-2">
@@ -330,6 +349,19 @@ const Reservations = () => {
                           {status.label}
                         </span>
                       </div>
+                      {isPendingEphemere ? (
+                        <p className="mt-2 text-[11px] text-amber-800 bg-amber-50 rounded-lg px-2 py-1.5">
+                          En attente de paiement — disparaît si le délai est dépassé (créneau libéré).
+                        </p>
+                      ) : null}
+                      {["annule", "annulee"].includes(r.statut) ? (
+                        <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+                          Annulée · créneau libéré
+                          {r.politique_remboursement?.type_annulation === "avec_remboursement"
+                            ? " · remboursement selon politique terrain"
+                            : ""}
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="relative mx-4 border-t border-dashed border-[var(--color-border)]">

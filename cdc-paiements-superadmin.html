@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"/>
+<title>CDC Paiements TerrainSN — Superadmin v1.2</title>
+<style>
+:root { --ink:#1a2332; --muted:#4a5568; --line:#d4dce6; --green:#0A5C36; --paper:#fff; --soft:#f4f7f5; }
+@page { size: A4; margin: 16mm 14mm 18mm 14mm; }
+* { box-sizing: border-box; }
+html, body { margin:0; padding:0; background:var(--paper); color:var(--ink);
+  font-family:"Segoe UI",Calibri,"Helvetica Neue",Arial,sans-serif; font-size:10.5pt; line-height:1.45; }
+.page { max-width:190mm; margin:0 auto; }
+.cover { border-bottom:3px solid var(--green); padding:4mm 0 7mm; margin-bottom:8mm; }
+.cover .brand { font-size:9pt; letter-spacing:.18em; text-transform:uppercase; color:var(--green); font-weight:700; }
+.cover h1 { font-size:20pt; line-height:1.2; margin:4mm 0 2mm; color:var(--ink); font-weight:700; }
+.cover .lede { color:var(--muted); font-size:10.5pt; margin:0; max-width:170mm; }
+.article > h1 { display:none; }
+h2 { color:var(--green); font-size:13.5pt; margin:9mm 0 3.5mm; padding-bottom:1.5mm;
+  border-bottom:1.5px solid var(--green); page-break-after:avoid; }
+h2:not(:first-of-type) { page-break-before:always; }
+h3 { color:var(--ink); font-size:11.5pt; margin:6mm 0 2mm; page-break-after:avoid; }
+h4 { color:var(--ink); font-size:10.5pt; margin:4mm 0 1.5mm; page-break-after:avoid; }
+p { margin:0 0 2.5mm; }
+a { color:var(--green); text-decoration:none; }
+ul, ol { margin:0 0 3mm; padding-left:5.5mm; }
+li { margin:.6mm 0; }
+hr { border:0; border-top:1px solid var(--line); margin:6mm 0; }
+blockquote { margin:3mm 0; padding:2.5mm 4mm; border-left:3px solid var(--green); background:var(--soft); }
+code, pre { font-family:Consolas,"Cascadia Mono","Courier New",monospace; font-size:8.6pt; }
+code { background:var(--soft); padding:0 1.2mm; border-radius:2px; }
+pre { background:var(--soft); border:1px solid var(--line); padding:3.5mm 4mm; overflow:hidden;
+  white-space:pre-wrap; page-break-inside:avoid; margin:0 0 3.5mm; }
+pre code { background:none; padding:0; }
+table { width:100%; border-collapse:collapse; margin:0 0 4mm; font-size:9pt; }
+thead { display:table-header-group; }
+tr { page-break-inside:avoid; }
+th, td { border:1px solid var(--line); padding:1.6mm 2.2mm; vertical-align:top; text-align:left; }
+th { background:var(--green); color:#fff; font-weight:650; }
+tbody tr:nth-child(even) td { background:var(--soft); }
+</style></head>
+<body><div class="page">
+<header class="cover">
+  <div class="brand">TerrainSN · Cahier des charges · v1.2</div>
+  <h1>Paiements, reversements &amp; interface Superadmin</h1>
+  <p class="lede">Toute la config vit en superadmin (Wave + OM du gérant, remboursement, mode auto avec frais ou retrait manuel sans frais). Le moteur de paiement la récupère et l’applique. Le dû va au gérant, pas au propriétaire.</p>
+</header>
+<div class="article"><h1 id="cahier-des-charges-paiements-terrainsn-interface-superadmin">Cahier des charges — Paiements TerrainSN &amp; interface Superadmin</h1>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produit</strong></td>
+<td>TerrainSN (SaaS multi-terrains, Sénégal)</td>
+</tr>
+<tr>
+<td><strong>Document</strong></td>
+<td>CDC Paiements · Caisse · Reversements · Superadmin</td>
+</tr>
+<tr>
+<td><strong>Version</strong></td>
+<td>1.2</td>
+</tr>
+<tr>
+<td><strong>Date</strong></td>
+<td>18 août 2026</td>
+</tr>
+<tr>
+<td><strong>Statut</strong></td>
+<td>Cible produit — à implémenter par phases</td>
+</tr>
+<tr>
+<td><strong>Correctif v1.1</strong></td>
+<td>Le dû est versé sur le <strong>numéro du gérant</strong>, pas du propriétaire</td>
+</tr>
+<tr>
+<td><strong>Correctif v1.2</strong></td>
+<td>Wave <strong>et</strong> Orange Money · politique d’annulation/remboursement · frais payin joueur / payout négociés · 2 modes (auto avec frais <strong>ou</strong> retrait manuel sans frais) · tout se configure en superadmin puis s’applique au moteur de paiement</td>
+</tr>
+<tr>
+<td><strong>Périmètre</strong></td>
+<td>Avance joueur, commission, dû gérant, frais, modes de reversement, config 100 % superadmin</td>
+</tr>
+<tr>
+<td><strong>Hors périmètre v1</strong></td>
+<td>Reste du match sur place · abonnements mensuels · achat définitif</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Phrase cible :</strong> le joueur paie TerrainSN (frais de payin côté joueur) → TerrainSN garde sa commission (propre à chaque terrain) → selon le <strong>contrat du terrain</strong> lu en superadmin, TerrainSN reverse le dû sur le <strong>Wave / Orange Money du gérant</strong> (auto avec frais, ou retrait à la demande sans frais), <strong>après le délai de remboursement négocié</strong>.</p>
+<p>Aujourd’hui on compte ce qu’on doit. On ne vire pas.</p>
+<p><strong>Règle d’architecture :</strong> aucune logique de paiement n’invente un %, un délai, un numéro ou un mode. Elle <strong>récupère la config superadmin du terrain</strong> et l’applique.</p>
+<hr />
+<h2 id="table-des-matières">Table des matières</h2>
+<ol>
+<li><a href="#1-objet-et-film-cible">Objet et film cible</a></li>
+<li><a href="#2-état-actuel-vs-cible">État actuel vs cible</a></li>
+<li><a href="#3-glossaire">Glossaire</a></li>
+<li><a href="#4-principes-non-négociables">Principes non négociables</a></li>
+<li><a href="#5-contrat-terrain--ce-quon-négocie">Contrat terrain — ce qu’on négocie</a></li>
+<li><a href="#6-cycle-de-vie-dun-fcfa">Cycle de vie d’un FCFA</a></li>
+<li><a href="#7-calculs">Calculs</a></li>
+<li><a href="#8-interface-superadmin-source-de-vérité">Interface Superadmin (source de vérité)</a></li>
+<li><a href="#9-moteur-de-paiement--appliquer-la-config">Moteur de paiement — appliquer la config</a></li>
+<li><a href="#10-impact-interface-gérant">Impact interface Gérant</a></li>
+<li><a href="#11-impact-interface-propriétaire">Impact interface Propriétaire</a></li>
+<li><a href="#12-impact-interface-joueur">Impact interface Joueur</a></li>
+<li><a href="#13-notifications">Notifications</a></li>
+<li><a href="#14-modèle-de-données-cible">Modèle de données cible</a></li>
+<li><a href="#15-matrice-des-droits">Matrice des droits</a></li>
+<li><a href="#16-phasage">Phasage</a></li>
+<li><a href="#17-critères-dacceptation">Critères d’acceptation</a></li>
+<li><a href="#18-écrans-superadmin">Écrans superadmin</a></li>
+</ol>
+<hr />
+<h2 id="1-objet-et-film-cible">1. Objet et film cible</h2>
+<h3 id="11-comment-largent-circule">1.1 Comment l’argent circule</h3>
+<p>Le joueur ne paie pas tout à la réservation. Il paie une <strong>avance</strong> (souvent ~12,5 % du prix) en Wave / Orange Money. Les <strong>frais de payin</strong> sont gérés <strong>côté joueur</strong> (au checkout PayTech).</p>
+<p>Le reste, il le paie le jour du match, <strong>sur place, au gérant</strong>. TerrainSN n’y touche pas.</p>
+<p>Exemple : créneau 40 000 → avance 5 000 en ligne → 35 000 sur place.</p>
+<h3 id="12-où-arrive-lavance-où-elle-ressort">1.2 Où arrive l’avance, où elle ressort</h3>
+<p>À l’encaissement, l’avance n’arrive <strong>pas</strong> sur le Wave / OM du gérant.</p>
+<p>Elle arrive sur le <strong>compte TerrainSN</strong> (via PayTech). Un seul compte : la caisse plateforme.</p>
+<p>PayTech ne « connaît » pas le gérant. Le gérant ne configure rien chez PayTech.</p>
+<p><strong>Ensuite</strong>, TerrainSN reverse le dû (avance − commission − frais de payout <strong>si mode auto</strong>) sur le <strong>numéro Wave et/ou Orange Money du gérant</strong> — pas sur celui du propriétaire.</p>
+<h3 id="13-la-commission">1.3 La commission</h3>
+<p>TerrainSN prend sa commission <strong>uniquement sur l’avance</strong>, pas sur les 40 000.</p>
+<p>Chaque terrain a son %, négocié (8 %, 10 %, 15 %…). Même app, deals différents. Figé à la signature. Le proprio ne le change pas tout seul.</p>
+<p>Exemple à 10 % : 5 000 d’avance → commission 500 → base gérant 4 500, <strong>puis</strong> éventuels frais de payout selon le mode et la négo.</p>
+<h3 id="14-film-cible">1.4 Film cible</h3>
+<pre><code>Négociation (proprio + gérant) → saisie 100 % en SUPERADMIN
+  → % avance, % commission
+  → Wave + Orange Money du gérant (idéalement = WhatsApp)
+  → annulation avec remboursement ? oui/non + délai
+  → mode de reversement (auto AVEC frais  OU  retrait à la demande SANS frais)
+  → qui paie les frais de payout (gérant / plateforme / partage 1%–1%)
+
+Joueur paie l’avance (+ frais payin à sa charge)
+  → argent chez TerrainSN
+  → on note le dû gérant (formule selon le mode)
+
+Fenêtre de remboursement du terrain
+  → si remboursement possible et annulation dans le délai : refund joueur, dû = 0
+  → si pas de remboursement, OU délai écoulé sans annulation :
+        AUTO     → reversement auto au gérant (appliquer la politique de frais)
+        RETRAIT  → le dû s’accumule, bouton « Retirer » → WhatsApp côté dév
+                   → virement manuel sur le numéro du gérant, SANS frais
+
+Jour J (QR)
+  → le reste du prix se paie SUR PLACE (hors TerrainSN)
+</code></pre>
+<hr />
+<h2 id="2-état-actuel-vs-cible">2. État actuel vs cible</h2>
+<h3 id="21-déjà-en-place">2.1 Déjà en place</h3>
+<ul>
+<li>Le joueur paie seulement l’avance (<code>pourcentage_avance</code>).</li>
+<li>L’avance part chez PayTech (caisse TerrainSN).</li>
+<li>Commission % par terrain, lecture seule côté proprio.</li>
+<li>Reste du match sur place au scan QR.</li>
+<li>Portefeuille / reversements = <strong>comptabilité</strong>, pas d’argent réel.</li>
+<li>Superadmin a déjà : % avance, % commission, <code>delai_remboursement_heures</code>, utilisateurs.</li>
+</ul>
+<h3 id="22-manquant-v12">2.2 Manquant (v1.2)</h3>
+<ul>
+<li>Numéros <strong>Wave et Orange Money</strong> du gérant (idéalement = WhatsApp).</li>
+<li>Question métier : <strong>annulation avec remboursement ?</strong> souvent <strong>non</strong>, mais ça dépend du terrain + délai si oui.</li>
+<li>Frais de <strong>payin</strong> côté joueur vs frais de <strong>payout</strong> négociés (qui les prend, éventuellement partage 1 % / 1 %).</li>
+<li><strong>Deux modes</strong> négociés avec le <strong>propriétaire</strong> : auto (frais côté client) <strong>ou</strong> retrait à la demande (notif WhatsApp dév, manuel, sans frais).</li>
+<li>Reversement <strong>selon le délai de remboursement</strong>, pas « dès le QR ».</li>
+<li>Gérant voit <strong>en continu</strong> ses avances accumulées (formule différente selon le mode).</li>
+<li>Le moteur de paiement <strong>lit</strong> ces configs superadmin au lieu de valeurs en dur.</li>
+</ul>
+<hr />
+<h2 id="3-glossaire">3. Glossaire</h2>
+<table>
+<thead>
+<tr>
+<th>Terme</th>
+<th>Signification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Avance</strong></td>
+<td>Part payée en ligne par le joueur</td>
+</tr>
+<tr>
+<td><strong>Reste sur place</strong></td>
+<td>Prix − avance. Jamais chez TerrainSN</td>
+</tr>
+<tr>
+<td><strong>Commission</strong></td>
+<td>% TerrainSN <strong>sur l’avance uniquement</strong></td>
+</tr>
+<tr>
+<td><strong>Frais de payin</strong></td>
+<td>Frais d’entrée PayTech. <strong>Côté joueur</strong></td>
+</tr>
+<tr>
+<td><strong>Frais de payout</strong></td>
+<td>Frais de sortie (reversement auto). Négociés : gérant, plateforme, ou <strong>partage</strong> (ex. 1 % gérant + 1 % dév)</td>
+</tr>
+<tr>
+<td><strong>Dû gérant (mode auto)</strong></td>
+<td>avance − commission − frais de payout à sa charge</td>
+</tr>
+<tr>
+<td><strong>Dû gérant (mode retrait)</strong></td>
+<td>avance − commission (<strong>pas de frais</strong>)</td>
+</tr>
+<tr>
+<td><strong>Compte de versement</strong></td>
+<td>Wave <strong>et</strong> Orange Money <strong>du gérant</strong></td>
+</tr>
+<tr>
+<td><strong>Mode auto</strong></td>
+<td>Reversement automatique via PayTech, <strong>avec frais</strong> (politique du contrat)</td>
+</tr>
+<tr>
+<td><strong>Mode retrait</strong></td>
+<td>Bouton gérant → notif WhatsApp <strong>côté dév</strong> → envoi <strong>manuel</strong> sur le numéro du gérant, <strong>sans frais</strong></td>
+</tr>
+<tr>
+<td><strong>Fenêtre de remboursement</strong></td>
+<td>Délai négocié. Souvent <strong>0</strong> (annulation sans remboursement)</td>
+</tr>
+<tr>
+<td><strong>Payable</strong></td>
+<td>Dû débloqué <strong>après</strong> la fenêtre de remboursement (ou tout de suite si pas de remboursement)</td>
+</tr>
+</tbody>
+</table>
+<p>Wording : ne plus dire « Virement reçu » tant que l’argent n’est pas réellement parti (auto PayTech confirmé <strong>ou</strong> virement manuel dév fait).</p>
+<hr />
+<h2 id="4-principes-non-négociables">4. Principes non négociables</h2>
+<ol>
+<li><strong>Un seul compte PayTech</strong> : TerrainSN. PayTech ne connaît pas le gérant.</li>
+<li><strong>Commission uniquement sur l’avance.</strong></li>
+<li><strong>% et contrat figés en superadmin.</strong> Ni le proprio ni le gérant ne les éditent.</li>
+<li><strong>Bénéficiaire = gérant</strong> (Wave + OM). Le propriétaire supervise, il ne reçoit pas.</li>
+<li><strong>Payin = joueur. Payout = négocié</strong> (et <strong>0 frais</strong> en mode retrait manuel).</li>
+<li><strong>Le reversement attend la politique de remboursement du terrain.</strong> Pas de remboursement → l’argent peut partir au gérant dès que le contrat le permet. Remboursement possible → on attend la fin du délai (sauf annulation déjà refundée).</li>
+<li><strong>Deux modes, négociés avec le propriétaire</strong>, saisis en superadmin, lus par le moteur.</li>
+<li><strong>Sans numéro gérant : le joueur paie, rien ne part.</strong> Le dû s’accumule.</li>
+<li><strong>Toute config passe par le superadmin.</strong> Le code paiement fait <code>chargerContrat(terrain_id)</code> puis applique. Pas de if magique par terrain en dur.</li>
+</ol>
+<hr />
+<h2 id="5-contrat-terrain-ce-quon-négocie">5. Contrat terrain — ce qu’on négocie</h2>
+<p>Ces questions se posent <strong>à la signature</strong>, avec le gérant et/ou le propriétaire selon le sujet. La réponse est <strong>saisie uniquement en superadmin</strong>.</p>
+<h3 id="51-numéros-du-gérant-demander-au-gérant">5.1 Numéros du gérant (demander au gérant)</h3>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Champ superadmin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ton numéro <strong>Wave</strong> ?</td>
+<td><code>wave_numero</code></td>
+</tr>
+<tr>
+<td>Ton numéro <strong>Orange Money</strong> ?</td>
+<td><code>om_numero</code></td>
+</tr>
+<tr>
+<td>C’est le <strong>même que WhatsApp</strong> ? (idéal)</td>
+<td><code>numeros_identiques_whatsapp</code> (oui/non) + préremplissage depuis le WhatsApp gérant si oui</td>
+</tr>
+<tr>
+<td>On teste 100 FCFA Wave / OM ?</td>
+<td>statuts <code>wave_statut</code>, <code>om_statut</code></td>
+</tr>
+</tbody>
+</table>
+<p>Les deux opérateurs sont demandés : le joueur paie en Wave <strong>ou</strong> OM ; le reversement part vers le numéro du gérant sur l’opérateur prévu (ou les deux enregistrés, ordre : préférence <code>canal_reversement</code> = <code>wave</code> | <code>om</code> | <code>les_deux</code>).</p>
+<h3 id="52-annulation-remboursement-demander-au-gérant">5.2 Annulation &amp; remboursement (demander au gérant)</h3>
+<p>Souvent <strong>une annulation ne porte pas sur un remboursement</strong>. Ça dépend du terrain.</p>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Champ superadmin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Annulation <strong>avec</strong> remboursement de l’avance ?</td>
+<td><code>remboursement_autorise</code> (<code>oui</code> / <code>non</code>) — défaut métier fréquent : <strong>non</strong></td>
+</tr>
+<tr>
+<td>Si oui, <strong>délai</strong> après confirmation ?</td>
+<td><code>delai_remboursement_heures</code> (ex. 6, 12, 24). Si non : forcer <code>0</code></td>
+</tr>
+<tr>
+<td>Texte joueur</td>
+<td>généré : « Annulation sans remboursement » <strong>ou</strong> « Remboursé si tu annules dans les X h »</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Effet sur le reversement :</strong></p>
+<ul>
+<li><code>remboursement_autorise = non</code> (délai 0) → l’avance n’est plus « à risque refund ». Le dû peut être reversé au gérant selon le <strong>mode</strong> + la <strong>politique de frais</strong>.</li>
+<li><code>remboursement_autorise = oui</code> + délai X h → le dû reste <code>en_fenetre_remboursement</code> jusqu’à X h. Annulation dans le délai → refund joueur, dû = 0. Après le délai sans annulation → dû <code>payable</code>.</li>
+</ul>
+<h3 id="53-mode-de-reversement-négocier-avec-le-propriétaire">5.3 Mode de reversement (négocier avec le <strong>propriétaire</strong>)</h3>
+<p>Deux modes possibles, <strong>un seul actif par terrain</strong> :</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Code</th>
+<th>Frais de payout</th>
+<th>Qui déclenche</th>
+<th>Comment l’argent part</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Reversement automatique</strong></td>
+<td><code>auto</code></td>
+<td><strong>Oui</strong> — à la charge définie au 5.4 (souvent « côté client » = gérant)</td>
+<td>Le moteur, dès que le dû est <code>payable</code></td>
+<td>PayTech : « envoie X au numéro du gérant »</td>
+</tr>
+<tr>
+<td><strong>Retrait à la demande</strong></td>
+<td><code>retrait</code></td>
+<td><strong>Non</strong></td>
+<td>Bouton gérant « Retirer » → <strong>notif WhatsApp côté dév</strong></td>
+<td>L’équipe dév vire <strong>manuellement</strong> sur le numéro du gérant</td>
+</tr>
+</tbody>
+</table>
+<p>Le propriétaire choisit le mode. Le gérant le subit et le voit en lecture.</p>
+<h3 id="54-frais-de-payout-négocier-avec-le-gérant-mode-auto-seulement">5.4 Frais de payout (négocier avec le <strong>gérant</strong>) — mode <code>auto</code> seulement</h3>
+<p>Les frais de <strong>payin</strong> ne se négocient pas ici : <strong>côté joueur</strong>.</p>
+<p>Les frais de <strong>payout</strong> (sortie) se négocient. Toujours <strong>consulter cette politique</strong> avant un reversement auto.</p>
+<table>
+<thead>
+<tr>
+<th>Qui prend en charge</th>
+<th>Code</th>
+<th>Exemple sur 4 500 de base</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gérant (côté client)</td>
+<td><code>gerant</code></td>
+<td>Frais déduits du dû. Le gérant reçoit moins</td>
+</tr>
+<tr>
+<td>Plateforme / dév</td>
+<td><code>plateforme</code></td>
+<td>Gérant reçoit 4 500. TerrainSN paie les frais</td>
+</tr>
+<tr>
+<td><strong>Partage</strong></td>
+<td><code>partage</code></td>
+<td>Ex. <strong>1 % gérant + 1 % dév</strong> (champs <code>frais_payout_pct_gerant</code> + <code>frais_payout_pct_plateforme</code>, défaut 1 / 1)</td>
+</tr>
+</tbody>
+</table>
+<p>En mode <code>retrait</code> : cette grille <strong>ne s’applique pas</strong>. Montant envoyé = avance − commission.</p>
+<hr />
+<h2 id="6-cycle-de-vie-dun-fcfa">6. Cycle de vie d’un FCFA</h2>
+<p>Exemple : créneau <strong>40 000</strong>, avance <strong>5 000</strong>, commission <strong>10 %</strong> (500), frais payout <strong>partage 1 % / 1 %</strong>.</p>
+<pre><code>Joueur paie 5 000 + frais payin (à sa charge, checkout)
+        │
+        TerrainSN caisse : +5 000
+        Commission : 500
+        Base gérant : 4 500
+        │
+        ├─ Remboursement autorisé + annulation dans le délai
+        │     → refund joueur (avance, hors frais payin déjà pris par l’opérateur)
+        │     → dû gérant = 0
+        │
+        └─ Pas de remboursement, OU délai écoulé
+              dû devient PAYABLE
+              │
+              ├─ Mode AUTO
+              │     frais gérant 1 % de 4 500 = 45  → reçu gérant 4 455
+              │     frais dév 1 % = 45              → TerrainSN les absorbe
+              │     ordre PayTech → Wave/OM du gérant
+              │
+              └─ Mode RETRAIT
+                    solde affiché / envoyé = 4 500 (pas de frais)
+                    gérant clique « Retirer »
+                    → WhatsApp équipe dév (montant, terrain, numéro Wave, numéro OM)
+                    → virement manuel, solde app = 0
+</code></pre>
+<p>Le <strong>QR / match joué</strong> déclenche l’encaissement <strong>sur place des 35 000</strong>. Il ne déclenche <strong>pas</strong> le reversement de l’avance (c’est le délai de remboursement + le mode).</p>
+<hr />
+<h2 id="7-calculs">7. Calculs</h2>
+<p>FCFA entiers, snapshotés à la confirmation (un avenant ne recalcule pas le passé).</p>
+<pre><code>avance            = arrondi(prix × pourcentage_avance / 100)
+reste_sur_place   = prix − avance
+commission        = arrondi(avance × commission_pourcentage / 100)
+base_gerant       = avance − commission
+
+si mode == retrait :
+    du_gerant     = base_gerant
+    frais_gerant  = 0
+    frais_plateforme = 0
+
+si mode == auto :
+    lire politique frais du contrat
+    frais_gerant      = arrondi(base_gerant × frais_payout_pct_gerant / 100)      # 0 si plateforme paie tout
+    frais_plateforme  = arrondi(base_gerant × frais_payout_pct_plateforme / 100)  # 0 si gérant paie tout
+    du_gerant         = base_gerant − frais_gerant
+</code></pre>
+<p>Preview obligatoire dans le superadmin, exemple live :</p>
+<blockquote>
+<p>Créneau 40 000 → avance 5 000 → commission 500 →<br />
+Auto (partage 1/1) : gérant <strong>4 455</strong>, frais gérant 45, frais dév 45<br />
+Retrait : gérant <strong>4 500</strong>, 0 frais</p>
+</blockquote>
+<hr />
+<h2 id="8-interface-superadmin-source-de-vérité">8. Interface Superadmin (source de vérité)</h2>
+<p>C’est <strong>là que se fait toute la configuration</strong>. Le reste de l’app n’a que de la lecture / des déclencheurs.</p>
+<h3 id="81-menu-cible">8.1 Menu cible</h3>
+<table>
+<thead>
+<tr>
+<th>Menu</th>
+<th>Rôle</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dashboard</strong></td>
+<td>Santé caisse, file remboursement, file retrait dév, alertes</td>
+</tr>
+<tr>
+<td><strong>Terrains</strong></td>
+<td>Fiche <strong>contrat paiement</strong> (cœur)</td>
+</tr>
+<tr>
+<td><strong>Utilisateurs</strong></td>
+<td>Proprio / gérant — WhatsApp utilisé pour préremplir les numéros</td>
+</tr>
+<tr>
+<td><strong>Caisse &amp; reversements</strong></td>
+<td>Auto PayTech + file <strong>retraits manuels</strong> (demandes WhatsApp)</td>
+</tr>
+<tr>
+<td><strong>Rapprochement</strong></td>
+<td>Reçu / remboursé / gardé (commission) / frais / envoyé / encore dû</td>
+</tr>
+<tr>
+<td><strong>Revenus</strong></td>
+<td>Commission acquise + frais payout absorbés vs facturés</td>
+</tr>
+<tr>
+<td><strong>Abonnements</strong></td>
+<td>Hors flux avance</td>
+</tr>
+</tbody>
+</table>
+<h3 id="82-fiche-terrain-onglet-contrat-paiement">8.2 Fiche terrain — onglet « Contrat paiement »</h3>
+<p>Un seul écran de signature, <strong>4 blocs</strong>, tous enregistrés avant d’activer le terrain en production paiement.</p>
+<h4 id="bloc-1-commercial-déjà-en-partie-là">Bloc 1 — Commercial (déjà en partie là)</h4>
+<ul>
+<li><code>% avance</code> + preview prix → avance / reste sur place</li>
+<li><code>% commission</code> + preview</li>
+<li>Bénéficiaire : <strong>gérant</strong> (non modifiable)</li>
+</ul>
+<h4 id="bloc-2-numéros-gérant">Bloc 2 — Numéros gérant</h4>
+<ul>
+<li>WhatsApp gérant (référence)</li>
+<li>Case « Utiliser le même numéro pour Wave et Orange Money »</li>
+<li><code>wave_numero</code> / <code>om_numero</code> (si case cochée : les deux = WhatsApp)</li>
+<li>Canal de reversement préféré : Wave / OM</li>
+<li>Test 100 FCFA par canal</li>
+<li>Statut par canal : <code>absent</code> / <code>saisi</code> / <code>test_envoye</code> / <code>verifie</code></li>
+</ul>
+<p>Sans <strong>au moins un</strong> canal <code>verifie</code> : joueur paie, rien ne sort, badge rouge.</p>
+<h4 id="bloc-3-annulation-remboursement">Bloc 3 — Annulation / remboursement</h4>
+<ul>
+<li><code>remboursement_autorise</code> : <strong>Non (souvent)</strong> / Oui</li>
+<li>Si oui : délai en heures</li>
+<li>Phrase générée montrée au joueur (lecture)</li>
+</ul>
+<h4 id="bloc-4-reversement-frais">Bloc 4 — Reversement &amp; frais</h4>
+<ul>
+<li>Mode : <code>auto</code> <strong>ou</strong> <code>retrait</code> (négocié proprio)</li>
+<li>Si <code>auto</code> : politique frais <code>gerant</code> / <code>plateforme</code> / <code>partage</code></li>
+<li>Si <code>partage</code> : deux % (défaut <strong>1</strong> et <strong>1</strong>)</li>
+<li>Preview des 2 formules (auto vs retrait) pour le même exemple 40 000</li>
+<li>Bandeau : « En mode retrait, 0 frais. En mode auto, appliquer cette politique. »</li>
+</ul>
+<p>Avenant = nouvelle <code>contrat_version</code>, effet <strong>futur uniquement</strong>, audit (qui, quand, avant/après).</p>
+<p>Le proprio et le gérant voient ces blocs <strong>en lecture</strong>.</p>
+<h3 id="83-dashboard-kpi-à-ajouter">8.3 Dashboard — KPI à ajouter</h3>
+<ul>
+<li>Encaissé PayTech</li>
+<li>Commission acquise / encore en fenêtre de remboursement</li>
+<li>Dû en fenêtre / dû payable</li>
+<li>File <strong>demandes de retrait</strong> (non traitées)</li>
+<li>Bloqué sans numéro</li>
+<li>Auto payouts échoués</li>
+<li>Frais payout (part gérant vs part plateforme)</li>
+</ul>
+<p>Alertes : terrain sans Wave/OM, test 100 FCFA en attente, retrait demandé depuis &gt; 1 h, auto en échec, fenêtre remboursement qui vient d’expirer (prêt à reverser).</p>
+<h3 id="84-caisse-reversements">8.4 Caisse &amp; reversements</h3>
+<p><strong>Trois files :</strong></p>
+<ol>
+<li><strong>En fenêtre de remboursement</strong> — lecture, pas d’envoi</li>
+<li><strong>Payable auto</strong> — le moteur envoie ; relance / log PayTech</li>
+<li><strong>Demandes de retrait</strong> — créées par le bouton gérant. Colonnes : terrain, gérant, montant (<strong>avance − commission</strong>), Wave, OM, WhatsApp, heure de la demande. Actions dév : <code>Marquer envoyé</code> (saisir réf manuelle) / <code>Rejeter</code> (motif, le dû <strong>reste</strong>)</li>
+</ol>
+<p>Le bouton « Verser » superadmin existe pour l’auto (PayTech) <strong>et</strong> pour cocher un retrait manuel fait.</p>
+<p>Historique unique : <code>auto</code> / <code>retrait_manuel</code>, montant, frais, numéro, statut, qui (moteur / superadmin / dév).</p>
+<h3 id="85-rapprochement">8.5 Rapprochement</h3>
+<pre><code>reçu − remboursé = commission + frais_payout_plateforme_absorbés + envoyé + encore_dû
+</code></pre>
+<p><code>encore_dû</code> ventilé : <code>en_fenetre</code> / <code>payable_auto</code> / <code>payable_retrait</code> / <code>bloque_sans_numero</code> / <code>echec</code>.</p>
+<hr />
+<h2 id="9-moteur-de-paiement-appliquer-la-config">9. Moteur de paiement — appliquer la config</h2>
+<p>Au <code>sale_complete</code> PayTech (avance joueur) <strong>et</strong> à chaque tick / job de fenêtre :</p>
+<pre><code>contrat = chargerContrat(terrain_id)   // superadmin uniquement
+appliquer :
+  avance, commission, base_gerant
+  statut dû = en_fenetre SI remboursement_autorise ET now &lt; confirme_at + délai
+           = payable SINON
+  si payable et mode == auto et canal verifie :
+      montant = base_gerant − frais selon contrat.politique_frais
+      ordonner PayTech → numéro gérant (canal préféré)
+  si payable et mode == retrait :
+      accumuler au solde gérant (montant = base_gerant)
+      attendre bouton Retirer
+</code></pre>
+<p><strong>Ne pas verser si :</strong> encore en fenêtre, déjà remboursé, déjà versé, aucun canal vérifié, montant 0, (mode auto) caisse PayTech insuffisante.</p>
+<p><strong>Échec auto :</strong> dû inchangé, notif admin + gérant, relance superadmin, max 3 tentatives.</p>
+<p><strong>Retrait :</strong> le bouton <strong>ne parle pas à PayTech</strong>. Il crée une <code>demande_retrait</code> + WhatsApp <strong>équipe dév</strong> :</p>
+<pre><code>Retrait gérant demandé
+Terrain : …
+Gérant : …
+Montant : 4 500 FCFA (avance − commission, 0 frais)
+Wave : 77…42
+OM   : 77…42
+WhatsApp : 77…42
+</code></pre>
+<p>Le dév vire à la main, coche « Envoyé » dans le superadmin. Solde app = 0.</p>
+<p>Idempotence : <strong>un payout réussi (auto ou manuel) par réservation</strong>.</p>
+<hr />
+<h2 id="10-impact-interface-gérant">10. Impact interface Gérant</h2>
+<p>Opérateur du jour J <strong>et</strong> bénéficiaire du dû.</p>
+<h3 id="101-ce-quil-voit-en-continu-portefeuille-finances">10.1 Ce qu’il voit <strong>en continu</strong> (portefeuille / finances)</h3>
+<p>Un solde d’<strong>avances accumulées</strong>, toujours visible, recalculé depuis la config du terrain :</p>
+<table>
+<thead>
+<tr>
+<th>Mode du contrat</th>
+<th>Formule affichée</th>
+<th>Label</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>auto</code></td>
+<td>Σ (avance − commission − <strong>frais</strong>)</td>
+<td>« Versé / sera versé auto sur ton Wave-OM »</td>
+</tr>
+<tr>
+<td><code>retrait</code></td>
+<td>Σ (avance − commission)</td>
+<td>« Disponible au retrait (0 frais) »</td>
+</tr>
+</tbody>
+</table>
+<p>Détail par ligne : avance brute, commission, frais (0 si retrait), net, statut (<code>en fenêtre</code> / <code>payable</code> / <code>versé</code> / <code>demande envoyée aux dév</code>).</p>
+<h3 id="102-actions">10.2 Actions</h3>
+<ul>
+<li>Mode <code>auto</code> : <strong>pas</strong> de bouton Retirer. Texte : « Reversé automatiquement après le délai de remboursement de ton terrain (souvent tout de suite s’il n’y a pas de remboursement). Frais selon le contrat. »</li>
+<li>Mode <code>retrait</code> : bouton <strong>« Retirer »</strong> dès que le net &gt; 0 et hors fenêtre. Confirmation : montant <strong>sans frais</strong>, numéros Wave/OM. Envoi notif dév. État « Demande envoyée — virement manuel en cours ».</li>
+<li>Numéros : lecture + <strong>demande de changement</strong> (superadmin valide). Case « c’est mon WhatsApp » en lecture.</li>
+<li>Jour J : scan QR + 35 000 sur place <strong>inchangé</strong>.</li>
+</ul>
+<h3 id="103-whatsapp-gérant">10.3 WhatsApp gérant</h3>
+<ul>
+<li>Confirmation joueur : avance reçue chez TerrainSN + reste sur place + « ton dû s’accumule (auto / retrait) ».</li>
+<li>Fin de fenêtre / payable auto : « reversement en cours vers ton Wave/OM ».</li>
+<li>Payout auto OK / retrait marqué envoyé : « X FCFA envoyés sur …42 ».</li>
+<li><strong>Pas</strong> « Virement reçu » au moment du paiement joueur.</li>
+</ul>
+<hr />
+<h2 id="11-impact-interface-propriétaire">11. Impact interface Propriétaire</h2>
+<p>Superviseur. Il a négocié le <strong>mode</strong>. Il ne reçoit pas l’argent.</p>
+<p>Lecture :</p>
+<ul>
+<li>Commission figée</li>
+<li>Mode : auto (frais côté client selon contrat) <strong>ou</strong> retrait sans frais</li>
+<li>Politique remboursement du terrain</li>
+<li>Avances accumulées <strong>versées au gérant</strong> (formule du mode)</li>
+<li>Numéros gérant masqués</li>
+</ul>
+<p>Interdit : changer %, mode, frais, numéros, cliquer Retirer, se mettre comme bénéficiaire.</p>
+<hr />
+<h2 id="12-impact-interface-joueur">12. Impact interface Joueur</h2>
+<p>Il ne voit ni commission, ni frais de payout, ni Wave gérant.</p>
+<ul>
+<li>Checkout : avance + <strong>frais de payin</strong> (côté joueur, PayTech)</li>
+<li>Copy : « Tu paies X maintenant (hors frais opérateur). Le jour J, Y sur place. »</li>
+<li>Annulation : texte <strong>généré depuis le contrat</strong> (« pas de remboursement » <strong>ou</strong> « dans les X h »)</li>
+<li>Terrain sans Wave/OM : il paie quand même</li>
+</ul>
+<hr />
+<h2 id="13-notifications">13. Notifications</h2>
+<table>
+<thead>
+<tr>
+<th>Événement</th>
+<th>Destinataire</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Avance payée</td>
+<td>Joueur</td>
+<td>Confirmation, QR, reste sur place, politique d’annulation du terrain</td>
+</tr>
+<tr>
+<td>Avance payée</td>
+<td>Gérant</td>
+<td>Résa + reste sur place. Dû accumulé, <strong>pas</strong> « virement reçu »</td>
+</tr>
+<tr>
+<td>Fenêtre finie + mode auto</td>
+<td>Gérant</td>
+<td>Reversement en cours vers Wave/OM</td>
+</tr>
+<tr>
+<td>Auto PayTech OK</td>
+<td>Gérant</td>
+<td>X FCFA envoyés (net, frais déjà déduits si à sa charge)</td>
+</tr>
+<tr>
+<td>Clic <strong>Retirer</strong></td>
+<td><strong>Équipe dév (WhatsApp)</strong></td>
+<td>Montant sans frais + Wave + OM + terrain + gérant</td>
+</tr>
+<tr>
+<td>Dév marque « Envoyé »</td>
+<td>Gérant</td>
+<td>X FCFA envoyés manuellement</td>
+</tr>
+<tr>
+<td>Échec auto / numéro faux</td>
+<td>Superadmin + gérant</td>
+<td>Dû inchangé, corriger le numéro</td>
+</tr>
+<tr>
+<td>Numéro manquant + 1er dû</td>
+<td>Superadmin</td>
+<td>Configurer Wave/OM gérant</td>
+</tr>
+<tr>
+<td>Test 100 FCFA</td>
+<td>Gérant</td>
+<td>Mini-virement, confirme</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="14-modèle-de-données-cible">14. Modèle de données cible</h2>
+<h3 id="141-contrat-terrains-écrit-uniquement-par-superadmin">14.1 Contrat <code>terrains</code> (écrit <strong>uniquement</strong> par superadmin)</h3>
+<pre><code>pourcentage_avance
+commission_pourcentage
+remboursement_autorise          -- 0/1  (souvent 0)
+delai_remboursement_heures      -- 0 si non
+payout_mode                     -- auto | retrait
+payout_frais_politique          -- gerant | plateforme | partage
+frais_payout_pct_gerant         -- ex. 1
+frais_payout_pct_plateforme     -- ex. 1
+wave_numero, wave_statut, wave_verifie_at
+om_numero, om_statut, om_verifie_at
+numeros_identiques_whatsapp     -- 0/1
+canal_reversement               -- wave | om | les_deux
+gerant_id                       -- gérant actif
+contrat_version, contrat_signe_at
+</code></pre>
+<p>Le moteur : <code>SELECT ... FROM terrains WHERE id = ?</code> puis calcule. <strong>Zéro constante métier dans le flow paiement.</strong></p>
+<h3 id="142-ledger-dû-portefeuille">14.2 Ledger dû / portefeuille</h3>
+<p>Par <strong>terrain</strong> (suit le terrain si le gérant change) + snapshot du gérant / numéros / formule au moment du payable.</p>
+<p>Statuts dû : <code>en_fenetre</code> → <code>payable</code> → <code>demande_retrait</code> (mode retrait) → <code>verse</code> | <code>echec</code> | <code>annule_rembourse</code>.</p>
+<h3 id="143-payouts-demandes_retrait">14.3 <code>payouts</code> + <code>demandes_retrait</code></h3>
+<ul>
+<li>Auto : <code>ref_paytech</code>, frais_gerant, frais_plateforme, montant_net, canal</li>
+<li>Retrait : <code>demande_par</code>, <code>traite_par</code> (dév), <code>ref_manuelle</code>, montant = base_gerant, frais = 0</li>
+</ul>
+<hr />
+<h2 id="15-matrice-des-droits">15. Matrice des droits</h2>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Superadmin</th>
+<th>Proprio</th>
+<th>Gérant</th>
+<th>Joueur</th>
+<th>Dév (même rôle admin ops)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Saisir tout le contrat (§5)</td>
+<td>Écriture</td>
+<td>Lecture</td>
+<td>Lecture</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Wave + OM + test 100 FCFA</td>
+<td>Écriture</td>
+<td>Lecture</td>
+<td>Demande de changement</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Choisir mode auto / retrait</td>
+<td>Écriture (négo proprio)</td>
+<td>Lecture (c’est sa négo)</td>
+<td>Lecture</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Politique frais payout</td>
+<td>Écriture (négo gérant)</td>
+<td>Lecture</td>
+<td>Lecture</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Remboursement oui/non + délai</td>
+<td>Écriture (négo gérant)</td>
+<td>Lecture</td>
+<td>Lecture</td>
+<td>Subit le texte</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Voir avances accumulées</td>
+<td>Oui</td>
+<td>Oui (ses terrains)</td>
+<td><strong>Oui, en continu</strong></td>
+<td>—</td>
+<td>Oui</td>
+</tr>
+<tr>
+<td>Bouton Retirer</td>
+<td>Peut traiter la file</td>
+<td>Non</td>
+<td>Oui si mode <code>retrait</code></td>
+<td>—</td>
+<td>Reçoit WhatsApp + coche Envoyé</td>
+</tr>
+<tr>
+<td>Reversement auto PayTech</td>
+<td>Relance / incident</td>
+<td>—</td>
+<td>Reçoit</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Payer l’avance + frais payin</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>Oui</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Encaisser 35 000 sur place</td>
+<td>—</td>
+<td>—</td>
+<td>Oui</td>
+<td>Paie</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="16-phasage">16. Phasage</h2>
+<p><strong>Phase 0 — Vérité des chiffres</strong><br />
+Ledger : fenêtre de remboursement, pas « déjà versé ». Wording honnête.</p>
+<p><strong>Phase 1 — Contrat superadmin</strong><br />
+Les 4 blocs. Le moteur <strong>lit</strong> déjà avance / commission / délai / mode / frais / numéros (même si le payout réel n’est pas branché). Preview 40 000. Gérant voit le solde selon la <strong>bonne formule</strong>.</p>
+<p><strong>Phase 2 — Mode <code>retrait</code></strong><br />
+Bouton → WhatsApp dév → case « Envoyé » superadmin. 0 frais. File demandes.</p>
+<p><strong>Phase 3 — Mode <code>auto</code></strong><br />
+Ordre PayTech, politique de frais (dont partage 1/1), historique, relance.</p>
+<p><strong>Phase 4 — Rapprochement</strong><br />
+Équation d’or + export.</p>
+<p>Ne pas activer l’auto tant que PayTech n’est pas autorisé à <strong>sortir</strong> de l’argent et qu’un canal gérant n’est pas <code>verifie</code>.</p>
+<hr />
+<h2 id="17-critères-dacceptation">17. Critères d’acceptation</h2>
+<ol>
+<li>Superadmin enregistre Wave <strong>et</strong> OM, case « = WhatsApp » préremplit les deux. Le flow paiement relit ces champs, rien n’est en dur.</li>
+<li>Terrain « pas de remboursement » → dû <code>payable</code> dès la confirmation ; pas d’attente QR.</li>
+<li>Terrain « remboursement 24 h » + annulation à 3 h → refund joueur, dû gérant = 0, aucun reversement.</li>
+<li>Même terrain, pas d’annulation, 24 h plus tard → dû <code>payable</code>.</li>
+<li>Mode <code>auto</code> + partage 1/1 + avance 5 000 + com 10 % → gérant <strong>4 455</strong>, plateforme absorbe 45, ordre vers le <strong>numéro du gérant</strong>.</li>
+<li>Mode <code>retrait</code> + mêmes montants → solde gérant <strong>4 500</strong> ; clic Retirer → WhatsApp dév avec Wave + OM ; <strong>aucun</strong> frais déduit ; « Envoyé » remet le solde à 0.</li>
+<li>Gérant voit en continu la bonne formule (auto vs retrait).</li>
+<li>Frais payin : uniquement au checkout joueur. Jamais déduits du dû gérant.</li>
+<li>Propriétaire : voit le mode qu’il a négocié, ne reçoit rien, n’édite rien.</li>
+<li>Sans numéro vérifié : joueur paie, dû s’accumule, pas d’auto ni de retrait abouti.</li>
+<li>Changement de gérant : prochains reversements vers les <strong>nouveaux</strong> Wave/OM (re-vérifiés). Dû du terrain non perdu.</li>
+<li>Un seul reversement réussi par réservation (auto <strong>ou</strong> manuel).</li>
+</ol>
+<hr />
+<h2 id="18-écrans-superadmin">18. Écrans superadmin</h2>
+<ol>
+<li><strong>Liste terrains</strong> : <code>Com. 10 %</code> · <code>Avance 12,5 %</code> · <code>Rembours. non</code> ou <code>24 h</code> · <code>Mode auto 1+1</code> / <code>Retrait 0 frais</code> · <code>Wave+OM vérifiés</code> · dû.</li>
+<li><strong>Fiche → Contrat paiement</strong> : 4 blocs + preview 40 000 (les deux formules).</li>
+<li><strong>Caisse</strong> : fenêtre / payable auto / <strong>file retraits dév</strong>.</li>
+<li><strong>Rapprochement</strong> + frais payout.</li>
+<li><strong>Revenus</strong> : commission + frais absorbés par la plateforme (pas les 40 000).</li>
+</ol>
+<hr />
+<h2 id="synthèse">Synthèse</h2>
+<p>Le superadmin est le <strong>contrat vivant</strong> du terrain (numéros gérant Wave+OM, remboursement souvent refusé + délai si oui, mode auto avec frais ou retrait manuel sans frais, partage éventuel 1 % / 1 %).</p>
+<p>Le moteur de paiement <strong>récupère ce contrat et l’applique</strong>.</p>
+<p>Le joueur paie l’avance (+ payin). Le gérant voit ses avances s’accumuler (nette selon le mode) et les reçoit sur <strong>son</strong> numéro. Le propriétaire a choisi le mode, il ne touche pas à l’argent.</p>
+<hr />
+<p><em>TerrainSN · CDC Paiements &amp; Superadmin · v1.2 · 18 août 2026</em></p></div>
+</div></body></html>
