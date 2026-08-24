@@ -1,10 +1,17 @@
-import { Calendar, Clock, ArrowLeft, ExternalLink, Star, MessageSquare } from "lucide-react";
+import { ArrowLeft, MessageSquare, Star } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { reservationsApi, avisApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import SkeletonMesReservations from "@/components/skeletons/SkeletonMesReservations";
+import SilentSyncDot from "@/components/SilentSyncDot";
+import PaymentLockGauge from "@/components/PaymentLockGauge";
+import ReservationDatesBlock from "@/components/ReservationDatesBlock";
+import { useSilentRefresh } from "@/hooks/useSilentRefresh";
+import { useMesReservations, joueurKeys } from "@/hooks/useJoueurData";
+import { writeSwrCache } from "@/lib/swrCache";
 import {
   Dialog,
   DialogContent,
@@ -111,10 +118,19 @@ function startOfToday(): Date {
 
 const Reservations = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<(typeof filterTabs)[number]["id"]>("Toutes");
-  const [reservations, setReservations] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const {
+    reservations,
+    isInitialLoading,
+    isRefetching,
+    error: queryError,
+    refetch,
+  } = useMesReservations();
+  const loading = isInitialLoading;
+  const loadError = queryError
+    ? (queryError as Error)?.message || "Impossible de charger vos réservations."
+    : null;
   const [cancelId, setCancelId] = useState<number | null>(null);
   const [cancelPolitique, setCancelPolitique] = useState<{
     titre?: string;
@@ -130,24 +146,22 @@ const Reservations = () => {
   const [reviewComment, setReviewComment] = useState("");
   const [submittingReview, setSubmittingReview] = useState(false);
 
-  useEffect(() => {
-    loadReservations();
-  }, []);
+  const patchReservationsCache = useCallback(
+    (updater: (list: any[]) => any[]) => {
+      const key = joueurKeys.mesReservations();
+      queryClient.setQueryData(key, (prev: any[] | undefined) => {
+        const base = Array.isArray(prev) ? prev : [];
+        const next = updater(base);
+        writeSwrCache(key, next);
+        return next;
+      });
+    },
+    [queryClient],
+  );
 
-  const loadReservations = async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const data = await reservationsApi.mes();
-      setReservations(Array.isArray(data) ? data : []);
-    } catch (err: any) {
-      setReservations([]);
-      setLoadError(err?.message || "Impossible de charger vos réservations.");
-      toast.error(err?.message || "Impossible de charger vos réservations.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  useSilentRefresh({
+    onRefresh: () => refetch(),
+  });
 
   const today = startOfToday();
   const filtered = reservations.filter((r) => {
@@ -165,15 +179,13 @@ const Reservations = () => {
     const isPastDay = day < today;
     const isClosed = ["joue", "match_joue", "annule", "annulee", "refusee"].includes(r.statut);
     if (activeTab === "Acceptées") {
-      // À venir : date >= aujourd'hui et pas clôturée (en_attente éphémère visible ici)
       return !isPastDay && !isClosed;
     }
     if (activeTab === "Passées") {
-      // Historique durable : passées / annulées / jouées (pas les en_attente)
       return (isPastDay || isClosed) && r.statut !== "en_attente";
     }
-    // Toutes = historique durable (pas les paiements en cours)
-    return r.statut !== "en_attente";
+    // Toutes : historique + paiements en cours (jauge visible)
+    return true;
   });
 
   const openCancel = async (reservation: any) => {
@@ -204,7 +216,9 @@ const Reservations = () => {
         rembourse?: boolean;
         politique?: { titre?: string; type_annulation?: string };
       };
-      setReservations((prev) => prev.map((r) => (r.id === id ? { ...r, statut: "annule" } : r)));
+      patchReservationsCache((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, statut: "annule" } : r)),
+      );
       closeCancel();
       toast.success(
         result?.rembourse || result?.politique?.type_annulation === "avec_remboursement"
@@ -253,8 +267,21 @@ const Reservations = () => {
     setReviewComment("");
   };
 
+  const onLockExpired = useCallback(
+    (id: number) => {
+      patchReservationsCache((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, statut: "expire", _liberating: true } : r)),
+      );
+      window.setTimeout(() => {
+        patchReservationsCache((prev) => prev.filter((r) => r.id !== id));
+      }, 900);
+    },
+    [patchReservationsCache],
+  );
+
   return (
     <div className="page-container">
+      <SilentSyncDot active={isRefetching && reservations.length > 0} label="Synchronisation réservations" />
       <div className="flex items-center gap-3 responsive-padding py-4">
         <button
           type="button"
@@ -295,7 +322,7 @@ const Reservations = () => {
         ) : loadError ? (
           <div className="text-center py-14 col-span-full space-y-3">
             <p className="text-[var(--color-text-secondary)] text-sm">{loadError}</p>
-            <Button type="button" variant="outline" onClick={loadReservations}>
+            <Button type="button" variant="outline" onClick={() => void refetch()}>
               Réessayer
             </Button>
           </div>
@@ -331,8 +358,8 @@ const Reservations = () => {
                 return (
                   <div
                     key={r.id}
-                    className={`relative bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] border-l-4 ${status.border} shadow-[var(--shadow-sm)] overflow-hidden ${
-                      isPendingEphemere ? "opacity-95" : ""
+                    className={`relative bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] border-l-4 ${status.border} shadow-[var(--shadow-sm)] overflow-hidden transition-all duration-700 ${
+                      r._liberating ? "opacity-0 scale-95 -translate-y-1" : isPendingEphemere ? "opacity-95" : ""
                     }`}
                   >
                     <div className="p-4">
@@ -350,9 +377,13 @@ const Reservations = () => {
                         </span>
                       </div>
                       {isPendingEphemere ? (
-                        <p className="mt-2 text-[11px] text-amber-800 bg-amber-50 rounded-lg px-2 py-1.5">
-                          En attente de paiement — disparaît si le délai est dépassé (créneau libéré).
-                        </p>
+                        <PaymentLockGauge
+                          className="mt-3"
+                          expiresAt={Number(r.verrou_expire_at)}
+                          startedAt={r.created_at}
+                          durationMin={15}
+                          onExpired={() => onLockExpired(r.id)}
+                        />
                       ) : null}
                       {["annule", "annulee"].includes(r.statut) ? (
                         <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
@@ -370,9 +401,12 @@ const Reservations = () => {
                     </div>
 
                     <div className="p-4 space-y-3">
-                      <p className="text-[15px] font-semibold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
-                        {r.date} · {r.heure_debut}–{r.heure_fin}
-                      </p>
+                      <ReservationDatesBlock
+                        createdAt={r.created_at}
+                        date={r.date}
+                        heureDebut={r.heure_debut}
+                        heureFin={r.heure_fin}
+                      />
                       {r.code_reservation && (
                         <p className="text-[12px] text-[var(--color-text-muted)]">Code {r.code_reservation}</p>
                       )}

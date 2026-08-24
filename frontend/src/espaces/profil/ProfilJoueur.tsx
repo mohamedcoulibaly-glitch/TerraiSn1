@@ -20,6 +20,7 @@ export default function ProfilJoueur() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let mounted = true;
@@ -51,7 +52,7 @@ export default function ProfilJoueur() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -69,7 +70,16 @@ export default function ProfilJoueur() {
   };
 
   if (loading) return <div className="joueur-app"><SkeletonProfil /></div>;
-  if (error || !data) return <div className="joueur-app"><ProfileError message={error || "Profil joueur introuvable"} /></div>;
+  if (error || !data) {
+    return (
+      <div className="joueur-app">
+        <ProfileError
+          message={error || "Profil joueur introuvable"}
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
+      </div>
+    );
+  }
 
   return (
     <ProfileShell account={data.account} roleLabel="Joueur" className="joueur-app">

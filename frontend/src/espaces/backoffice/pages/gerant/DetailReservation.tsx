@@ -5,12 +5,12 @@ import { gerantApi, reservationsApi } from "@/lib/api";
 import ScannerModal from "@/espaces/backoffice/components/ScannerModal";
 import ValidationManuelleModal from "@/espaces/backoffice/components/ValidationManuelleModal";
 import LierJoueurModal from "@/espaces/backoffice/modules/crm/ui/LierJoueurModal";
+import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
 import { toast } from "sonner";
 import { estDansLaFenetreCheckIn, calculerFenetreCheckIn } from "@/lib/checkInFenetre";
 import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
-import { confirmWhatsappAction, WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
-import { featureEnabled } from "@/lib/terrainFeatures";
+import { WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
 
 type PolitiqueRemboursement = {
   eligible?: boolean;
@@ -131,14 +131,11 @@ export default function DetailReservation() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [lierOpen, setLierOpen] = useState(false);
-  const [resending, setResending] = useState(false);
   const [sendingQr, setSendingQr] = useState(false);
   const [encaissing, setEncaissing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmEncaisser, setConfirmEncaisser] = useState(false);
-  const [confirmManualOpen, setConfirmManualOpen] = useState(false);
-  const [confirmingManual, setConfirmingManual] = useState(false);
   const [methode, setMethode] = useState<"especes" | "wave" | "orange_money">("especes");
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
   const { down: waDown } = useWhatsappInfra(true);
@@ -239,9 +236,6 @@ export default function DetailReservation() {
     (typeof reservation.scannable_now === "boolean" ? reservation.scannable_now : true);
   const bloqueParPriorite = canValidateEntree && !canScan;
   const canResendPaymentLink = reservation.statut === "en_attente";
-  const canConfirmManual =
-    reservation.statut === "en_attente" &&
-    featureEnabled(features, "confirmations_manuelles", true);
   const canResendQr =
     Boolean(reservation.code_reservation) &&
     ["confirme", "acceptee"].includes(reservation.statut) &&
@@ -252,7 +246,8 @@ export default function DetailReservation() {
     reste > 0 &&
     ["confirme", "acceptee", "match_joue", "joue"].includes(reservation.statut) &&
     (dejaScanne || dansFenetre);
-  const canAnnuler = ["en_attente", "confirme", "acceptee"].includes(reservation.statut);
+  /** Annulation hors flux « en_attente » (déjà gérée par EnAttentePaiementActions) */
+  const canAnnulerConfirmee = ["confirme", "acceptee"].includes(reservation.statut);
 
   const fenetreLabel = (() => {
     const debut = reservation.fenetre_debut ? new Date(reservation.fenetre_debut) : null;
@@ -269,40 +264,6 @@ export default function DetailReservation() {
     }
     return "1h avant le début → 2h après la fin (+ tolérance retard)";
   })();
-
-  const handleResendPaymentLink = async () => {
-    if (waDown) {
-      toast.error(WHATSAPP_INFRA_MESSAGE);
-      if (!confirmWhatsappAction(true)) return;
-    }
-    setResending(true);
-    try {
-      await reservationsApi.renvoyerLienWhatsApp(reservation.id);
-      toast.success("Lien de paiement renvoyé par WhatsApp");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : WHATSAPP_INFRA_MESSAGE);
-    } finally {
-      setResending(false);
-    }
-  };
-
-  const handleConfirmManual = async () => {
-    if (!reservation) return;
-    setConfirmingManual(true);
-    try {
-      await gerantApi.confirmerManuellement(
-        reservation.id,
-        "Avance reçue hors PayTech (confirmation manuelle depuis la fiche)",
-      );
-      toast.success("Réservation confirmée — le joueur va recevoir le QR");
-      setConfirmManualOpen(false);
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Confirmation manuelle impossible");
-    } finally {
-      setConfirmingManual(false);
-    }
-  };
 
   const handleResendQr = async () => {
     if (waDown) {
@@ -548,33 +509,12 @@ export default function DetailReservation() {
       )}
 
       {canResendPaymentLink && (
-        <button
-          type="button"
-          onClick={handleResendPaymentLink}
-          disabled={resending || confirmingManual}
-          className="w-full min-h-[52px] rounded-[var(--radius-md)] bg-[#25D366] text-white text-sm font-medium inline-flex items-center justify-center gap-2 disabled:opacity-60"
-        >
-          <MessageCircle className="w-5 h-5" />
-          {resending ? "Envoi en cours..." : "Renvoyer le lien WhatsApp"}
-        </button>
-      )}
-
-      {canConfirmManual && (
-        <div className="space-y-2">
-          <button
-            type="button"
-            onClick={() => setConfirmManualOpen(true)}
-            disabled={confirmingManual}
-            className="w-full min-h-[52px] rounded-[var(--radius-md)] text-white text-sm font-semibold disabled:opacity-60"
-            style={{ background: "var(--g-warning, #d97706)" }}
-          >
-            {confirmingManual ? "Confirmation…" : "Confirmer manuellement (avance déjà reçue)"}
-          </button>
-          <p className="text-xs text-center" style={{ color: "var(--color-text-muted)" }}>
-            À utiliser seulement si le joueur a déjà payé l&apos;avance (espèces, Wave, OM…).
-            La commission TerrainSN sera mise en dette.
-          </p>
-        </div>
+        <EnAttentePaiementActions
+          reservationId={reservation.id}
+          montantAvance={reservation.montant_avance}
+          features={features}
+          onDone={() => void load()}
+        />
       )}
 
       {canResendQr && (
@@ -617,7 +557,7 @@ export default function DetailReservation() {
         </>
       )}
 
-      {canAnnuler && (
+      {canAnnulerConfirmee && (
         <button
           type="button"
           onClick={() => void openCancelConfirm()}
@@ -712,23 +652,6 @@ export default function DetailReservation() {
         variante="warning"
         onAnnuler={() => setConfirmEncaisser(false)}
         onConfirmer={() => void handleEncaisser()}
-      />
-
-      <ConfirmationModal
-        ouvert={confirmManualOpen}
-        titre="Confirmer cette réservation manuellement ?"
-        texte={[
-          "Tu confirmes que l’avance a déjà été reçue hors PayTech (espèces, Wave, Orange Money…).",
-          `Avance attendue : ${formatFcfa(reservation.montant_avance)}.`,
-          "Le créneau sera verrouillé, le joueur recevra son QR, et la commission TerrainSN sera ajoutée à ta dette du mois.",
-        ].join("\n\n")}
-        labelAnnuler="Annuler"
-        labelConfirmer={confirmingManual ? "Confirmation…" : "Oui, confirmer"}
-        variante="warning"
-        onAnnuler={() => {
-          if (!confirmingManual) setConfirmManualOpen(false);
-        }}
-        onConfirmer={() => void handleConfirmManual()}
       />
     </div>
   );

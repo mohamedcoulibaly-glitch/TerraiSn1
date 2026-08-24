@@ -1,9 +1,10 @@
 import { calculerMontantAvance } from "@/lib/avance";
 import SkeletonFicheTerrain from "@/components/skeletons/SkeletonFicheTerrain";
+import SilentSyncDot from "@/components/SilentSyncDot";
 import CommoditesSection from "@/components/CommoditesSection";
-import { ArrowLeft, MapPin, Star, Clock, Heart, Info, MessageCircle, X, ChevronDown, Navigation } from "lucide-react";
+import { ArrowLeft, MapPin, Star, Clock, Heart, Info, MessageCircle, X, ChevronDown, Navigation, Phone } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { terrainsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
@@ -12,12 +13,33 @@ import MapTerrain from "@/espaces/joueur/components/MapTerrain";
 import { favKey } from "@/espaces/joueur/components/FieldCard";
 import { useTerrainEvents } from "@/hooks/useTerrainEvents";
 import { featureEnabled } from "@/lib/terrainFeatures";
+import { useSilentRefresh } from "@/hooks/useSilentRefresh";
+import { useTerrainFullDetails } from "@/hooks/useJoueurData";
+import { localYmd } from "@/lib/localDate";
 
 function toLocalISO(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/** Masque les créneaux dont l'heure de début est déjà passée (aujourd'hui). */
+function filterCreneauxHorairesPasses<T extends { heure?: string; heure_debut?: string; date?: string }>(
+  slots: T[],
+  dateStr: string | undefined,
+): T[] {
+  if (!dateStr || !Array.isArray(slots) || slots.length === 0) return slots || [];
+  const today = localYmd();
+  if (dateStr !== today) return slots;
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  return slots.filter((s) => {
+    const debut = String(s.heure_debut || s.heure || "").slice(0, 5);
+    const [h, m] = debut.split(":").map(Number);
+    if (!Number.isFinite(h)) return true;
+    return h * 60 + (m || 0) > nowMin;
+  });
 }
 
 function formatHourLabel(h: string) {
@@ -49,17 +71,13 @@ const FieldDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
-  const [terrain, setTerrain] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(1);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [selectedDuration, setSelectedDuration] = useState(1);
   const [fieldFormat, setFieldFormat] = useState<string>("moitie");
   const [formatsOpts, setFormatsOpts] = useState<FormatOption[]>([]);
   const [dureesOpts, setDureesOpts] = useState<DureeOption[]>([...DUREES_FALLBACK]);
-  const [creneaux, setCreneaux] = useState<any[]>([]);
-  const [loadingSlots, setLoadingSlots] = useState(false);
-  const [fermeMotif, setFermeMotif] = useState<string | null>(null);
+  const [optionsBootstrapped, setOptionsBootstrapped] = useState(false);
   const [devis, setDevis] = useState<{
     montant?: number;
     montant_avance?: number;
@@ -98,9 +116,90 @@ const FieldDetails = () => {
     };
   }, [galleryOpen]);
 
+  const selectedIsoDate = dates[selectedDate]?.isoDate;
+  const dureeMinutes = Math.round(selectedDuration * 60);
+
+  const {
+    terrain,
+    planning,
+    isInitialLoading,
+    isRefetching,
+    isFetching,
+    refetch,
+  } = useTerrainFullDetails(id, {
+    date: selectedIsoDate,
+    duree_minutes: dureeMinutes,
+  });
+
+  // Évite d'afficher les créneaux d'une autre date (placeholder SWR pendant le fetch)
+  const planningFresh =
+    planning && String(planning.date || "").slice(0, 10) === selectedIsoDate
+      ? planning
+      : null;
+  const creneaux = filterCreneauxHorairesPasses(
+    planningFresh?.creneaux || [],
+    selectedIsoDate,
+  );
+  const fermeMotif = planningFresh?.ferme
+    ? planningFresh.motif || "Terrain temporairement fermé"
+    : null;
+  const enLigneIndispo = Boolean(
+    terrain?.en_ligne_indisponible ?? planningFresh?.en_ligne_indisponible,
+  );
+  const bookingMessage =
+    terrain?.booking_message || planningFresh?.booking_message || null;
+  const gerantTelHref =
+    terrain?.gerant_tel_href ||
+    planningFresh?.gerant_tel_href ||
+    (terrain?.gerant_telephone
+      ? `tel:${String(terrain.gerant_telephone).replace(/[^\d+]/g, "")}`
+      : null);
+  const loadingSlots = Boolean(isFetching && !planningFresh);
+
   useEffect(() => {
-    loadTerrain();
-  }, [id]);
+    if (!terrain) return;
+    const formats: FormatOption[] =
+      Array.isArray(terrain.formats) && terrain.formats.length
+        ? terrain.formats.map((f: any) => ({
+            cle: String(f.cle),
+            label: String(f.label || f.cle),
+            prix_heure: Number(f.prix_heure || 0),
+            map_grille: f.map_grille || null,
+          }))
+        : [
+            {
+              cle: "moitie",
+              label: "Demi-terrain",
+              prix_heure: Number(terrain.prix_moitie || 0),
+              map_grille: "demi",
+            },
+            {
+              cle: "entier",
+              label: "Terrain entier",
+              prix_heure: Number(terrain.prix_entier || terrain.prix_heure || 0),
+              map_grille: "entier",
+            },
+          ];
+    setFormatsOpts(formats);
+
+    const durees: DureeOption[] =
+      Array.isArray(terrain.durees) && terrain.durees.length
+        ? terrain.durees.map((d: any) => ({
+            minutes: Number(d.minutes),
+            label: String(d.label || `${d.minutes} min`),
+            hours: Number(d.minutes) / 60,
+          }))
+        : [...DUREES_FALLBACK];
+    setDureesOpts(durees);
+
+    if (!optionsBootstrapped) {
+      const preferred = formats.find((f) => f.cle === "moitie") || formats[0];
+      if (preferred) setFieldFormat(preferred.cle);
+      const preferredD = durees.find((d) => d.minutes === 60) || durees[0];
+      if (preferredD) setSelectedDuration(preferredD.hours);
+      setOptionsBootstrapped(true);
+    }
+  }, [terrain, optionsBootstrapped]);
 
   useEffect(() => {
     if (!terrain?.id) return;
@@ -112,30 +211,19 @@ const FieldDetails = () => {
   }, [terrain?.id]);
 
   useEffect(() => {
-    if (terrain) loadCreneaux(dates[selectedDate].isoDate);
-  }, [selectedDate, terrain, selectedDuration]);
+    setSelectedSlot((prev) => {
+      if (!prev) return prev;
+      const stillOk = creneaux.some(
+        (s: any) => (s.heure || s.heure_debut) === prev && s.disponible,
+      );
+      return stillOk ? prev : null;
+    });
+  }, [creneaux]);
 
-  const selectedIsoDate = dates[selectedDate]?.isoDate;
-
-  const reloadPlanningQuiet = useCallback(() => {
-    if (!terrain || !selectedIsoDate) return;
-    const dureeMin = Math.round(selectedDuration * 60);
-    terrainsApi
-      .getCreneaux(id!, selectedIsoDate, { duree_minutes: dureeMin })
-      .then((data: any) => {
-        const slots = data.creneaux || [];
-        setCreneaux(slots);
-        setFermeMotif(data.ferme ? data.motif || "Terrain temporairement fermé" : null);
-        setSelectedSlot((prev) => {
-          if (!prev) return prev;
-          const stillOk = slots.some((s: any) => (s.heure || s.heure_debut) === prev && s.disponible);
-          return stillOk ? prev : null;
-        });
-      })
-      .catch(() => {
-        /* ignore soft refresh errors */
-      });
-  }, [terrain, selectedIsoDate, id, selectedDuration]);
+  useSilentRefresh({
+    enabled: Boolean(terrain?.id),
+    onRefresh: () => refetch(),
+  });
 
   useTerrainEvents(terrain?.id || id, (ev) => {
     if (
@@ -146,10 +234,7 @@ const FieldDetails = () => {
       ev.type === "statut" ||
       ev.type === "photos"
     ) {
-      reloadPlanningQuiet();
-      if (ev.type === "statut" || ev.type === "photos") {
-        loadTerrain();
-      }
+      void refetch();
     }
   });
 
@@ -209,64 +294,6 @@ const FieldDetails = () => {
     setCarouselPaused(true);
     if (pauseTimerRef.current) clearTimeout(pauseTimerRef.current);
     pauseTimerRef.current = setTimeout(() => setCarouselPaused(false), 6000);
-  };
-
-  const loadTerrain = async () => {
-    try {
-      const data: any = await terrainsApi.get(id!);
-      setTerrain(data);
-      const formats: FormatOption[] = Array.isArray(data?.formats) && data.formats.length
-        ? data.formats.map((f: any) => ({
-            cle: String(f.cle),
-            label: String(f.label || f.cle),
-            prix_heure: Number(f.prix_heure || 0),
-            map_grille: f.map_grille || null,
-          }))
-        : [
-            { cle: "moitie", label: "Demi-terrain", prix_heure: Number(data?.prix_moitie || 0), map_grille: "demi" },
-            {
-              cle: "entier",
-              label: "Terrain entier",
-              prix_heure: Number(data?.prix_entier || data?.prix_heure || 0),
-              map_grille: "entier",
-            },
-          ];
-      setFormatsOpts(formats);
-      const preferred = formats.find((f) => f.cle === "moitie") || formats[0];
-      if (preferred) setFieldFormat(preferred.cle);
-
-      const durees: DureeOption[] =
-        Array.isArray(data?.durees) && data.durees.length
-          ? data.durees.map((d: any) => ({
-              minutes: Number(d.minutes),
-              label: String(d.label || `${d.minutes} min`),
-              hours: Number(d.minutes) / 60,
-            }))
-          : [...DUREES_FALLBACK];
-      setDureesOpts(durees);
-      const preferredD = durees.find((d) => d.minutes === 60) || durees[0];
-      if (preferredD) setSelectedDuration(preferredD.hours);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadCreneaux = async (date: string) => {
-    setLoadingSlots(true);
-    try {
-      const dureeMin = Math.round(selectedDuration * 60);
-      const data: any = await terrainsApi.getCreneaux(id!, date, { duree_minutes: dureeMin });
-      setCreneaux(data.creneaux || []);
-      setFermeMotif(data.ferme ? data.motif || "Terrain temporairement fermé" : null);
-    } catch (err) {
-      console.error(err);
-      setCreneaux([]);
-      setFermeMotif(null);
-    } finally {
-      setLoadingSlots(false);
-    }
   };
 
   const selectedSlotRow = creneaux.find((s) => (s.heure || s.heure_debut) === selectedSlot);
@@ -349,6 +376,10 @@ const FieldDetails = () => {
       toast.error("Réservations en ligne désactivées pour ce terrain");
       return;
     }
+    if (enLigneIndispo) {
+      toast.error(bookingMessage || "Réservation en ligne indisponible — appelez le gérant");
+      return;
+    }
     const path = paymentPath();
     if (!requireLoginThen(path)) return;
     navigate(path);
@@ -377,7 +408,7 @@ const FieldDetails = () => {
     return `https://wa.me/${numero}?text=${message}`;
   };
 
-  if (loading) return <SkeletonFicheTerrain />;
+  if (isInitialLoading) return <SkeletonFicheTerrain />;
 
   if (!terrain) {
     return (
@@ -394,7 +425,14 @@ const FieldDetails = () => {
   const hasCoords =
     Number.isFinite(Number(terrain.latitude)) && Number.isFinite(Number(terrain.longitude));
   const showMap = hasCoords && featureEnabled(terrain.features, "geolocalisation", true);
-  const canBookOnline = featureEnabled(terrain.features, "reservations_en_ligne", true);
+  const canBrowseSlots = featureEnabled(terrain.features, "reservations_en_ligne", true);
+  const canBookOnline = canBrowseSlots && !enLigneIndispo;
+  const gerantCallHref =
+    gerantTelHref ||
+    (terrain.gerant_tel_href as string | null) ||
+    (terrain.employe?.telephone || terrain.employe?.whatsapp_number
+      ? `tel:${String(terrain.employe.telephone || terrain.employe.whatsapp_number).replace(/[^\d+]/g, "")}`
+      : null);
   const descriptionText = String(terrain.description || "").trim();
   const showDescription =
     descriptionText &&
@@ -416,7 +454,9 @@ const FieldDetails = () => {
       className={`min-h-screen bg-[var(--bg)] page-enter transition-[padding] duration-300 ease-in-out ${
         hasSlot ? "pb-[140px]" : "pb-[120px]"
       }`}
-    >      {/* ═══ 1. HEADER VISUEL ═══ */}
+    >
+      <SilentSyncDot active={isRefetching} label="Mise à jour terrain" />
+      {/* ═══ 1. HEADER VISUEL ═══ */}
       <header>
         <div className="relative h-[260px] sm:h-[300px]">
           <div
@@ -562,14 +602,33 @@ const FieldDetails = () => {
           <h2 className="text-base font-bold text-[var(--color-text-primary)] mb-4" style={{ fontFamily: "var(--font-display)" }}>
             Réserver ce terrain
           </h2>
-          {!canBookOnline ? (
+          {enLigneIndispo ? (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950 space-y-3">
+              <p>
+                {bookingMessage ||
+                  "Réservation en ligne temporairement indisponible. Tu peux consulter les créneaux libres, puis appeler le gérant pour réserver."}
+              </p>
+              {gerantCallHref ? (
+                <a
+                  href={gerantCallHref}
+                  className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 rounded-xl bg-[var(--primary)] text-white text-sm font-semibold"
+                >
+                  <Phone className="w-4 h-4" />
+                  Appeler le gérant
+                  {terrain.gerant_nom ? ` (${terrain.gerant_nom})` : ""}
+                </a>
+              ) : (
+                <p className="text-xs text-amber-800">Numéro du gérant indisponible pour le moment.</p>
+              )}
+            </div>
+          ) : !featureEnabled(terrain.features, "reservations_en_ligne", true) ? (
             <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               Les réservations en ligne sont désactivées pour ce terrain. Contacte le gérant pour réserver.
             </p>
           ) : null}
 
           {/* Étape A — Date */}
-          <div className={`pb-4 border-b border-gray-100 dark:border-[var(--border)] ${!canBookOnline ? "opacity-50 pointer-events-none" : ""}`}>
+          <div className={`pb-4 border-b border-gray-100 dark:border-[var(--border)] ${!canBrowseSlots ? "opacity-50 pointer-events-none" : ""}`}>
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
               1 · Date
             </p>
@@ -598,7 +657,7 @@ const FieldDetails = () => {
           </div>
 
           {/* Étape B — Format & Durée */}
-          <div className={`py-4 border-b border-gray-100 dark:border-[var(--border)] space-y-4 ${!canBookOnline ? "opacity-50 pointer-events-none" : ""}`}>
+          <div className={`py-4 border-b border-gray-100 dark:border-[var(--border)] space-y-4 ${!canBrowseSlots ? "opacity-50 pointer-events-none" : ""}`}>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
                 2 · Format
@@ -669,7 +728,7 @@ const FieldDetails = () => {
           </div>
 
           {/* Étape C — Créneaux */}
-          <div ref={slotsSectionRef} id="selection-creneaux" className={`pt-4 scroll-mt-28 ${!canBookOnline ? "opacity-50 pointer-events-none" : ""}`}>
+          <div ref={slotsSectionRef} id="selection-creneaux" className={`pt-4 scroll-mt-28 ${!canBrowseSlots ? "opacity-50 pointer-events-none" : ""}`}>
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
               3 · Créneaux disponibles
             </p>
@@ -693,17 +752,14 @@ const FieldDetails = () => {
                   {creneaux.map((slot) => {
                     const heure = slot.heure || slot.heure_debut;
                     const selected = selectedSlot === heure;
-                    const available = Boolean(slot.disponible) && !slot.passe;
-                    const passe = Boolean(slot.passe);
+                    const available = Boolean(slot.disponible);
                     const fin = slot.heure_fin || getEndTime(heure, selectedDuration);
                     const long = (slot.duree_minutes || selectedDuration * 60) > 60;
                     const title =
                       slot.raison_indisponibilite ||
-                      (passe
-                        ? "Créneau dépassé"
-                        : available
-                          ? `${formatHourLabel(heure)} – ${formatHourLabel(fin)}`
-                          : "Indisponible");
+                      (available
+                        ? `${formatHourLabel(heure)} – ${formatHourLabel(fin)}`
+                        : "Indisponible");
                     return (
                       <button
                         key={`${heure}-${fin}`}
@@ -714,13 +770,11 @@ const FieldDetails = () => {
                         className={`min-h-[52px] rounded-xl text-sm font-semibold transition-all duration-200 border ${
                           long ? "col-span-2" : ""
                         } ${
-                          passe
-                            ? "bg-gray-50 dark:bg-[var(--surface-3)] text-gray-300 cursor-not-allowed border-transparent opacity-60"
-                            : !available
-                              ? "bg-gray-100 dark:bg-[var(--surface-3)] text-gray-400 line-through cursor-not-allowed border-transparent"
-                              : selected
-                                ? "bg-[var(--primary)] text-white border-[var(--primary)] shadow-md scale-[1.03]"
-                                : "bg-[var(--primary-glow,rgba(30,64,175,0.08))] text-[var(--primary)] border-[var(--primary)]"
+                          !available
+                            ? "bg-gray-100 dark:bg-[var(--surface-3)] text-gray-400 line-through cursor-not-allowed border-transparent"
+                            : selected
+                              ? "bg-[var(--primary)] text-white border-[var(--primary)] shadow-md scale-[1.03]"
+                              : "bg-[var(--primary-glow,rgba(30,64,175,0.08))] text-[var(--primary)] border-[var(--primary)]"
                         }`}
                       >
                         <span className="block">
@@ -741,12 +795,10 @@ const FieldDetails = () => {
                             }`}
                           >
                             {!available
-                              ? passe
-                                ? "Passé"
-                                : slot.raison_indisponibilite?.includes("chevauche") ||
-                                    slot.raison_indisponibilite?.includes("match")
-                                  ? "Non disponible"
-                                  : "Pris"
+                              ? slot.raison_indisponibilite?.includes("chevauche") ||
+                                slot.raison_indisponibilite?.includes("match")
+                                ? "Non disponible"
+                                : "Pris"
                               : selected
                                 ? "✓"
                                 : null}
@@ -757,7 +809,7 @@ const FieldDetails = () => {
                   })}
                 </div>
                 <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
-                  Vert = disponible · Gris = indisponible · Atténué = passé
+                  Vert = disponible · Gris = indisponible
                 </p>
               </>
             )}
@@ -797,7 +849,7 @@ const FieldDetails = () => {
             )}
           </ul>
 
-          {terrain.employe?.whatsapp_number && (
+          {terrain.employe?.whatsapp_number && !enLigneIndispo && (
             <a
               href={getWhatsAppLink() || "#"}
               target="_blank"
@@ -818,6 +870,15 @@ const FieldDetails = () => {
               Contacter le gérant
             </a>
           )}
+          {enLigneIndispo && gerantCallHref ? (
+            <a
+              href={gerantCallHref}
+              className="mt-4 flex items-center justify-center gap-2 w-full min-h-[44px] rounded-xl text-sm font-semibold bg-[var(--primary)] text-white"
+            >
+              <Phone className="w-4 h-4" />
+              Appeler le gérant
+            </a>
+          ) : null}
         </section>
 
         {/* ═══ 5. AVIS CLIENTS (accordéon) ═══ */}
@@ -875,8 +936,8 @@ const FieldDetails = () => {
         )}
       </div>
 
-      {/* Barre uniquement si créneau sélectionné — sinon non rendue */}
-      {hasSlot && stickyRecap && canBookOnline && (
+      {/* Barre sticky : réserver en ligne OU appeler si WA gérant down */}
+      {hasSlot && stickyRecap && canBrowseSlots && (
         <div
           className="fixed inset-x-0 bottom-16 md:bottom-0 z-50 px-4 py-3 animate-in slide-in-from-bottom-4 fade-in duration-300"
           style={{
@@ -897,28 +958,26 @@ const FieldDetails = () => {
               <X className="w-4 h-4" />
             </button>
             <div className="min-w-0 flex-1">
-              <p
-                className="text-[15px] sm:text-[16px] font-bold text-[var(--color-text-primary)] leading-snug truncate"
-                style={{ fontFamily: "var(--font-display)" }}
-              >
-                {stickyRecap.primary}
-              </p>
-              <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5 truncate">
-                {stickyRecap.secondary}
-              </p>
-              {stickyRecap.longNote ? (
-                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 line-clamp-2">
-                  {stickyRecap.longNote}
-                </p>
-              ) : null}
+              <p className="text-sm font-bold text-[var(--color-text-primary)] truncate">{stickyRecap.primary}</p>
+              <p className="text-[11px] text-[var(--color-text-muted)] truncate">{stickyRecap.secondary}</p>
             </div>
-            <button
-              type="button"
-              onClick={goToPayment}
-              className="shrink-0 h-12 px-4 rounded-xl text-sm font-bold bg-[var(--primary)] text-white shadow-[0_4px_16px_rgba(30,64,175,0.35)] hover:bg-[var(--primary-light)] active:scale-[0.98] transition-all"
-            >
-              Valider la réservation
-            </button>
+            {canBookOnline ? (
+              <button
+                type="button"
+                onClick={goToPayment}
+                className="shrink-0 min-h-[48px] px-4 rounded-xl bg-[var(--primary)] text-white text-sm font-semibold"
+              >
+                Réserver
+              </button>
+            ) : gerantCallHref ? (
+              <a
+                href={gerantCallHref}
+                className="shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[48px] px-4 rounded-xl bg-[var(--primary)] text-white text-sm font-semibold"
+              >
+                <Phone className="w-4 h-4" />
+                Appeler
+              </a>
+            ) : null}
           </div>
         </div>
       )}

@@ -9,7 +9,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { gerantApi, profilApi } from "@/lib/api";
@@ -200,8 +200,19 @@ function isOpen(h: Horaire) {
 
 export default function ParametresGerant() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, logout } = useAuth();
-  const [section, setSection] = useState<SectionId>("hub");
+  const sectionFromUrl = searchParams.get("section");
+  const initialSection: SectionId =
+    sectionFromUrl === "whatsapp" ||
+    sectionFromUrl === "compte" ||
+    sectionFromUrl === "terrain" ||
+    sectionFromUrl === "horaires" ||
+    sectionFromUrl === "equipements" ||
+    sectionFromUrl === "photos"
+      ? sectionFromUrl
+      : "hub";
+  const [section, setSection] = useState<SectionId>(initialSection);
   const [horaires, setHoraires] = useState<Horaire[]>([]);
   const [selectedJour, setSelectedJour] = useState("lundi");
   const [terrain, setTerrain] = useState<{
@@ -228,6 +239,31 @@ export default function ParametresGerant() {
   const [grille, setGrille] = useState<GrilleValues>(emptyGrilleValues());
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [blockOpen, setBlockOpen] = useState(false);
+
+  useEffect(() => {
+    const s = searchParams.get("section");
+    if (
+      s === "whatsapp" ||
+      s === "compte" ||
+      s === "terrain" ||
+      s === "horaires" ||
+      s === "equipements" ||
+      s === "photos"
+    ) {
+      setSection(s);
+    }
+  }, [searchParams]);
+
+  const openSection = (id: SectionId) => {
+    setSection(id);
+    if (id === "hub") {
+      setSearchParams({}, { replace: true });
+    } else {
+      setSearchParams({ section: id }, { replace: true });
+    }
+  };
+
+  const backToHub = () => openSection("hub");
 
   useEffect(() => {
     let mounted = true;
@@ -340,8 +376,6 @@ export default function ParametresGerant() {
     );
   }
 
-  const backToHub = () => setSection("hub");
-
   if (section === "hub") {
     return (
       <div className="space-y-5 pb-6">
@@ -364,7 +398,7 @@ export default function ParametresGerant() {
               <button
                 key={card.id}
                 type="button"
-                onClick={() => setSection(card.id)}
+                onClick={() => openSection(card.id)}
                 className="text-left rounded-2xl p-4 min-h-[104px] flex items-center gap-4 transition-transform active:scale-[0.98]"
                 style={{
                   background: "var(--g-surface)",

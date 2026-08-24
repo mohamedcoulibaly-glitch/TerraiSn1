@@ -449,6 +449,10 @@ async function initSchema(poolOrClient) {
   await c.query('CREATE INDEX IF NOT EXISTS idx_reservations_creneau ON reservations(creneau_id)');
   await c.query('CREATE INDEX IF NOT EXISTS idx_reservations_statut ON reservations(statut)');
   await c.query('CREATE INDEX IF NOT EXISTS idx_reservations_terrain_date ON reservations(terrain_id, date)');
+  await c.query('CREATE INDEX IF NOT EXISTS idx_reservations_joueur ON reservations(joueur_id, created_at DESC)');
+  await c.query('CREATE INDEX IF NOT EXISTS idx_avis_terrain ON avis(terrain_id, created_at DESC)');
+  await c.query('CREATE INDEX IF NOT EXISTS idx_horaires_terrain ON horaires(terrain_id)');
+  await c.query('CREATE INDEX IF NOT EXISTS idx_employes_terrain_active ON employes(terrain_id, is_active)');
   await c.query('CREATE INDEX IF NOT EXISTS idx_creneaux_statut ON creneaux(statut)');
   // Migration 009 — durée variables (1 résa = 1 ligne creneaux)
   try {

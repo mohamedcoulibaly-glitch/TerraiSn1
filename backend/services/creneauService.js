@@ -45,9 +45,35 @@ function dureeMinutesOf(heureDebut, heureFin) {
   return fin - debut;
 }
 
+/**
+ * Règle produit (joueur) : un créneau dont l'heure de début est déjà passée
+ * n'est JAMAIS affiché — libre, réservé, abonnement, tournoi ou bloqué.
+ * Ne s'applique qu'à la date du jour (calendrier local serveur).
+ */
+function exclureCreneauxHorairesPasses(creneaux, dateStr, maintenant = new Date()) {
+  const list = Array.isArray(creneaux) ? creneaux : [];
+  const ymd = toYmd(dateStr);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return list;
+
+  const now = maintenant instanceof Date ? maintenant : new Date(maintenant);
+  const todayStr = toYmd(
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
+  );
+  if (ymd !== todayStr) return list;
+
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  return list.filter((c) => {
+    const debut = hhmm(c.heure_debut || c.heure);
+    if (!debut || !/^\d{2}:\d{2}$/.test(debut)) return true;
+    // Dès que l'heure de début est atteinte ou dépassée → masqué
+    return timeToMinutes(debut) > nowMinutes;
+  });
+}
+
 function formatDuree(minutes) {
   const m = Math.max(0, Number(minutes) || 0);
   if (m <= 0) return '0 min';
+
   if (m < 60) return `${m} min`;
   const h = Math.floor(m / 60);
   const rest = m % 60;
@@ -365,6 +391,8 @@ function getEtatCreneau(creneau, maintenant = new Date(), fenetre_retard_min = D
  */
 async function getDisponibilitesPourJoueur(database, terrain_id, date, options = {}) {
   const dureeDemandee = options.duree_minutes != null ? Number(options.duree_minutes) : null;
+  /** Gérant / admin : garder les heures passées (file, blocages). Joueur : les masquer. */
+  const inclurePasses = Boolean(options.inclure_passes);
   const dateStr = toYmd(date);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
     return { creneaux: [], ferme: false, horaire: null, message: 'Date invalide' };
@@ -534,7 +562,7 @@ async function getDisponibilitesPourJoueur(database, terrain_id, date, options =
   }
 
   return {
-    creneaux,
+    creneaux: inclurePasses ? creneaux : exclureCreneauxHorairesPasses(creneaux, dateStr),
     horaire: horaire || null,
     calendrier: 'senegal',
     note_minuit:
@@ -664,6 +692,7 @@ module.exports = {
   getDisponibilitesPourJoueur,
   getEtatCreneau,
   grouperFileDAttente,
+  exclureCreneauxHorairesPasses,
   formatDuree,
   dureeMinutesOf,
   timeToMinutes,

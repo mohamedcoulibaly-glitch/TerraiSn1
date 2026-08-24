@@ -128,6 +128,9 @@ async function calculerDevis(database, terrain, { date, heure_debut, heure_fin, 
   }
   const montant = detail.reduce((sum, row) => sum + Number(row.prix || 0), 0);
   const montant_avance = calculerMontantAvance(terrain, montant);
+  const pourcentage_avance = Number(terrain.pourcentage_avance);
+  const commission_pourcentage = Number(terrain.commission_pourcentage || 0);
+  const montant_commission = calculerCommissionPrelevee(terrain, montant_avance);
   return {
     terrain_id: terrain.id,
     date,
@@ -138,8 +141,13 @@ async function calculerDevis(database, terrain, { date, heure_debut, heure_fin, 
     montant,
     montant_avance,
     montant_restant: Math.max(0, montant - montant_avance),
-    montant_commission: calculerCommissionPrelevee(terrain, montant_avance),
-    commission_pourcentage: Number(terrain.commission_pourcentage || 0),
+    montant_commission,
+    /** % d'avance sur le total (ex: 12.5) — distinct de commission_pourcentage */
+    pourcentage_avance: Number.isFinite(pourcentage_avance) && pourcentage_avance > 0 ? pourcentage_avance : null,
+    /** % de commission sur l'avance (ex: 8) — jamais sur le total */
+    commission_pourcentage,
+    /** Part gérant sur l'avance après commission plateforme */
+    montant_net_gerant: Math.max(0, montant_avance - montant_commission),
     detail,
   };
 }

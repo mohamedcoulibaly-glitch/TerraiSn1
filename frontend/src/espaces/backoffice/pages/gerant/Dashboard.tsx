@@ -16,7 +16,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeRole } from "@/auth/roles";
 import { useAuth } from "@/hooks/use-auth";
-import { gerantApi, terrainsApi } from "@/lib/api";
+import { gerantApi } from "@/lib/api";
 import {
   calculerFenetreCheckIn,
   calculerFlagsMatch,
@@ -24,10 +24,19 @@ import {
 } from "@/lib/checkInFenetre";
 import { localYmd, weekDates, formatJourCourt } from "@/lib/localDate";
 import { useTerrainEvents } from "@/hooks/useTerrainEvents";
+import {
+  useGerantDashboard,
+  useGerantToday,
+  useGerantWeek,
+  useGerantLiveInvalidate,
+} from "@/hooks/useGerantLiveData";
 import BloquerCreneauModal from "@/espaces/backoffice/components/BloquerCreneauModal";
 import ReservationExpressModal from "@/espaces/backoffice/components/ReservationExpressModal";
+import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
 import ScannerModal from "@/espaces/backoffice/components/ScannerModal";
 import ValidationManuelleModal from "@/espaces/backoffice/components/ValidationManuelleModal";
+import PaymentLockGauge from "@/components/PaymentLockGauge";
+import SilentSyncDot from "@/components/SilentSyncDot";
 
 type TodayReservation = {
   id: number;
@@ -44,6 +53,8 @@ type TodayReservation = {
   montant_restant?: number;
   montant?: number;
   prix_total?: number;
+  created_at?: string | null;
+  verrou_expire_at?: number | null;
   terrain_id?: number | null;
   creneau_id?: number | null;
   /** Présent si card issue d'un blocage (Workflow 6) */
@@ -187,10 +198,12 @@ type QueueCardProps = {
   canScanNow: boolean;
   prioriteHeure?: string | null;
   prioriteJoueur?: string | null;
+  features?: Record<string, boolean> | null;
   onScan: (resa: TodayReservation) => void;
   onExpress: (prefill: { date?: string; heure_debut?: string; heure_fin?: string }) => void;
   onUnblock: (id?: number | number[]) => void;
   onOpenDetail: (id: number) => void;
+  onRefresh?: () => void;
 };
 
 function blocageKind(resa: TodayReservation): "abonnement" | "tournoi" | "indispo" {
@@ -207,10 +220,12 @@ function QueueCard({
   canScanNow,
   prioriteHeure,
   prioriteJoueur,
+  features,
   onScan,
   onExpress,
   onUnblock,
   onOpenDetail,
+  onRefresh,
 }: QueueCardProps) {
   const creneau = toCreneau(resa, dayDate);
   const fenetre = calculerFenetreCheckIn(creneau);
@@ -288,6 +303,22 @@ function QueueCard({
           >
             {formatHourRange(resa.heure_debut, resa.heure_fin)}
           </p>
+          {!resa.blocage_id && resa.created_at ? (
+            <p className="text-[11px] mt-0.5" style={{ color: "var(--g-muted)" }}>
+              Réservé le :{" "}
+              {new Date(
+                String(resa.created_at).includes("T")
+                  ? resa.created_at
+                  : String(resa.created_at).replace(" ", "T"),
+              ).toLocaleString("fr-FR", {
+                day: "2-digit",
+                month: "2-digit",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </p>
+          ) : null}
           {block === "en_cours" ? (
             <p className="text-[11px] font-semibold mt-0.5" style={{ color: "var(--g-en-cours)" }}>
               Encore ~{Math.max(1, minutesLeft)} min
@@ -321,10 +352,44 @@ function QueueCard({
       </div>
 
       {block === "en_attente" && (
-        <p className="mt-2 text-xs" style={{ color: "var(--g-muted)" }}>
-          {resa.joueur_nom ? `${resa.joueur_nom} — ` : ""}
-          Le système gère le paiement automatiquement
-        </p>
+        <div className="mt-2 space-y-2">
+          <PaymentLockGauge
+            expiresAt={Number(resa.verrou_expire_at)}
+            startedAt={resa.created_at}
+            onExpired={onRefresh}
+          />
+          <p className="text-xs" style={{ color: "var(--g-muted)" }}>
+            {resa.joueur_nom ? `${resa.joueur_nom}` : "Joueur"}
+          </p>
+          {pendingCount > 1 ? (
+            <button
+              type="button"
+              onClick={() => onOpenDetail(resa.id)}
+              className="w-full min-h-[44px] rounded-xl text-sm font-semibold"
+              style={{ color: "var(--g-en-attente)", border: "1px solid var(--g-en-attente)" }}
+            >
+              Gérer les {pendingCount} demandes
+            </button>
+          ) : (
+            <>
+              <EnAttentePaiementActions
+                reservationId={resa.id}
+                montantAvance={resa.montant_avance}
+                features={features}
+                variant="compact"
+                onDone={onRefresh}
+              />
+              <button
+                type="button"
+                onClick={() => onOpenDetail(resa.id)}
+                className="w-full min-h-[40px] rounded-xl text-xs font-semibold"
+                style={{ color: "var(--g-muted)", border: "1px solid var(--g-border)" }}
+              >
+                Voir la fiche
+              </button>
+            </>
+          )}
+        </div>
       )}
 
       {(block === "imminente" || block === "en_cours" || block === "reserve") && (
@@ -631,10 +696,12 @@ type FileAttenteBlocksProps = {
   dayDate: string;
   nowMs: number;
   emptyTitle: string;
+  features?: Record<string, boolean> | null;
   onScan: (resa: TodayReservation) => void;
   onExpress: (prefill: { date?: string; heure_debut?: string; heure_fin?: string }) => void;
   onUnblock: (id?: number | number[]) => void;
   onOpenDetail: (id: number) => void;
+  onRefresh?: () => void;
 };
 
 function FileAttenteBlocks({
@@ -642,10 +709,12 @@ function FileAttenteBlocks({
   dayDate,
   nowMs,
   emptyTitle,
+  features,
   onScan,
   onExpress,
   onUnblock,
   onOpenDetail,
+  onRefresh,
 }: FileAttenteBlocksProps) {
   const [terminesOuverts, setTerminesOuverts] = useState(false);
   const isEmpty = Object.values(queueBlocks).every((arr) => arr.length === 0);
@@ -694,10 +763,12 @@ function FileAttenteBlocks({
   const cardProps = {
     dayDate,
     nowMs,
+    features,
     onScan,
     onExpress,
     onUnblock,
     onOpenDetail,
+    onRefresh,
     prioriteHeure: prioriteResa?.heure_debut ? String(prioriteResa.heure_debut).slice(0, 5) : null,
     prioriteJoueur: prioriteResa?.joueur_nom || null,
   };
@@ -763,19 +834,38 @@ const ManagerDashboard = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, isAuthenticated } = useAuth();
-  const [dashboard, setDashboard] = useState<any>(null);
-  const [todayPayload, setTodayPayload] = useState<{
-    date: string;
-    reservations: TodayReservation[];
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const isGerant = isAuthenticated && normalizeRole(user) === "gerant";
+
+  const {
+    dashboard,
+    isInitialLoading: dashInitial,
+    isRefetching: dashRefetching,
+    refetch: refetchDashboard,
+  } = useGerantDashboard(isGerant);
+
+  const [selectedDay, setSelectedDay] = useState(localYmd());
+  const {
+    todayPayload,
+    isInitialLoading: todayInitial,
+    isRefetching: todayRefetching,
+    refetch: refetchToday,
+  } = useGerantToday(undefined, isGerant);
+
+  const [vueActive, setVueActive] = useState<"aujourd_hui" | "semaine">("aujourd_hui");
+  const {
+    weekReservations,
+    isInitialLoading: weekInitial,
+    isRefetching: weekRefetching,
+    refetch: refetchWeek,
+  } = useGerantWeek(isGerant && vueActive === "semaine");
+
+  const { silentRefetch, patchTodayReservation, removeBlocagesOptimistic, restoreDashboard, queryClient } =
+    useGerantLiveInvalidate();
+
   const [autresGerantsActifs, setAutresGerantsActifs] = useState<
     Array<{ gerant_id: number; prenom?: string; nom?: string }>
   >([]);
-  const [vueActive, setVueActive] = useState<"aujourd_hui" | "semaine">("aujourd_hui");
   const [filtreJourSemaine, setFiltreJourSemaine] = useState<string>("tous");
-  const [queueLoading, setQueueLoading] = useState(false);
-  const [selectedDay, setSelectedDay] = useState(localYmd());
   const [expressOpen, setExpressOpen] = useState(false);
   const [expressPrefill, setExpressPrefill] = useState<{
     date?: string;
@@ -792,75 +882,30 @@ const ManagerDashboard = () => {
   const [freeSlots, setFreeSlots] = useState<
     { heure_debut: string; heure_fin: string; disponible?: boolean }[]
   >([]);
-  const [weekReservations, setWeekReservations] = useState<TodayReservation[]>([]);
 
-  const loadDashboard = async () => {
-    try {
-      const data = await gerantApi.dashboard();
-      setDashboard(data);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const isInitialLoading = dashInitial && !dashboard;
+  const isSyncing = dashRefetching || todayRefetching || (vueActive === "semaine" && weekRefetching);
+  /** Première ouverture de la vue semaine sans cache : mini skeleton local, pas un reload page. */
+  const weekNeedsFirstPaint = vueActive === "semaine" && weekInitial && weekReservations.length === 0;
 
-  const loadToday = async (date?: string) => {
-    try {
-      const data = (await gerantApi.reservationsToday(date)) as {
-        date: string;
-        reservations: TodayReservation[];
-      };
-      const sorted = [...(data.reservations || [])].sort(
-        (a, b) => timeToMinutes(a.heure_debut) - timeToMinutes(b.heure_debut),
-      );
-      setTodayPayload({ date: data.date, reservations: sorted });
-      if (data?.date) setSelectedDay(data.date);
-    } catch (err) {
-      console.error(err);
-      setTodayPayload({ date: date || localYmd(), reservations: [] });
-    }
-  };
+  const refreshLive = useCallback(() => {
+    void refetchDashboard();
+    void refetchToday();
+    if (vueActive === "semaine") void refetchWeek();
+  }, [refetchDashboard, refetchToday, refetchWeek, vueActive]);
 
-  const loadWeek = async () => {
-    try {
-      const data = (await gerantApi.reservationsWeek()) as {
-        reservations?: TodayReservation[];
-      };
-      setWeekReservations(data.reservations || []);
-    } catch (err) {
-      console.error(err);
-      setWeekReservations([]);
-    }
-  };
-
-  const basculerVue = async (vue: "aujourd_hui" | "semaine") => {
-    if (vue === vueActive) return;
-    setVueActive(vue);
-    if (vue === "semaine") setFiltreJourSemaine("tous");
-    setQueueLoading(true);
-    try {
-      if (vue === "aujourd_hui") {
-        await loadToday();
-      } else {
-        await loadWeek();
-      }
-    } finally {
-      setQueueLoading(false);
-    }
-  };
-
-  const loadFreeSlots = async (terrainId?: number, date?: string) => {
+  const loadFreeSlots = useCallback(async (terrainId?: number, date?: string) => {
     if (!terrainId || !date) {
       setFreeSlots([]);
       return;
     }
     try {
-      const data = (await terrainsApi.getCreneaux(terrainId, date)) as {
+      // Endpoint gérant : journée complète (le filtre « passé » se fait dans buildQueueBlocks)
+      const data = (await gerantApi.disponibilites(date)) as {
         creneaux?: { heure?: string; heure_debut?: string; heure_fin?: string; disponible?: boolean; statut?: string }[];
       };
       const libres = (data?.creneaux || [])
-        .filter((c) => c.disponible !== false && c.statut !== "occupe" && c.statut !== "bloque")
+        .filter((c) => c.disponible !== false && c.statut !== "occupe" && c.statut !== "bloque" && c.statut !== "reserve")
         .map((c) => {
           const debut = String(c.heure_debut || c.heure || "").slice(0, 5);
           const fin = String(c.heure_fin || "").slice(0, 5) || (() => {
@@ -874,31 +919,41 @@ const ManagerDashboard = () => {
     } catch {
       setFreeSlots([]);
     }
+  }, []);
+
+  const basculerVue = (vue: "aujourd_hui" | "semaine") => {
+    if (vue === vueActive) return;
+    setVueActive(vue);
+    if (vue === "semaine") {
+      setFiltreJourSemaine("tous");
+      void refetchWeek();
+    } else {
+      void refetchToday();
+    }
   };
 
   useEffect(() => {
     if (!isAuthenticated || normalizeRole(user) !== "gerant") {
       navigate("/backoffice/login");
-      return;
     }
-    loadDashboard();
-    loadToday();
   }, [isAuthenticated, user, navigate]);
 
-  // Rechargement quand le terrain actif change (sélecteur multi-terrains)
+  useEffect(() => {
+    if (todayPayload?.date) setSelectedDay(todayPayload.date);
+  }, [todayPayload?.date]);
+
+  // Rechargement silencieux quand le terrain actif change
   useEffect(() => {
     const onTerrain = () => {
-      void loadDashboard();
-      void loadToday();
-      if (vueActive === "semaine") void loadWeek();
+      void silentRefetch();
     };
     window.addEventListener("gerant-terrain-changed", onTerrain);
     return () => window.removeEventListener("gerant-terrain-changed", onTerrain);
-  }, [vueActive]);
+  }, [silentRefetch]);
 
   // Indicateur gérants en ligne (via heartbeat)
   useEffect(() => {
-    if (!isAuthenticated || normalizeRole(user) !== "gerant") return;
+    if (!isGerant) return;
     const tick = async () => {
       try {
         const res = await gerantApi.heartbeat();
@@ -910,19 +965,14 @@ const ManagerDashboard = () => {
     tick();
     const timer = window.setInterval(tick, 30000);
     return () => window.clearInterval(timer);
-  }, [isAuthenticated, user]);
+  }, [isGerant]);
 
-  // Horloge locale 60s + file de jour (filet de sécurité si SSE coupé)
+  // Horloge locale 60s (flags UI) — le refetch données est géré par React Query
   useEffect(() => {
-    if (!isAuthenticated || normalizeRole(user) !== "gerant") return;
-    const tick = () => {
-      setNowMs(Date.now());
-      void loadToday();
-      if (vueActive === "semaine") void loadWeek();
-    };
-    const timer = window.setInterval(tick, 60_000);
+    if (!isGerant) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(timer);
-  }, [isAuthenticated, user, selectedDay, vueActive]);
+  }, [isGerant]);
 
   useEffect(() => {
     const terrainId = dashboard?.terrain?.id;
@@ -932,27 +982,14 @@ const ManagerDashboard = () => {
     }
     const date = todayPayload?.date || selectedDay;
     if (terrainId && date) void loadFreeSlots(terrainId, date);
-  }, [dashboard?.terrain?.id, todayPayload?.date, selectedDay, vueActive, filtreJourSemaine]);
-
-  const todayList = todayPayload?.reservations || [];
-  const dayDate = todayPayload?.date || selectedDay || localYmd();
-
-  const refreshLive = useCallback(() => {
-    void loadDashboard();
-    void loadToday(dayDate);
-    if (vueActive === "semaine") void loadWeek();
-    const terrainId = dashboard?.terrain?.id;
-    if (!terrainId) return;
-    if (vueActive === "semaine" && filtreJourSemaine !== "tous") {
-      void loadFreeSlots(terrainId, filtreJourSemaine);
-    } else {
-      void loadFreeSlots(terrainId, dayDate);
-    }
-  }, [dayDate, vueActive, filtreJourSemaine, dashboard?.terrain?.id]);
+  }, [dashboard?.terrain?.id, todayPayload?.date, selectedDay, vueActive, filtreJourSemaine, loadFreeSlots]);
 
   useTerrainEvents(dashboard?.terrain?.id, () => {
     refreshLive();
   });
+
+  const todayList = (todayPayload?.reservations || []) as TodayReservation[];
+  const dayDate = todayPayload?.date || selectedDay || localYmd();
 
   const allBlocages = useMemo(() => {
     return ((dashboard?.blocages || []) as Array<{
@@ -986,7 +1023,7 @@ const ManagerDashboard = () => {
 
   const parJour = useMemo(() => {
     const acc: Record<string, TodayReservation[]> = {};
-    for (const r of weekReservations) {
+    for (const r of weekReservations as TodayReservation[]) {
       const date = String(r.date || "").slice(0, 10);
       if (!date) continue;
       if (!acc[date]) acc[date] = [];
@@ -1046,12 +1083,12 @@ const ManagerDashboard = () => {
 
   /** Deep-link push / SW : /backoffice/gerant#scanner */
   useEffect(() => {
-    if (loading) return;
+    if (isInitialLoading) return;
     if (location.hash !== "#scanner") return;
     setScanTarget(prochaineImminente);
     setScannerOpen(true);
     navigate({ pathname: location.pathname, search: location.search, hash: "" }, { replace: true });
-  }, [loading, location.hash, location.pathname, location.search, navigate, prochaineImminente]);
+  }, [isInitialLoading, location.hash, location.pathname, location.search, navigate, prochaineImminente]);
 
   /** Depuis une card : Mode B avec réservation connue. */
   const openScanner = (resa: TodayReservation) => {
@@ -1064,7 +1101,7 @@ const ManagerDashboard = () => {
     setExpressOpen(true);
   };
 
-  /** Workflow 7 — maj immédiate de la card sans recharger (le refresh 60s confirme). */
+  /** Optimistic UI — 0 ms : la carte bascule avant la réponse serveur. */
   const applyOptimisticScan = (reservation: {
     id?: number;
     joueur_nom?: string;
@@ -1075,28 +1112,19 @@ const ManagerDashboard = () => {
   }) => {
     const id = Number(reservation?.id);
     if (!Number.isFinite(id) || id < 1) return;
-
-    setTodayPayload((prev) => {
-      if (!prev) return prev;
-      let found = false;
-      const reservations = prev.reservations.map((r) => {
-        if (r.id !== id) return r;
-        found = true;
-        return {
-          ...r,
-          statut: "match_joue",
-          qr_code_scanne_at: reservation.qr_code_scanne_at || new Date().toISOString(),
-          joueur_nom: reservation.joueur_nom || r.joueur_nom,
-          // Solde affiché pour le badge « Encaisse X » (valeur renvoyée au scan)
-          montant_restant:
-            reservation.montant_restant != null
-              ? Number(reservation.montant_restant)
-              : Number(r.montant_restant ?? 0),
-        };
-      });
-      if (!found) return prev;
-      return { ...prev, reservations };
-    });
+    patchTodayReservation(
+      id,
+      {
+        statut: "match_joue",
+        qr_code_scanne_at: reservation.qr_code_scanne_at || new Date().toISOString(),
+        joueur_nom: reservation.joueur_nom,
+        montant_restant:
+          reservation.montant_restant != null
+            ? Number(reservation.montant_restant)
+            : undefined,
+      },
+      todayPayload?.date,
+    );
   };
 
   const handleUnblockCreneau = async (blocageId?: number | number[]) => {
@@ -1104,6 +1132,8 @@ const ManagerDashboard = () => {
       (id): id is number => typeof id === "number" && id > 0,
     );
     if (!ids.length) return;
+    const snapshot = queryClient.getQueryData(["gerant", "live", "dashboard"]);
+    removeBlocagesOptimistic(ids);
     try {
       if (ids.length === 1) {
         await gerantApi.removeBlocage(ids[0]);
@@ -1111,15 +1141,16 @@ const ManagerDashboard = () => {
         await gerantApi.removeBlocages(ids);
       }
       toast.success(ids.length > 1 ? `${ids.length} créneaux débloqués` : "Créneau débloqué");
-      await loadDashboard();
+      void refetchDashboard();
       await loadFreeSlots(dashboard?.terrain?.id, dayDate);
-      if (vueActive === "semaine") void loadWeek();
+      if (vueActive === "semaine") void refetchWeek();
     } catch (err: any) {
+      restoreDashboard(snapshot);
       toast.error(err?.message || "Déblocage impossible");
     }
   };
 
-  if (loading) {
+  if (isInitialLoading) {
     return (
       <div className="animate-pulse space-y-4">
         <div className="grid grid-cols-3 gap-2.5">
@@ -1138,6 +1169,7 @@ const ManagerDashboard = () => {
 
   return (
     <div className="space-y-4">
+      <SilentSyncDot active={isSyncing} label="Synchronisation file d'attente" />
       {autresGerantsActifs.length > 0 ? (
         <div
           className="flex items-center gap-2 px-4 py-2 rounded-lg"
@@ -1305,7 +1337,7 @@ const ManagerDashboard = () => {
           {vueActive === "semaine" ? "File d'attente de la semaine" : "File d'attente du jour"}
         </h2>
 
-        {queueLoading ? (
+        {weekNeedsFirstPaint ? (
           <QueueSkeleton />
         ) : vueActive === "semaine" ? (
           joursAffiches.length === 0 ? (
@@ -1314,10 +1346,14 @@ const ManagerDashboard = () => {
               dayDate={dayDate}
               nowMs={nowMs}
               emptyTitle="Aucun match cette semaine"
+              features={dashboard?.features || null}
               onScan={openScanner}
               onExpress={openExpress}
               onUnblock={(id) => void handleUnblockCreneau(id)}
               onOpenDetail={(id) => navigate(`/backoffice/gerant/reservations/${id}`)}
+              onRefresh={() => {
+                refreshLive();
+              }}
             />
           ) : (
             <div className="space-y-8">
@@ -1344,10 +1380,14 @@ const ManagerDashboard = () => {
                       dayDate={jour.date}
                       nowMs={nowMs}
                       emptyTitle={`Aucun match le ${formatJourHeader(jour.date)}`}
+                      features={dashboard?.features || null}
                       onScan={openScanner}
                       onExpress={openExpress}
                       onUnblock={(id) => void handleUnblockCreneau(id)}
                       onOpenDetail={(id) => navigate(`/backoffice/gerant/reservations/${id}`)}
+                      onRefresh={() => {
+                        refreshLive();
+                      }}
                     />
                   </div>
                 );
@@ -1360,10 +1400,14 @@ const ManagerDashboard = () => {
             dayDate={dayDate}
             nowMs={nowMs}
             emptyTitle="Aucun créneau aujourd'hui"
+            features={dashboard?.features || null}
             onScan={openScanner}
             onExpress={openExpress}
             onUnblock={(id) => void handleUnblockCreneau(id)}
             onOpenDetail={(id) => navigate(`/backoffice/gerant/reservations/${id}`)}
+            onRefresh={() => {
+              refreshLive();
+            }}
           />
         )}
       </section>
@@ -1374,10 +1418,8 @@ const ManagerDashboard = () => {
         terrainId={dashboard?.terrain?.id}
         prefill={expressPrefill}
         onCreated={() => {
-          loadDashboard();
-          loadToday();
+          refreshLive();
           void loadFreeSlots(dashboard?.terrain?.id, dayDate);
-          if (vueActive === "semaine") void loadWeek();
         }}
       />
 
@@ -1388,10 +1430,8 @@ const ManagerDashboard = () => {
         blocages={dashboard?.blocages || []}
         features={dashboard?.features || null}
         onChanged={() => {
-          loadDashboard();
-          loadToday();
+          refreshLive();
           void loadFreeSlots(dashboard?.terrain?.id, dayDate);
-          if (vueActive === "semaine") void loadWeek();
         }}
       />
 

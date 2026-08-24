@@ -1199,41 +1199,38 @@ app.get('/api/terrains', async (req, res) => {
 app.get('/api/terrains/:id', async (req, res) => {
   try {
     const db = await getDb();
-    const terrain = await queryOne(db, `
-      SELECT t.*, 
-        COALESCE(ROUND(AVG(a.note), 1), 0) as note,
-        COUNT(a.id) as avis_count,
-        p.nom as proprietaire_nom
-      FROM terrains t
-      LEFT JOIN avis a ON a.terrain_id = t.id
-      LEFT JOIN proprietaires p ON p.id = t.proprietaire_id
-      WHERE t.id = ?
-      GROUP BY t.id, p.nom
-    `, [Number(req.params.id)]);
-
-    if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
-
-    const horaires = await queryAll(db, "SELECT * FROM horaires WHERE terrain_id = ? ORDER BY CASE jour WHEN 'lundi' THEN 1 WHEN 'mardi' THEN 2 WHEN 'mercredi' THEN 3 WHEN 'jeudi' THEN 4 WHEN 'vendredi' THEN 5 WHEN 'samedi' THEN 6 WHEN 'dimanche' THEN 7 END", [terrain.id]);
-    const avis = await queryAll(db, 'SELECT a.*, u.nom as joueur_nom FROM avis a LEFT JOIN users u ON u.id = a.joueur_id WHERE a.terrain_id = ? ORDER BY a.created_at DESC', [terrain.id]);
-    const employe = await queryOne(db, 'SELECT whatsapp_number, nom FROM employes WHERE terrain_id = ? AND is_active = 1 LIMIT 1', [terrain.id]);
-
-    const photoRows = await listTerrainPhotos(db, terrain.id);
-    const formatsService = require('./services/formatsTerrainService');
-    const featuresService = require('./services/terrainFeaturesService');
-    const { formats, durees } = await formatsService.attachFormatsToTerrainPayload(db, terrain);
-    const features = await featuresService.featuresFlags(db, terrain.id);
-    res.json({
-      ...serializeTerrain(terrain, photoRows, await commoditesService.publicCommodites(db, terrain.id)),
-      formats,
-      durees,
-      features,
-      horaires,
-      avis,
-      employe,
+    const full = require('./services/terrainFullDetailsService');
+    // Sans ?date= : même payload enrichi + planning du jour (1 round-trip)
+    const date = req.query.date ? String(req.query.date).slice(0, 10) : full.todayLocalYmd();
+    const dureeParam = req.query.duree_minutes != null ? Number(req.query.duree_minutes) : null;
+    const payload = await full.getTerrainFullDetails(db, Number(req.params.id), {
+      date,
+      duree_minutes: dureeParam,
+      serializeTerrain,
     });
+    res.json(payload);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Erreur serveur' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+/** Endpoint consolidé anti-waterfall mobile (terrain + photos + créneaux). */
+app.get('/api/terrains/:id/full-details', async (req, res) => {
+  try {
+    const db = await getDb();
+    const full = require('./services/terrainFullDetailsService');
+    const date = req.query.date ? String(req.query.date).slice(0, 10) : full.todayLocalYmd();
+    const dureeParam = req.query.duree_minutes != null ? Number(req.query.duree_minutes) : null;
+    const payload = await full.getTerrainFullDetails(db, Number(req.params.id), {
+      date,
+      duree_minutes: dureeParam,
+      serializeTerrain,
+    });
+    res.json(payload);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -1246,13 +1243,34 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
     const dateStr = String(date).slice(0, 10);
     const terrainId = Number(req.params.id);
     const dureeParam = req.query.duree_minutes != null ? Number(req.query.duree_minutes) : null;
+    const inclurePasses =
+      req.query.inclure_passes === '1' ||
+      req.query.inclure_passes === 'true' ||
+      req.query.vue === 'gerant';
 
     const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
     if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
     const payload = await creneauService.getDisponibilitesPourJoueur(db, terrainId, dateStr, {
       duree_minutes: Number.isFinite(dureeParam) && dureeParam > 0 ? dureeParam : null,
+      inclure_passes: inclurePasses,
     });
+
+    const bookingAvail = require('./services/terrainBookingAvailability');
+    let availability = {
+      en_ligne_indisponible: false,
+      booking_online_available: true,
+      whatsapp_status: null,
+      gerant_telephone: null,
+      gerant_tel_href: null,
+      gerant_nom: null,
+      message: null,
+    };
+    try {
+      availability = await bookingAvail.getTerrainBookingAvailability(terrainId);
+    } catch (availErr) {
+      console.warn('[bookingAvail] creneaux', availErr?.message || availErr);
+    }
 
     if (payload.ferme) {
       return res.json({
@@ -1261,26 +1279,27 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
         ferme: true,
         motif: payload.motif || 'Terrain temporairement fermé',
         is_active: 0,
+        en_ligne_indisponible: availability.en_ligne_indisponible,
+        booking_online_available: availability.booking_online_available,
+        gerant_tel_href: availability.gerant_tel_href,
+        booking_message: availability.message,
       });
     }
 
     const maintenant = new Date();
-    const todayStr = `${maintenant.getFullYear()}-${String(maintenant.getMonth() + 1).padStart(2, '0')}-${String(maintenant.getDate()).padStart(2, '0')}`;
-    const estAujourdhui = dateStr === todayStr;
 
-    let creneaux = payload.creneaux || [];
-    if (estAujourdhui) {
-      creneaux = creneaux.map((c) => {
-        const finMs = new Date(`${c.date}T${String(c.heure_fin).slice(0, 5)}:00`).getTime();
-        const passe = Number.isFinite(finMs) && finMs <= maintenant.getTime();
-        if (!passe) return c;
-        return {
-          ...c,
-          disponible: false,
-          passe: true,
-          raison_indisponibilite: c.raison_indisponibilite || 'Créneau dépassé',
-        };
-      });
+    // Joueur : masquer les heures déjà passées. Gérant (inclure_passes) : journée complète.
+    let creneaux = inclurePasses
+      ? payload.creneaux || []
+      : creneauService.exclureCreneauxHorairesPasses(payload.creneaux || [], dateStr, maintenant);
+
+    // Flag WA down sans griser les libres (visibilité semaine intacte)
+    if (availability.en_ligne_indisponible) {
+      creneaux = creneaux.map((c) => ({
+        ...c,
+        en_ligne_indisponible: true,
+        booking_online_blocked: Boolean(c.disponible),
+      }));
     }
 
     res.json({
@@ -1295,6 +1314,13 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
       prix_moitie_base: payload.prix_moitie_base,
       pourcentage_avance: payload.pourcentage_avance,
       heure_serveur: maintenant.toISOString(),
+      en_ligne_indisponible: availability.en_ligne_indisponible,
+      booking_online_available: availability.booking_online_available,
+      whatsapp_gerant_status: availability.whatsapp_status,
+      gerant_telephone: availability.gerant_telephone,
+      gerant_tel_href: availability.gerant_tel_href,
+      gerant_nom: availability.gerant_nom,
+      booking_message: availability.message,
     });
   } catch (err) {
     console.error(err);
@@ -1329,6 +1355,22 @@ app.post('/api/reservations/verifier-disponibilite', async (req, res) => {
           duree_minutes: c.duree_minutes || creneauService.dureeMinutesOf(c.heure_debut, c.heure_fin),
           joueur_nom: c.joueur_nom || null,
         })),
+      });
+    }
+    const bookingAvail = require('./services/terrainBookingAvailability');
+    const availability = await bookingAvail.getTerrainBookingAvailability(Number(terrain_id));
+    // Créneau libre ≠ réservation en ligne possible : on sépare les deux signaux
+    if (availability.en_ligne_indisponible) {
+      return res.json({
+        disponible: true,
+        en_ligne_indisponible: true,
+        booking_online_available: false,
+        code: 'EN_LIGNE_INDISPONIBLE',
+        message: availability.message,
+        gerant_tel_href: availability.gerant_tel_href,
+        gerant_telephone: availability.gerant_telephone,
+        duree_minutes: creneauService.dureeMinutesOf(debut, fin),
+        duree_label: creneauService.formatDuree(creneauService.dureeMinutesOf(debut, fin)),
       });
     }
     res.json({
@@ -1584,6 +1626,21 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
         return res.status(403).json({
           error: 'Les réservations en ligne sont désactivées pour ce terrain. Contacte le gérant.',
           code: 'FEATURE_DISABLED',
+        });
+      }
+      const bookingAvail = require('./services/terrainBookingAvailability');
+      const availability = await bookingAvail.getTerrainBookingAvailability(terrain.id, { force: true });
+      if (availability.en_ligne_indisponible) {
+        return res.status(503).json({
+          error:
+            availability.message ||
+            'Réservation en ligne temporairement indisponible. Appelez le gérant pour réserver.',
+          code: 'EN_LIGNE_INDISPONIBLE',
+          en_ligne_indisponible: true,
+          gerant_telephone: availability.gerant_telephone,
+          gerant_tel_href: availability.gerant_tel_href,
+          gerant_nom: availability.gerant_nom,
+          whatsapp_gerant_status: availability.whatsapp_status,
         });
       }
     }
@@ -1911,6 +1968,56 @@ app.get('/api/whatsapp/health', async (req, res) => {
     ok: false,
     message: whatsappClient.USER_INFRA_ERROR || "Y'a un problème avec WhatsApp. Contactez le développeur immédiatement.",
   });
+});
+
+/**
+ * Envoi interne depuis la session WhatsApp d'un gérant (ou plateforme).
+ * Body: { telephone, message, gerant_id?, reservation_id? }
+ */
+app.post('/api/whatsapp/send-message', authMiddleware, requireRole('gerant', 'super_admin'), async (req, res) => {
+  try {
+    const whatsappClient = require('./whatsappClient');
+    const telephone = req.body?.telephone;
+    const message = req.body?.message;
+    if (!telephone || !message) {
+      return res.status(400).json({ error: 'telephone et message sont requis' });
+    }
+
+    let sessionKey = 'platform';
+    if (req.user.role === 'gerant') {
+      sessionKey = whatsappClient.gerantSessionKey(req.user.id) || 'platform';
+    } else if (req.body?.gerant_id) {
+      sessionKey = whatsappClient.gerantSessionKey(req.body.gerant_id) || 'platform';
+    }
+
+    if (req.body?.reservation_id) {
+      const db = await getDb();
+      const reservation = await queryOne(
+        db,
+        `SELECT r.*, e.id AS gerant_id FROM reservations r
+         LEFT JOIN employes e ON e.id = r.gerant_id
+         WHERE r.id = ?`,
+        [Number(req.body.reservation_id)],
+      );
+      if (reservation?.gerant_id) {
+        sessionKey = whatsappClient.gerantSessionKey(reservation.gerant_id) || sessionKey;
+      }
+    }
+
+    await notificationService.envoyerMessage(telephone, message, sessionKey);
+    const st = await whatsappClient.getStatus(sessionKey);
+    res.json({
+      success: true,
+      session: sessionKey,
+      status: st.status || (st.connected ? 'CONNECTED' : 'DISCONNECTED'),
+      phone: st.phone || null,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 503).json({
+      success: false,
+      error: error.message || require('./whatsappClient').USER_INFRA_ERROR,
+    });
+  }
 });
 
 app.get('/api/whatsapp/status', async (req, res) => {
@@ -2424,8 +2531,9 @@ app.post('/api/proprietaire/reservations/:id/confirmer-avance', authMiddleware, 
     const db = await getDb();
     const reservationId = Number(req.params.id);
     const reservation = await queryOne(db, `
-      SELECT r.*, t.proprietaire_id, t.acompte, t.montant_acompte, t.commission,
-             t.pourcentage_avance, t.modele_revenus, t.commission_pourcentage
+      SELECT r.*, t.proprietaire_id,
+             t.acompte AS terrain_acompte, t.montant_acompte AS terrain_montant_acompte,
+             t.commission, t.pourcentage_avance, t.modele_revenus, t.commission_pourcentage
       FROM reservations r
       JOIN terrains t ON t.id = r.terrain_id
       WHERE r.id = ? AND t.proprietaire_id = ?
@@ -2660,6 +2768,36 @@ app.get('/api/gerant/dashboard', authMiddleware, requireRole('gerant'), async (r
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+/** Créneaux du jour pour la file gérant (journée complète, heures passées incluses). */
+app.get('/api/gerant/disponibilites', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = req.user.terrain_id;
+    if (!terrainId) return res.status(400).json({ error: 'Aucun terrain associé à ce gérant' });
+
+    const dateParam = typeof req.query.date === 'string' ? req.query.date.trim() : '';
+    const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(dateParam)
+      ? dateParam
+      : `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+    const dureeParam = req.query.duree_minutes != null ? Number(req.query.duree_minutes) : null;
+
+    const payload = await creneauService.getDisponibilitesPourJoueur(db, terrainId, dateStr, {
+      duree_minutes: Number.isFinite(dureeParam) && dureeParam > 0 ? dureeParam : null,
+      inclure_passes: true,
+    });
+
+    res.json({
+      date: dateStr,
+      terrain_id: terrainId,
+      ...payload,
+      heure_serveur: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 

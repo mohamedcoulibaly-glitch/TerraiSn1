@@ -432,10 +432,135 @@ router.get('/gerant/whatsapp/status', authMiddleware, requireRole('gerant'), asy
   const employe = await queryOne(db, 'SELECT whatsapp_number, whatsapp_wid, whatsapp_connected_at FROM employes WHERE id = ?', [req.user.id]);
   res.json({
     ...status,
+    gerant_id: req.user.id,
     configured_number: employe?.whatsapp_number || null,
     connected_wid: employe?.whatsapp_wid || status.phone || null,
     connected_at: employe?.whatsapp_connected_at || null,
   });
+});
+
+/** Alias CDC : GET /api/gerant/whatsapp/status/:gerant_id */
+router.get('/gerant/whatsapp/status/:gerant_id', authMiddleware, requireRole('gerant'), async (req, res) => {
+  const requested = Number(req.params.gerant_id);
+  if (requested !== Number(req.user.id)) {
+    return res.status(403).json({ error: 'Accès refusé à cette session WhatsApp' });
+  }
+  const key = gerantWaKey(req);
+  const status = await whatsappClient.getStatus(key);
+  if (status.connected && status.phone) {
+    const db = await getDb();
+    await persistGerantWhatsapp(db, req.user.id, status.phone);
+  }
+  const db = await getDb();
+  const employe = await queryOne(
+    db,
+    'SELECT whatsapp_number, whatsapp_wid, whatsapp_connected_at FROM employes WHERE id = ?',
+    [req.user.id],
+  );
+  res.json({
+    ...status,
+    gerant_id: req.user.id,
+    configured_number: employe?.whatsapp_number || null,
+    connected_wid: employe?.whatsapp_wid || status.phone || null,
+    connected_at: employe?.whatsapp_connected_at || null,
+  });
+});
+
+/**
+ * Appairage PWA mobile : code de jumelage 8 caractères (sans QR).
+ * Body: { telephone, gerant_id?, force? }
+ */
+router.post('/gerant/whatsapp/request-pairing', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const key = gerantWaKey(req);
+    if (!key) {
+      return res.status(400).json({ error: 'Session gérant invalide', success: false });
+    }
+    if (req.body?.gerant_id != null && Number(req.body.gerant_id) !== Number(req.user.id)) {
+      return res.status(403).json({ error: 'gerant_id ne correspond pas à la session', success: false });
+    }
+
+    const db = await getDb();
+    const employe = await queryOne(
+      db,
+      'SELECT whatsapp_number, telephone FROM employes WHERE id = ?',
+      [req.user.id],
+    );
+    const telephone =
+      req.body?.telephone ||
+      employe?.whatsapp_number ||
+      employe?.telephone ||
+      null;
+    const intl = whatsappClient.toWaIntlDigits(telephone);
+    if (!intl) {
+      return res.status(400).json({
+        success: false,
+        error: 'Numéro WhatsApp invalide. Exemple : 22177XXXXXXX',
+        status: 'DISCONNECTED',
+      });
+    }
+
+    // Mémoriser le numéro choisi avant l’appairage
+    try {
+      const stored = normalizeTelephoneStore(intl);
+      await runSql(db, `UPDATE employes SET whatsapp_number = ? WHERE id = ?`, [stored, req.user.id]);
+    } catch {
+      await runSql(db, `UPDATE employes SET whatsapp_number = ? WHERE id = ?`, [`+${intl}`, req.user.id]);
+    }
+
+    const result = await whatsappClient.requestPairing(key, intl, {
+      force: Boolean(req.body?.force),
+    });
+
+    if (result.status === 'CONNECTED' && result.phone) {
+      await persistGerantWhatsapp(db, req.user.id, result.phone);
+    }
+
+    try {
+      const bookingAvail = require('../services/terrainBookingAvailability');
+      bookingAvail.invalidateTerrainBookingCache(req.user.terrain_id);
+    } catch {
+      /* ignore */
+    }
+
+    if (result.mock) {
+      return res.status(503).json({
+        success: false,
+        mock: true,
+        status: 'DISCONNECTED',
+        error: whatsappClient.USER_INFRA_ERROR,
+        gerant_id: req.user.id,
+        session: key,
+      });
+    }
+
+    if (!result.success && !result.pairingCode) {
+      return res.status(result.error?.includes('invalide') ? 400 : 503).json({
+        ...result,
+        gerant_id: req.user.id,
+      });
+    }
+
+    res.json({
+      success: true,
+      pairingCode: result.pairingCode,
+      pairingCodeRaw: result.pairingCodeRaw || null,
+      pairingPhone: result.pairingPhone || intl,
+      pairingExpiresAt: result.pairingExpiresAt || null,
+      status: result.status,
+      gerant_id: req.user.id,
+      session: key,
+      provider: result.provider || null,
+      phone: result.phone || null,
+    });
+  } catch (err) {
+    const code = err.statusCode || 500;
+    res.status(code).json({
+      success: false,
+      error: err.message || 'Erreur serveur',
+      status: 'DISCONNECTED',
+    });
+  }
 });
 
 router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), async (req, res) => {
@@ -451,10 +576,23 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
     [req.user.id],
   );
   const phoneNumber =
+    whatsappClient.toWaIntlDigits?.(req.body?.telephone) ||
     whatsappClient.toWaIntlDigits?.(employe?.whatsapp_number) ||
     whatsappClient.toWaIntlDigits?.(employe?.telephone) ||
-    whatsappClient.toWaIntlDigits?.(req.body?.telephone) ||
     null;
+
+  // Prefer pairing-code flow when a phone is known (PWA mobile)
+  if (phoneNumber && (req.body?.mode === 'pairing' || req.body?.telephone)) {
+    try {
+      const result = await whatsappClient.requestPairing(key, phoneNumber, { force });
+      if (result.status === 'CONNECTED' && result.phone) {
+        await persistGerantWhatsapp(db, req.user.id, result.phone);
+      }
+      return res.json({ ...result, session: key, gerant_id: req.user.id });
+    } catch (err) {
+      return res.status(err.statusCode || 500).json({ error: err.message, success: false });
+    }
+  }
 
   const started = await whatsappClient.ensureStarted(key, { force, phoneNumber });
   const qr = await whatsappClient.getQrPayload(key);
@@ -468,6 +606,12 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
   if (started.ready && started.phone) {
     await persistGerantWhatsapp(db, req.user.id, started.phone);
   }
+  try {
+    const bookingAvail = require('../services/terrainBookingAvailability');
+    bookingAvail.invalidateTerrainBookingCache(req.user.terrain_id);
+  } catch {
+    /* ignore */
+  }
   if (!started.ready && !qr.dataUrl && !qr.pairingCode && !started.initializing && !qr.initializing) {
     return res.status(503).json({
       error: whatsappClient.USER_INFRA_ERROR,
@@ -476,7 +620,13 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
       session: key,
     });
   }
-  res.json({ ...started, ...qr, session: key, initializing: Boolean(started.initializing || qr.initializing || qr.dataUrl) });
+  res.json({
+    ...started,
+    ...qr,
+    session: key,
+    status: qr.status || (started.ready ? 'CONNECTED' : 'CONNECTING'),
+    initializing: Boolean(started.initializing || qr.initializing || qr.dataUrl || qr.pairingCode),
+  });
 });
 
 router.get('/gerant/whatsapp/qr', authMiddleware, requireRole('gerant'), async (req, res) => {
@@ -487,7 +637,19 @@ router.get('/gerant/whatsapp/qr', authMiddleware, requireRole('gerant'), async (
 router.post('/gerant/whatsapp/disconnect', authMiddleware, requireRole('gerant'), async (req, res) => {
   const key = gerantWaKey(req);
   const status = await whatsappClient.logoutSession(key);
-  res.json({ ...status, message: 'Session WhatsApp gérant déconnectée' });
+  const db = await getDb();
+  await runSql(
+    db,
+    `UPDATE employes SET whatsapp_wid = NULL, whatsapp_connected_at = NULL WHERE id = ?`,
+    [req.user.id],
+  );
+  try {
+    const bookingAvail = require('../services/terrainBookingAvailability');
+    bookingAvail.invalidateTerrainBookingCache(req.user.terrain_id);
+  } catch {
+    /* ignore */
+  }
+  res.json({ ...status, status: 'DISCONNECTED', message: 'Session WhatsApp gérant déconnectée' });
 });
 
 router.get('/gerant/terrain/commodites', authMiddleware, requireRole('gerant'), async (req, res) => {

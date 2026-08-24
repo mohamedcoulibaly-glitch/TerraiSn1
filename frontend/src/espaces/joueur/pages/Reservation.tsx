@@ -1,14 +1,16 @@
 import { calculerMontantAvance } from "@/lib/avance";
-import { ArrowLeft, ShieldCheck, MessageCircle, Check, Handshake } from "lucide-react";
+import { ArrowLeft, ShieldCheck, MessageCircle, Check, Handshake, Phone } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { terrainsApi, reservationsApi } from "@/lib/api";
+import { reservationsApi } from "@/lib/api";
 import { hapticSuccess, hapticError } from "@/lib/haptics";
 import { registerBackgroundSync } from "@/lib/pwaRegister";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
 import { fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
+import { useTerrainFullDetails } from "@/hooks/useJoueurData";
+import SilentSyncDot from "@/components/SilentSyncDot";
 
 import omIcon from "@/assets/images.png";
 import waveIcon from "@/assets/wave-banque-en-ligne-au-senegal-pour-paiement-transfert-argents.jpg";
@@ -23,8 +25,12 @@ const Payment = () => {
   const duree = searchParams.get("duree") || "2";
   const date = searchParams.get("date") || new Date().toISOString().split("T")[0];
   const fieldFormat = searchParams.get("format") === "moitie" ? "moitie" : "entier";
+  const dureeHours = Number.parseFloat(duree) || 2;
 
-  const [terrain, setTerrain] = useState<any>(null);
+  const { terrain, isInitialLoading, isRefetching } = useTerrainFullDetails(id, {
+    date,
+    duree_minutes: Math.round(dureeHours * 60),
+  });
   const [selected, setSelected] = useState<"wave" | "orange_money" | "">("wave");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -34,10 +40,14 @@ const Payment = () => {
   const sansAvance = ["sans_avance", "sans_acompte"].includes(
     String(terrain?.politique_paiement || "").trim(),
   );
-
-  useEffect(() => {
-    loadTerrain();
-  }, [id]);
+  const enLigneIndispo = Boolean(terrain?.en_ligne_indisponible);
+  const gerantTelHref =
+    terrain?.gerant_tel_href ||
+    (terrain?.gerant_telephone || terrain?.employe?.telephone || terrain?.employe?.whatsapp_number
+      ? `tel:${String(
+          terrain.gerant_telephone || terrain.employe?.telephone || terrain.employe?.whatsapp_number,
+        ).replace(/[^\d+]/g, "")}`
+      : null);
 
   useEffect(() => {
     if (!isAuthenticated || !user) return;
@@ -46,15 +56,6 @@ const Payment = () => {
       setPhone((prev) => prev || formatPhoneDisplay(String(user.telephone)));
     }
   }, [isAuthenticated, user]);
-
-  const loadTerrain = async () => {
-    try {
-      const data = await terrainsApi.get(id!);
-      setTerrain(data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   const endTime = slot
     ? (() => {
@@ -74,6 +75,13 @@ const Payment = () => {
 
   const handlePay = async () => {
     if (processing) return;
+    if (enLigneIndispo) {
+      toast.error(
+        terrain?.booking_message ||
+          "Réservation en ligne indisponible — appelez le gérant",
+      );
+      return;
+    }
     if (!sansAvance && !selected) return;
     const phoneErr = phoneError(phone);
     if (!name.trim() || phoneErr) {
@@ -104,7 +112,11 @@ const Payment = () => {
       if (!reservation.redirect_url) throw new Error("Lien PayTech indisponible");
       window.location.assign(reservation.redirect_url);
     } catch (err: unknown) {
-      const error = err as Error & { offline?: boolean };
+      const error = err as Error & {
+        offline?: boolean;
+        code?: string;
+        gerant_tel_href?: string;
+      };
       if (error.offline) {
         hapticSuccess();
         await registerBackgroundSync();
@@ -135,8 +147,22 @@ const Payment = () => {
         ? "bg-[var(--color-orange-money)] hover:opacity-90"
         : "bg-[var(--color-text-muted)]";
 
+  if (isInitialLoading && !terrain) {
+    return (
+      <div className="page-container page-enter pb-32">
+        <div className="responsive-padding space-y-4 pt-4" aria-busy="true" aria-label="Chargement">
+          <div className="h-12 w-48 rounded-xl skeleton-line" />
+          <div className="h-24 rounded-2xl skeleton-image" />
+          <div className="h-40 rounded-2xl skeleton-image" />
+          <div className="h-32 rounded-2xl skeleton-image" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page-container page-enter pb-32">
+      <SilentSyncDot active={isRefetching && Boolean(terrain)} label="Mise à jour" />
       <div className="flex items-center gap-3 responsive-padding py-4">
         <button
           type="button"
@@ -157,6 +183,23 @@ const Payment = () => {
       </div>
 
       <div className="max-w-lg mx-auto responsive-padding space-y-5">
+        {enLigneIndispo ? (
+          <div className="rounded-[var(--radius-lg)] border border-amber-200 bg-amber-50 p-4 space-y-3">
+            <p className="text-sm text-amber-950">
+              {terrain?.booking_message ||
+                "Réservation en ligne temporairement indisponible. Appelez le gérant pour réserver."}
+            </p>
+            {gerantTelHref ? (
+              <a
+                href={gerantTelHref}
+                className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 rounded-xl bg-[var(--color-primary)] text-white text-sm font-semibold"
+              >
+                <Phone className="w-4 h-4" />
+                Appeler le gérant
+              </a>
+            ) : null}
+          </div>
+        ) : null}
         {terrain && (
           <div className="bg-[var(--surface)] rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] border border-[var(--color-border)] p-4">
             <div className="flex items-center gap-3">
@@ -331,7 +374,7 @@ const Payment = () => {
           <button
             type="button"
             onClick={handlePay}
-            disabled={processing || (!sansAvance && !selected)}
+            disabled={processing || enLigneIndispo || (!sansAvance && !selected)}
             className={`w-full h-14 rounded-[var(--radius-lg)] text-white text-sm font-semibold disabled:opacity-50 ${payBg}`}
             style={{ fontFamily: "var(--font-display)" }}
           >

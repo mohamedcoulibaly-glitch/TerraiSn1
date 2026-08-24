@@ -49,7 +49,13 @@ export function ProfileLoading() {
   );
 }
 
-export function ProfileError({ message }: { message: string }) {
+export function ProfileError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}) {
   const navigate = useNavigate();
 
   return (
@@ -61,7 +67,14 @@ export function ProfileError({ message }: { message: string }) {
           <Button type="button" variant="outline" onClick={() => navigate(-1)}>
             Retour
           </Button>
-          <Button type="button" variant="hero" onClick={() => window.location.reload()}>
+          <Button
+            type="button"
+            variant="hero"
+            onClick={() => {
+              if (onRetry) onRetry();
+              else navigate(0);
+            }}
+          >
             Reessayer
           </Button>
         </div>

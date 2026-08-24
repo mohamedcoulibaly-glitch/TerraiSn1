@@ -17,6 +17,7 @@ export default function ProfilAdmin() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let mounted = true;
@@ -41,7 +42,7 @@ export default function ProfilAdmin() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -59,7 +60,14 @@ export default function ProfilAdmin() {
   };
 
   if (loading) return <ProfileLoading />;
-  if (error || !data) return <ProfileError message={error || "Profil admin introuvable"} />;
+  if (error || !data) {
+    return (
+      <ProfileError
+        message={error || "Profil admin introuvable"}
+        onRetry={() => setReloadKey((k) => k + 1)}
+      />
+    );
+  }
 
   return (
     <ProfileShell account={data.account} roleLabel="Admin">

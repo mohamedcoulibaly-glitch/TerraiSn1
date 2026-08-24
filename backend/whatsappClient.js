@@ -81,9 +81,36 @@ function openwaSessionName(key) {
 function toWaIntlDigits(raw) {
   let d = String(raw || '').replace(/\D/g, '');
   if (d.startsWith('00')) d = d.slice(2);
+  // 07XXXXXXXX → 7XXXXXXXX puis préfixe 221
+  if (d.length === 10 && d.startsWith('07')) d = d.slice(1);
   if (d.length === 9 && d.startsWith('7')) d = `221${d}`;
-  if (d.startsWith('221') && d.length === 12) return d;
+  if (d.startsWith('221') && d.length === 12 && /^2217\d{8}$/.test(d)) return d;
   return null;
+}
+
+/** Statut UX unifié pour la PWA gérant. */
+function connectionStatusOf(state) {
+  if (state.mock) return 'DISCONNECTED';
+  if (state.ready) return 'CONNECTED';
+  const wa = String(state.waState || '').toLowerCase();
+  if (
+    state.pairingCode ||
+    state.initializing ||
+    wa === 'qr_ready' ||
+    wa === 'authenticating' ||
+    wa === 'restarting' ||
+    wa === 'initializing' ||
+    wa === 'starting'
+  ) {
+    return 'CONNECTING';
+  }
+  return 'DISCONNECTED';
+}
+
+function formatPairingCodeDisplay(code) {
+  const clean = String(code || '').replace(/\s/g, '').toUpperCase();
+  if (clean.length === 8) return `${clean.slice(0, 4)}-${clean.slice(4)}`;
+  return clean || null;
 }
 
 function createSessionState(key) {
@@ -104,6 +131,7 @@ function createSessionState(key) {
     connectedPhone: null,
     pairingCode: null,
     pairingPhone: null,
+    pairingExpiresAt: null,
     waState: null,
     transport: 'openwa',
     pinned: Boolean(pinnedId),
@@ -145,10 +173,20 @@ function publicError(state) {
 }
 
 function publicStatus(state, health = null) {
+  if (state.pairingCode && state.pairingExpiresAt && Date.now() > Number(state.pairingExpiresAt)) {
+    state.pairingCode = null;
+    state.pairingExpiresAt = null;
+    if (!state.ready) {
+      state.waState = 'disconnected';
+      state.lastError = state.lastError || 'Le code de jumelage a expiré. Générez-en un nouveau.';
+    }
+  }
   const infraOk = health ? Boolean(health.ok) : publicError(state) == null && !state.mock && Boolean(apiKey);
+  const status = connectionStatusOf(state);
   return {
     session: state.key,
     connected: state.ready,
+    status,
     mock: state.mock,
     hasQr: Boolean(state.lastQrDataUrl),
     initializing: state.initializing,
@@ -156,7 +194,9 @@ function publicStatus(state, health = null) {
     infra_ok: infraOk || state.transport === 'baileys',
     phone: state.connectedPhone,
     pairingCode: state.pairingCode,
+    pairingCodeDisplay: formatPairingCodeDisplay(state.pairingCode),
     pairingPhone: state.pairingPhone,
+    pairingExpiresAt: state.pairingExpiresAt || null,
     waState: state.waState || null,
     provider: state.transport || 'openwa',
     openwaSessionId: state.openwaId,
@@ -644,6 +684,18 @@ async function refreshState(key = 'platform') {
   const state = getOrCreateState(key);
   const health = await getHealth();
   if (state.mock) return publicStatus(state, health);
+
+  // Reprise automatique après reboot : creds Baileys sur disque → reconnect
+  try {
+    const baileys = require('./whatsappBaileys');
+    if (!state.ready && baileys.hasRegisteredCreds?.(state.key)) {
+      state.transport = 'baileys';
+      await baileys.ensure(state, { force: false, reconnect: true });
+    }
+  } catch (err) {
+    console.warn(`⚠️ Reprise Baileys [${state.key}]:`, err.message || err);
+  }
+
   if (state.transport === 'baileys' || preferBaileys) return publicStatus(state, health);
   if (!apiKey) return publicStatus(state, health);
   try {
@@ -659,6 +711,28 @@ async function refreshState(key = 'platform') {
 
 async function getStatus(key = 'platform') {
   return refreshState(key);
+}
+
+/**
+ * Statut mémoire uniquement — pas de ensure/reconnect/OpenWA.
+ * À utiliser pour les pages publiques (dispo réservation) afin de ne pas bloquer l’API.
+ */
+function getStatusLite(key = 'platform') {
+  const state = getOrCreateState(key);
+  let hasCreds = false;
+  try {
+    const baileys = require('./whatsappBaileys');
+    hasCreds = Boolean(baileys.hasRegisteredCreds?.(state.key));
+    if (hasCreds) state.transport = 'baileys';
+  } catch {
+    /* ignore */
+  }
+  const status = publicStatus(state, { ok: true, mock: false, connected: Boolean(state.ready) });
+  // Creds sur disque mais socket pas prêt = reprise attendue (ne pas bloquer la résa)
+  if (!status.connected && hasCreds && status.status === 'DISCONNECTED') {
+    return { ...status, status: 'CONNECTING', initializing: true };
+  }
+  return status;
 }
 
 async function getQrPayload(key = 'platform') {
@@ -695,8 +769,13 @@ function notConnectedError(key, healthOk) {
 async function sendTextForSession(key, chatId, text) {
   const state = getOrCreateState(key);
   if (state.mock) return { mock: true };
+
+  const baileys = require('./whatsappBaileys');
+  if (state.transport !== 'baileys' && baileys.hasRegisteredCreds?.(state.key)) {
+    state.transport = 'baileys';
+  }
+
   if (state.transport === 'baileys') {
-    const baileys = require('./whatsappBaileys');
     if (!state.ready) await baileys.ensure(state);
     if (!state.ready) throw notConnectedError(key, true);
     await baileys.sendText(state.key, chatId, text);
@@ -725,8 +804,13 @@ async function sendTextForSession(key, chatId, text) {
 async function sendImageForSession(key, chatId, media = {}) {
   const state = getOrCreateState(key);
   if (state.mock) return { mock: true };
+
+  const baileys = require('./whatsappBaileys');
+  if (state.transport !== 'baileys' && baileys.hasRegisteredCreds?.(state.key)) {
+    state.transport = 'baileys';
+  }
+
   if (state.transport === 'baileys') {
-    const baileys = require('./whatsappBaileys');
     if (!state.ready) await baileys.ensure(state);
     if (!state.ready) throw notConnectedError(key, true);
     await baileys.sendImage(state.key, chatId, media);
@@ -822,6 +906,7 @@ async function logoutSession(key) {
   state.lastQrDataUrl = null;
   state.pairingCode = null;
   state.pairingPhone = null;
+  state.pairingExpiresAt = null;
   state.waState = 'logged_out';
   state.transport = 'openwa';
   return publicStatus(state);
@@ -854,15 +939,131 @@ const facade = {
 };
 
 module.exports = facade;
+/**
+ * Démarre (ou force) un appairage par code de jumelage pour une session.
+ * @param {string} key
+ * @param {string} phoneRaw
+ * @param {{ force?: boolean }} [opts]
+ */
+async function requestPairing(key, phoneRaw, opts = {}) {
+  const intl = toWaIntlDigits(phoneRaw);
+  if (!intl) {
+    const err = new Error(
+      'Numéro WhatsApp invalide. Format attendu : 22177XXXXXXX (Sénégal).',
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  const state = getOrCreateState(key);
+  if (state.mock) {
+    return {
+      success: false,
+      mock: true,
+      status: 'DISCONNECTED',
+      error: USER_INFRA_ERROR,
+      session: state.key,
+    };
+  }
+
+  if (state.ready && !opts.force) {
+    return {
+      success: true,
+      pairingCode: null,
+      pairingCodeDisplay: null,
+      status: 'CONNECTED',
+      phone: state.connectedPhone,
+      session: state.key,
+      provider: state.transport || 'baileys',
+    };
+  }
+
+  const hasValidCode =
+    Boolean(state.pairingCode) &&
+    state.pairingPhone === intl &&
+    (!state.pairingExpiresAt || Date.now() < Number(state.pairingExpiresAt));
+
+  if (hasValidCode && !opts.force) {
+    return {
+      success: true,
+      pairingCode: formatPairingCodeDisplay(state.pairingCode) || state.pairingCode,
+      pairingCodeRaw: state.pairingCode,
+      pairingPhone: intl,
+      pairingExpiresAt: state.pairingExpiresAt,
+      status: 'CONNECTING',
+      session: state.key,
+      provider: state.transport || 'baileys',
+    };
+  }
+
+  const started = await ensureStarted(state.key, {
+    force: true,
+    phoneNumber: intl,
+  });
+
+  const status = publicStatus(state);
+  if (started.mock || status.mock) {
+    return {
+      success: false,
+      mock: true,
+      status: 'DISCONNECTED',
+      error: USER_INFRA_ERROR,
+      session: state.key,
+    };
+  }
+
+  if (status.connected) {
+    return {
+      success: true,
+      pairingCode: null,
+      pairingCodeDisplay: null,
+      status: 'CONNECTED',
+      phone: status.phone,
+      session: state.key,
+      provider: status.provider,
+    };
+  }
+
+  if (!status.pairingCode) {
+    const errMsg =
+      status.error ||
+      state.lastError ||
+      'Impossible de générer le code de jumelage. Réessayez dans quelques secondes.';
+    return {
+      success: false,
+      pairingCode: null,
+      status: status.status || 'DISCONNECTED',
+      error: errMsg,
+      session: state.key,
+      provider: status.provider,
+      initializing: status.initializing,
+    };
+  }
+
+  return {
+    success: true,
+    pairingCode: formatPairingCodeDisplay(status.pairingCode) || status.pairingCode,
+    pairingCodeRaw: status.pairingCode,
+    pairingPhone: intl,
+    pairingExpiresAt: status.pairingExpiresAt,
+    status: 'CONNECTING',
+    session: state.key,
+    provider: status.provider,
+  };
+}
+
 module.exports.getStatus = (key) => getStatus(key);
+module.exports.getStatusLite = (key) => getStatusLite(key);
 module.exports.getQrPayload = (key) => getQrPayload(key);
 module.exports.ensureStarted = (key, opts) => ensureStarted(key || 'platform', opts);
+module.exports.requestPairing = requestPairing;
 module.exports.sendMessageForSession = sendMessageForSession;
 module.exports.sendTextForSession = sendTextForSession;
 module.exports.sendImageForSession = sendImageForSession;
 module.exports.gerantSessionKey = gerantSessionKey;
 module.exports.logoutSession = logoutSession;
 module.exports.toWaIntlDigits = toWaIntlDigits;
+module.exports.formatPairingCodeDisplay = formatPairingCodeDisplay;
+module.exports.connectionStatusOf = connectionStatusOf;
 module.exports.getHealth = getHealth;
 module.exports.USER_INFRA_ERROR = USER_INFRA_ERROR;
 module.exports._state = platform;

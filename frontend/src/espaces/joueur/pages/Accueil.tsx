@@ -1,6 +1,8 @@
 import { MapPin } from "lucide-react";
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { terrainsApi } from "@/lib/api";
+import { useState, useEffect, useMemo } from "react";
+import { useSilentRefresh } from "@/hooks/useSilentRefresh";
+import { useTerrainsList } from "@/hooks/useJoueurData";
+import SilentSyncDot from "@/components/SilentSyncDot";
 import { PitchCard } from "@/espaces/joueur/components/PitchCard";
 import BannerVideoHeader from "@/espaces/joueur/components/BannerVideoHeader";
 import SkeletonAccueil from "@/components/skeletons/SkeletonAccueil";
@@ -84,14 +86,12 @@ function dateContextLabel(quick: QuickFiltre, advancedDate?: string): string | n
 
 const Accueil = () => {
   const [searchQuery, setSearchQuery] = useState("");
-  const [terrains, setTerrains] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showFiltres, setShowFiltres] = useState(false);
   const [quickFiltre, setQuickFiltre] = useState<QuickFiltre>("tous");
   const [favTick, setFavTick] = useState(0);
   const [draftFiltres, setDraftFiltres] = useState<FiltresTerrainValues>(FILTRES_TERRAIN_DEFAUT);
-  const [appliedFiltres, setAppliedFiltres] = useState<FiltresTerrainValues>(FILTRES_TERRAIN_DEFAUT);  const [geo, setGeo] = useState<GeoState>({ lat: null, lng: null, denied: false, ready: false });
+  const [appliedFiltres, setAppliedFiltres] = useState<FiltresTerrainValues>(FILTRES_TERRAIN_DEFAUT);
+  const [geo, setGeo] = useState<GeoState>({ lat: null, lng: null, denied: false, ready: false });
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -124,55 +124,55 @@ const Accueil = () => {
     };
   }, []);
 
-  const loadTerrains = useCallback(async () => {
-    if (!geo.ready) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const filters: Record<string, string | number> = {};
+  const listFilters = useMemo(() => {
+    if (!geo.ready) return null;
+    const filters: Record<string, string | number> = {};
 
-      const useGeo =
-        (!geo.denied && geo.lat != null && geo.lng != null) || quickFiltre === "pres";
-      if (useGeo && geo.lat != null && geo.lng != null) {
-        filters.lat = geo.lat;
-        filters.lng = geo.lng;
-        filters.distance_max =
-          quickFiltre === "pres" ? 3 : appliedFiltres.distance_max || 10;
-      }
-
-      if (appliedFiltres.quartier.trim()) filters.quartier = appliedFiltres.quartier.trim();
-      if (searchQuery.trim()) filters.search = searchQuery.trim();
-
-      // Format terrain (5v5 / 7v7 / 11v11) ou filtre avancé demi/entier
-      if (FORMAT_FILTRES.includes(quickFiltre)) filters.type = quickFiltre;
-      else if (appliedFiltres.type) filters.type = appliedFiltres.type;
-
-      // Dates selon puce rapide
-      if (quickFiltre === "demain") {
-        filters.date = getTomorrowISO();
-      } else if (quickFiltre === "weekend") {
-        filters.dates = getWeekendISOs().join(",");
-      } else if (appliedFiltres.date) {
-        filters.date = appliedFiltres.date;
-      }
-
-      if (appliedFiltres.heure) filters.heure = appliedFiltres.heure;
-      if (appliedFiltres.prix_max < 100000) filters.prix_max = appliedFiltres.prix_max;
-
-      const data = await terrainsApi.list(filters);
-      setTerrains(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
-      setError("Une erreur est survenue lors du chargement des terrains.");
-      setTerrains([]);
-    } finally {
-      setLoading(false);
+    const useGeo =
+      (!geo.denied && geo.lat != null && geo.lng != null) || quickFiltre === "pres";
+    if (useGeo && geo.lat != null && geo.lng != null) {
+      filters.lat = geo.lat;
+      filters.lng = geo.lng;
+      filters.distance_max = quickFiltre === "pres" ? 3 : appliedFiltres.distance_max || 10;
     }
+
+    if (appliedFiltres.quartier.trim()) filters.quartier = appliedFiltres.quartier.trim();
+    if (searchQuery.trim()) filters.search = searchQuery.trim();
+
+    if (FORMAT_FILTRES.includes(quickFiltre)) filters.type = quickFiltre;
+    else if (appliedFiltres.type) filters.type = appliedFiltres.type;
+
+    if (quickFiltre === "demain") {
+      filters.date = getTomorrowISO();
+    } else if (quickFiltre === "weekend") {
+      filters.dates = getWeekendISOs().join(",");
+    } else if (appliedFiltres.date) {
+      filters.date = appliedFiltres.date;
+    }
+
+    if (appliedFiltres.heure) filters.heure = appliedFiltres.heure;
+    if (appliedFiltres.prix_max < 100000) filters.prix_max = appliedFiltres.prix_max;
+
+    return filters;
   }, [geo, searchQuery, appliedFiltres, quickFiltre]);
 
-  useEffect(() => {
-    loadTerrains();
-  }, [loadTerrains]);
+  const {
+    terrains,
+    isInitialLoading,
+    isRefetching,
+    error: queryError,
+    refetch,
+  } = useTerrainsList(listFilters || undefined, Boolean(geo.ready && listFilters));
+
+  useSilentRefresh({
+    enabled: geo.ready,
+    onRefresh: () => refetch(),
+  });
+
+  const error = queryError
+    ? "Une erreur est survenue lors du chargement des terrains."
+    : null;
+  const loading = isInitialLoading;
 
   const activeFilterCount = useMemo(() => {
     let n = 0;
@@ -252,6 +252,7 @@ const Accueil = () => {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-8 page-enter">
+      <SilentSyncDot active={isRefetching && terrains.length > 0} />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <BannerVideoHeader
           searchQuery={searchQuery}
@@ -339,7 +340,7 @@ const Accueil = () => {
             <div className="text-red-400 text-sm mb-4">{error}</div>
             <button
               type="button"
-              onClick={loadTerrains}
+              onClick={() => void refetch()}
               className="px-6 py-2.5 rounded-xl bg-[var(--primary)] text-white font-bold text-sm active:scale-95 transition-transform"
             >
               Réessayer

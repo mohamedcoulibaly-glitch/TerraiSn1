@@ -412,13 +412,31 @@ export const terrainsApi = {
     return await request(`/terrains/${id}`);
   },
 
+  /** Un seul round-trip : terrain + photos + créneaux du jour. */
+  async getFullDetails(
+    id: number | string,
+    opts?: { date?: string; duree_minutes?: number },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.date) q.set('date', opts.date);
+    if (opts?.duree_minutes != null) q.set('duree_minutes', String(opts.duree_minutes));
+    const qs = q.toString();
+    return await request(`/terrains/${id}/full-details${qs ? `?${qs}` : ''}`);
+  },
+
   async commoditesCatalog() {
     return await request('/commodites');
   },
 
-  async getCreneaux(id: number | string, date: string, opts?: { duree_minutes?: number }) {
+  async getCreneaux(
+    id: number | string,
+    date: string,
+    opts?: { duree_minutes?: number; inclure_passes?: boolean; vue?: "gerant" },
+  ) {
     const q = new URLSearchParams({ date });
     if (opts?.duree_minutes != null) q.set("duree_minutes", String(opts.duree_minutes));
+    if (opts?.inclure_passes) q.set("inclure_passes", "1");
+    if (opts?.vue) q.set("vue", opts.vue);
     return await request(`/terrains/${id}/creneaux?${q.toString()}`);
   },
 
@@ -682,6 +700,27 @@ export const gerantApi = {
     return await request('/gerant/dashboard');
   },
 
+  /** Grille du jour pour la file / blocages / express (heures passées incluses). */
+  async disponibilites(date?: string, opts?: { duree_minutes?: number }) {
+    const q = new URLSearchParams();
+    if (date) q.set('date', date);
+    if (opts?.duree_minutes != null) q.set('duree_minutes', String(opts.duree_minutes));
+    const qs = q.toString();
+    return await request(`/gerant/disponibilites${qs ? `?${qs}` : ''}`) as {
+      date: string;
+      terrain_id: number;
+      creneaux?: Array<{
+        heure?: string;
+        heure_debut?: string;
+        heure_fin?: string;
+        disponible?: boolean;
+        statut?: string;
+      }>;
+      ferme?: boolean;
+      motif?: string | null;
+    };
+  },
+
   async terrains() {
     return await request('/gerant/terrains') as {
       terrains: Array<{
@@ -850,14 +889,32 @@ export const gerantApi = {
     });
   },
 
-  async whatsappStatus() {
+  async whatsappStatus(gerantId?: number | string) {
+    if (gerantId != null) {
+      return await request(`/gerant/whatsapp/status/${gerantId}`);
+    }
     return await request('/gerant/whatsapp/status');
   },
 
-  async whatsappConnect(opts?: { force?: boolean }) {
+  async whatsappRequestPairing(opts: { telephone: string; force?: boolean; gerant_id?: number }) {
+    return await request('/gerant/whatsapp/request-pairing', {
+      method: 'POST',
+      body: JSON.stringify({
+        telephone: opts.telephone,
+        force: Boolean(opts.force),
+        gerant_id: opts.gerant_id,
+      }),
+    });
+  },
+
+  async whatsappConnect(opts?: { force?: boolean; telephone?: string; mode?: 'pairing' | 'qr' }) {
     return await request('/gerant/whatsapp/connect', {
       method: 'POST',
-      body: JSON.stringify({ force: Boolean(opts?.force) }),
+      body: JSON.stringify({
+        force: Boolean(opts?.force),
+        telephone: opts?.telephone || undefined,
+        mode: opts?.mode || 'pairing',
+      }),
     });
   },
 
@@ -1000,13 +1057,13 @@ export const gerantApi = {
     date: string;
     heure_debut: string;
     heure_fin: string;
-    format?: 'moitie' | 'entier';
+    format?: string;
   }) {
     const q = new URLSearchParams({
       date: params.date,
       heure_debut: params.heure_debut,
       heure_fin: params.heure_fin,
-      format: params.format || 'entier',
+      format: params.format || "entier",
     });
     return await request(`/gerant/devis?${q.toString()}`);
   },

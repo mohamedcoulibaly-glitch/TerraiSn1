@@ -56,6 +56,23 @@ function formaterMontant(montant) {
   return Number(montant || 0).toLocaleString('fr-SN') + ' FCFA';
 }
 
+/** Montants réservation pour WhatsApp — avance ≠ commission, jamais l'acompte terrain. */
+function montantsReservation(data = {}) {
+  const total = Number(data.prix_total || data.montant || 0);
+  const avance = Number(data.montant_avance);
+  const avanceOk = Number.isFinite(avance) && avance > 0 ? avance : Number(data.acompte || 0);
+  const restantRaw = Number(data.montant_restant);
+  const restant =
+    Number.isFinite(restantRaw) && restantRaw >= 0
+      ? restantRaw
+      : Math.max(0, total - (Number.isFinite(avanceOk) ? avanceOk : 0));
+  return {
+    total: Number.isFinite(total) ? total : 0,
+    avance: Number.isFinite(avanceOk) ? avanceOk : 0,
+    restant: Number.isFinite(restant) ? restant : 0,
+  };
+}
+
 async function envoyerMessage(telephone, message, sessionKey = 'platform') {
   if (!telephone) return;
   const key = sessionKey || 'platform';
@@ -267,6 +284,7 @@ async function envoyerLienPaiement(reservationId) {
   const tel = telephoneJoueur(data);
   const lien = data.lien_paiement || data.lien_paytech;
   const waKey = sessionKeyFromReservation(data);
+  const { avance, restant } = montantsReservation(data);
   await envoyerWhatsApp(
     tel,
     `👋 Salut ${prenom} !\n\n` +
@@ -274,9 +292,9 @@ async function envoyerLienPaiement(reservationId) {
       `pour le ${formaterDate(data.date)} ` +
       `à ${formaterHeure(data.heure_debut)}.\n\n` +
       `Pour confirmer ta place, paie ton avance de ` +
-      `*${formaterMontant(data.montant_avance || data.acompte)}* ici :\n` +
+      `*${formaterMontant(avance)}* ici :\n` +
       `👉 ${lien}\n\n` +
-      `Le reste (*${formaterMontant(data.montant_restant || data.reste_a_payer)}*) ` +
+      `Le reste (*${formaterMontant(restant)}*) ` +
       `tu l'amènes le jour du match, pas de stress 😊\n\n` +
       `⚠️ Ce lien est valable *2 heures*. Après ça, la place repart.`,
     waKey
@@ -306,8 +324,8 @@ async function envoyerConfirmation(reservationId) {
     `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
     `🏷️ Code : *${data.code_reservation}*\n\n` +
     (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
-    `💰 Avance payée : ${formaterMontant(data.montant_avance || data.acompte)}\n` +
-    `💵 À régler sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}\n\n` +
+    `💰 Avance payée : ${formaterMontant(montantsReservation(data).avance)}\n` +
+    `💵 À régler sur place : ${formaterMontant(montantsReservation(data).restant)}\n\n` +
     `📌 Viens *30 minutes avant* avec ce QR code, ` +
     `c'est lui qui ouvre les portes 😄\n` +
     `⚠️ Ce QR code est à usage unique — ne le partage pas.`;
@@ -369,8 +387,8 @@ async function envoyerConfirmationManuelle(reservationId) {
     `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
     `🏷️ Code : *${data.code_reservation}*\n\n` +
     (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
-    `💰 Avance reçue : ${formaterMontant(data.montant_avance || data.acompte)} ✓\n` +
-    `💵 À régler sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}\n\n` +
+    `💰 Avance reçue : ${formaterMontant(montantsReservation(data).avance)} ✓\n` +
+    `💵 À régler sur place : ${formaterMontant(montantsReservation(data).restant)}\n\n` +
     `📌 Viens *30 minutes avant* avec ce QR code 😄\n` +
     `⚠️ Ce QR code est à usage unique.`;
 

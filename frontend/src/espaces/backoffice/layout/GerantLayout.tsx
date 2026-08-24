@@ -6,6 +6,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { gerantApi, getGerantTerrainActif, setGerantTerrainActif } from "@/lib/api";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import WhatsAppInfraBanner from "@/espaces/backoffice/components/WhatsAppInfraBanner";
+import WhatsAppGerantSessionBanner from "@/espaces/backoffice/components/WhatsAppGerantSessionBanner";
 
 const TABS = [
   {
@@ -254,6 +255,7 @@ export default function GerantLayout() {
         </header>
 
         <WhatsAppInfraBanner visible={waDown} tone="gerant" />
+        <WhatsAppGerantSessionBanner />
 
         <main className="flex-1 p-3 md:p-6 overflow-auto">
           <div className="max-w-5xl mx-auto" key={terrainActif ?? "default"}>

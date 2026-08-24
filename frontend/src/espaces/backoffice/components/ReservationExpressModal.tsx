@@ -149,6 +149,8 @@ export default function ReservationExpressModal({
   });
   const [politiquePaiement, setPolitiquePaiement] = useState<"avance" | "sans_avance">("avance");
   const [features, setFeatures] = useState<Record<string, boolean>>({});
+  const [pourcentageAvance, setPourcentageAvance] = useState(12.5);
+  const [commissionPourcentage, setCommissionPourcentage] = useState(8);
   const sansAvance = politiquePaiement === "sans_avance";
   const canConfirmManual = featureEnabled(features, "confirmations_manuelles", true);
 
@@ -163,11 +165,15 @@ export default function ReservationExpressModal({
     montant_avance: number;
     montant_restant: number;
     montant_commission?: number;
+    pourcentage_avance?: number | null;
+    commission_pourcentage?: number | null;
+    nom_tarif?: string | null;
   } | null>(null);
   const [payChoice, setPayChoice] = useState<"lien" | "manuel">("lien");
   const [noteManuel, setNoteManuel] = useState("");
   const [busy, setBusy] = useState(false);
   const [waConnected, setWaConnected] = useState<boolean | null>(null);
+  const [waGateOpen, setWaGateOpen] = useState(false);
   const { down: waDown } = useWhatsappInfra(open);
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
 
@@ -232,6 +238,7 @@ export default function ReservationExpressModal({
     setNoteManuel("");
     setBusy(false);
     setDoneMsg(null);
+    setWaGateOpen(false);
     gerantApi
       .whatsappStatus()
       .then((s: any) => setWaConnected(Boolean(s?.connected) && !s?.mock))
@@ -253,6 +260,10 @@ export default function ReservationExpressModal({
             : "avance",
         );
         setFeatures((t?.features && typeof t.features === "object" ? t.features : {}) as Record<string, boolean>);
+        const pctAvance = Number(t?.pourcentage_avance);
+        setPourcentageAvance(Number.isFinite(pctAvance) && pctAvance > 0 ? pctAvance : 12.5);
+        const pctComm = Number(t?.commission_pourcentage);
+        setCommissionPourcentage(Number.isFinite(pctComm) && pctComm > 0 ? pctComm : 8);
         const formats =
           Array.isArray(t?.formats) && t.formats.length
             ? t.formats.map((f: any) => ({
@@ -303,8 +314,8 @@ export default function ReservationExpressModal({
     let cancelled = false;
     setLoadingSlots(true);
     const dureeMin = Math.round(selectedDuration * 60);
-    terrainsApi
-      .getCreneaux(terrainId, selectedDate, { duree_minutes: dureeMin })
+    gerantApi
+      .disponibilites(selectedDate, { duree_minutes: dureeMin })
       .then((data: any) => {
         if (cancelled) return;
         let slots: Slot[] = (data?.creneaux || []).map((s: any) => ({
@@ -313,6 +324,17 @@ export default function ReservationExpressModal({
           disponible: s.disponible,
           statut: s.statut,
         }));
+        // Express : ne pas proposer un départ déjà passé (aujourd'hui)
+        const today = localYmd();
+        if (selectedDate === today) {
+          const now = new Date();
+          const nowMin = now.getHours() * 60 + now.getMinutes();
+          slots = slots.filter((s) => {
+            const [h, m] = String(s.heure || "").slice(0, 5).split(":").map(Number);
+            if (!Number.isFinite(h)) return true;
+            return h * 60 + (m || 0) > nowMin;
+          });
+        }
         if (slots.length === 0) {
           slots = ["18:00", "19:00", "20:00", "21:00"].map((heure) => ({
             heure,
@@ -447,6 +469,21 @@ export default function ReservationExpressModal({
       setDevis(null);
       return;
     }
+
+    const buildLocalDevis = (total: number) => {
+      if (!(total > 0)) return null;
+      const avance = Math.min(total, Math.round((total * pourcentageAvance) / 100));
+      const commission = Math.min(avance, Math.round((avance * commissionPourcentage) / 100));
+      return {
+        montant: total,
+        montant_avance: avance,
+        montant_restant: Math.max(0, total - avance),
+        montant_commission: commission,
+        pourcentage_avance: pourcentageAvance,
+        commission_pourcentage: commissionPourcentage,
+      };
+    };
+
     let cancelled = false;
     const t = window.setTimeout(() => {
       gerantApi
@@ -461,14 +498,26 @@ export default function ReservationExpressModal({
           const montant = Number(payload?.montant);
           const avance = Number(payload?.montant_avance);
           const restant = Number(payload?.montant_restant);
-          if (Number.isFinite(montant) && montant > 0) {
+          const commission = Number(payload?.montant_commission);
+          if (Number.isFinite(montant) && montant > 0 && Number.isFinite(avance)) {
+            const avanceOk = avance >= 0 ? avance : Math.min(montant, Math.round((montant * pourcentageAvance) / 100));
+            const commissionOk = Number.isFinite(commission)
+              ? commission
+              : Math.min(avanceOk, Math.round((avanceOk * commissionPourcentage) / 100));
             setDevis({
               montant,
-              montant_avance: Number.isFinite(avance) ? avance : Math.round(montant * 0.125),
-              montant_restant: Number.isFinite(restant)
-                ? restant
-                : Math.max(0, montant - (Number.isFinite(avance) ? avance : Math.round(montant * 0.125))),
-              montant_commission: Number(payload?.montant_commission || 0),
+              montant_avance: avanceOk,
+              montant_restant: Number.isFinite(restant) ? restant : Math.max(0, montant - avanceOk),
+              montant_commission: commissionOk,
+              pourcentage_avance:
+                payload?.pourcentage_avance != null
+                  ? Number(payload.pourcentage_avance)
+                  : pourcentageAvance,
+              commission_pourcentage:
+                payload?.commission_pourcentage != null
+                  ? Number(payload.commission_pourcentage)
+                  : commissionPourcentage,
+              nom_tarif: payload?.detail?.[0]?.nom_tarif || null,
             });
             return;
           }
@@ -479,9 +528,7 @@ export default function ReservationExpressModal({
               : formatTerrain === "entier"
                 ? terrainPrix.entier
                 : Number(fmt?.prix_heure || terrainPrix.entier || 0);
-          const total = Math.round(hourly * selectedDuration);
-          const av = Math.round(total * 0.125);
-          setDevis({ montant: total, montant_avance: av, montant_restant: Math.max(0, total - av) });
+          setDevis(buildLocalDevis(Math.round(hourly * selectedDuration)));
         })
         .catch(() => {
           if (cancelled) return;
@@ -493,8 +540,7 @@ export default function ReservationExpressModal({
                 ? terrainPrix.entier
                 : Number(fmt?.prix_heure || terrainPrix.entier || 0);
           const total = hourly > 0 ? Math.round(hourly * selectedDuration) : 0;
-          const av = Math.round(total * 0.125);
-          setDevis(total > 0 ? { montant: total, montant_avance: av, montant_restant: total - av } : null);
+          setDevis(buildLocalDevis(total));
         });
     }, 180);
     return () => {
@@ -511,12 +557,27 @@ export default function ReservationExpressModal({
     terrainPrix.moitie,
     terrainPrix.entier,
     formatsOpts,
+    pourcentageAvance,
+    commissionPourcentage,
   ]);
 
   if (!open) return null;
 
   const canGoStep2 = Boolean(heureDebutEffective && heureFin && verifState !== "conflit");
   const canGoStep3 = Boolean(!telError && displayNom);
+
+  const requireWhatsAppOrGate = () => {
+    if (waDown || waConnected === false) {
+      setWaGateOpen(true);
+      return false;
+    }
+    return true;
+  };
+
+  const goToWhatsAppPairing = () => {
+    onClose();
+    navigate("/backoffice/gerant/parametres?section=whatsapp");
+  };
 
   const submitPaiement = async () => {
     if (!terrainId) {
@@ -537,11 +598,7 @@ export default function ReservationExpressModal({
       toast.error(errPhone);
       return;
     }
-    if (waDown) {
-      toast.error(WHATSAPP_INFRA_MESSAGE);
-    } else if (waConnected === false) {
-      toast.message("WhatsApp gérant non connecté : le lien pourra être renvoyé plus tard.");
-    }
+    if (!requireWhatsAppOrGate()) return;
 
     setBusy(true);
     try {
@@ -615,6 +672,7 @@ export default function ReservationExpressModal({
       toast.error("Les confirmations manuelles sont désactivées pour ce terrain");
       return;
     }
+    if (!requireWhatsAppOrGate()) return;
     setBusy(true);
     try {
       if (sansAvance) {
@@ -705,9 +763,9 @@ export default function ReservationExpressModal({
               {step === 2 && " — Joueur"}
               {step === 3 && " — Paiement"}
             </p>
-            {waConnected === false && step === 3 ? (
+            {waConnected === false && step === 3 && !waGateOpen ? (
               <p className="mt-1 text-[11px] font-medium text-amber-600">
-                WhatsApp non connecté : le lien ne partira pas automatiquement.
+                WhatsApp non connecté — tu seras invité à l&apos;appairer avant validation.
               </p>
             ) : null}
           </div>
@@ -736,6 +794,46 @@ export default function ReservationExpressModal({
           <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
             <CheckCircle2 className="h-14 w-14 text-[var(--g-primary)]" />
             <p className="text-lg font-bold text-[var(--text-primary)]">{doneMsg}</p>
+          </div>
+        ) : waGateOpen ? (
+          <div className="flex flex-1 flex-col px-4 pb-6 pt-2">
+            <div
+              className="rounded-2xl border px-4 py-5 space-y-3"
+              style={{
+                borderColor: "color-mix(in srgb, #f59e0b 40%, transparent)",
+                background: "color-mix(in srgb, #f59e0b 10%, white)",
+              }}
+            >
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+                <div>
+                  <p className="text-sm font-bold" style={{ color: "var(--g-text)" }}>
+                    WhatsApp déconnecté
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--g-muted)" }}>
+                    {waDown
+                      ? WHATSAPP_INFRA_MESSAGE
+                      : "Connecte ton WhatsApp pour finaliser la réservation et notifier le joueur."}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={goToWhatsAppPairing}
+                className="flex min-h-[48px] w-full items-center justify-center rounded-xl text-sm font-semibold text-white"
+                style={{ background: "var(--g-primary)" }}
+              >
+                Connecter WhatsApp
+              </button>
+              <button
+                type="button"
+                onClick={() => setWaGateOpen(false)}
+                className="flex min-h-[40px] w-full items-center justify-center rounded-xl text-sm font-medium"
+                style={{ color: "var(--g-muted)", border: "1px solid var(--g-border, #e5e7eb)" }}
+              >
+                Retour
+              </button>
+            </div>
           </div>
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
@@ -1051,12 +1149,6 @@ export default function ReservationExpressModal({
                     <div className="grid grid-cols-2 gap-2">
                       {formatsOpts.map((fmt) => {
                         const active = formatTerrain === fmt.cle;
-                        const price =
-                          fmt.cle === "moitie" || fmt.map_grille === "demi"
-                            ? terrainPrix.moitie || fmt.prix_heure
-                            : fmt.cle === "entier" || fmt.map_grille === "entier"
-                              ? terrainPrix.entier || fmt.prix_heure
-                              : fmt.prix_heure;
                         return (
                           <button
                             key={fmt.cle}
@@ -1071,7 +1163,9 @@ export default function ReservationExpressModal({
                           >
                             <span className="block text-sm font-semibold">{fmt.label}</span>
                             <span className="text-[11px] opacity-80">
-                              {price > 0 ? `${formatFcfa(price)}/h` : "—"}
+                              {active && devis
+                                ? `Total créneau : ${formatFcfa(devis.montant)}`
+                                : "Prix selon créneau / grille"}
                             </span>
                           </button>
                         );
@@ -1081,6 +1175,11 @@ export default function ReservationExpressModal({
                       <p className="mt-2 text-[11px] text-amber-700">
                         Format sélectionné :{" "}
                         {formatsOpts.find((f) => f.cle === formatTerrain)?.label || formatTerrain}
+                      </p>
+                    ) : null}
+                    {devis?.nom_tarif ? (
+                      <p className="mt-1 text-[11px] text-neutral-500">
+                        Tarif appliqué : {devis.nom_tarif}
                       </p>
                     ) : null}
                   </div>
@@ -1099,8 +1198,14 @@ export default function ReservationExpressModal({
                       <p className="text-xs text-amber-900">
                         {sansAvance
                           ? `Sans avance — total à encaisser sur place : ${formatFcfa(devis.montant)}`
-                          : `Avance : ${formatFcfa(devis.montant_avance)} — Reste sur place : ${formatFcfa(devis.montant_restant)}`}
+                          : `Avance (${devis.pourcentage_avance ?? pourcentageAvance}%) : ${formatFcfa(devis.montant_avance)} — Reste sur place : ${formatFcfa(devis.montant_restant)}`}
                       </p>
+                      {!sansAvance && Number(devis.montant_commission || 0) > 0 ? (
+                        <p className="text-[11px] text-neutral-600">
+                          Commission plateforme ({devis.commission_pourcentage ?? commissionPourcentage}% de
+                          l&apos;avance) : {formatFcfa(devis.montant_commission || 0)}
+                        </p>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -1177,8 +1282,18 @@ export default function ReservationExpressModal({
                       </span>
                       {!sansAvance ? (
                         <p className="mt-1 text-[12px]" style={{ color: "var(--g-warning)" }}>
-                          La commission de {formatFcfa(devis?.montant_commission || 0)} sera comptabilisée en dette.
-                          Tu devras la régler en fin de mois.
+                          La commission de{" "}
+                          {formatFcfa(
+                            devis?.montant_commission ??
+                              Math.min(
+                                Number(devis?.montant_avance || 0),
+                                Math.round(
+                                  (Number(devis?.montant_avance || 0) * commissionPourcentage) / 100,
+                                ),
+                              ),
+                          )}{" "}
+                          ({commissionPourcentage}% de l&apos;avance) sera comptabilisée en dette. Tu
+                          devras la régler en fin de mois.
                         </p>
                       ) : null}
                     </button>

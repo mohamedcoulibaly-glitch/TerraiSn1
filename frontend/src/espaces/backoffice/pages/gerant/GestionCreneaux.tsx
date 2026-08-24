@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { ChevronLeft, ChevronRight, User, XCircle, Phone, Calendar } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { hoursRangeFromHoraires, labelHeureSenegal, formatHour } from "@/lib/scheduleSn";
 import { localYmd } from "@/lib/localDate";
+import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
 
 const statusConfig: Record<string, { label: string; className: string }> = {
   en_attente: {
@@ -54,6 +55,7 @@ const ManagerCalendar = () => {
   const [reservations, setReservations] = useState<any[]>([]);
   const [blocages, setBlocages] = useState<any[]>([]);
   const [horaires, setHoraires] = useState<any[]>([]);
+  const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
   const [selectedReservation, setSelectedReservation] = useState<any>(null);
   const [selectedBlocage, setSelectedBlocage] = useState<any>(null);
   const [processing, setProcessing] = useState(false);
@@ -77,6 +79,9 @@ const ManagerCalendar = () => {
       setReservations(data.reservations || []);
       setBlocages(data.blocages || []);
       setHoraires(data.horaires || []);
+      setFeatures(
+        data?.features && typeof data.features === "object" ? (data.features as Record<string, boolean>) : {},
+      );
     } catch (err: any) {
       toast.error(err.message || "Erreur lors du chargement");
     } finally {
@@ -400,16 +405,25 @@ const ManagerCalendar = () => {
               </div>
 
               {selectedReservation.statut === "en_attente" && (
-                <DialogFooter className="flex gap-2 sm:gap-0">
+                <div className="space-y-3 pt-2">
+                  <EnAttentePaiementActions
+                    reservationId={selectedReservation.id}
+                    montantAvance={selectedReservation.montant_avance}
+                    features={features}
+                    variant="compact"
+                    onDone={() => {
+                      setSelectedReservation(null);
+                      void loadData();
+                    }}
+                  />
                   <button
                     type="button"
-                    className="flex-1 min-h-[48px] rounded-[var(--radius-md)] border border-[var(--color-danger)]/30 text-[var(--color-danger)] text-sm font-medium"
-                    onClick={() => handleTraiterReservation(selectedReservation.id, "refusee")}
-                    disabled={processing}
+                    className="w-full min-h-[44px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium"
+                    onClick={() => handleOpenFiche(selectedReservation.id)}
                   >
-                    Refuser
+                    Ouvrir la fiche complète
                   </button>
-                </DialogFooter>
+                </div>
               )}
               {selectedReservation.statut === "confirme" && (
                 <DialogFooter>

@@ -1,9 +1,9 @@
 const crypto = require('crypto');
 const { getDb, queryOne, runSql } = require('./database');
+const { calculerMontantAvance: pricingAvance } = require('./pricingService');
 
 const PAYTECH_URL = process.env.PAYTECH_API_URL || 'https://paytech.sn/api/payment/request-payment';
 const MOCK_SECRET = 'terrainsn-paytech-local-mock';
-const POURCENTAGE_AVANCE_DEFAUT = 8;
 
 function paymentMode() {
   if (process.env.PAYMENT_MODE) return String(process.env.PAYMENT_MODE).toLowerCase();
@@ -26,12 +26,12 @@ function assertConfigured() {
   }
 }
 
+/** @deprecated Prefer pricingService.calculerMontantAvance(terrain, prix) */
 function calculerMontantAvance(prixChoisi, pourcentageAvance) {
-  const montant = Number(prixChoisi || 0);
-  if (!Number.isFinite(montant) || montant <= 0) return 0;
-  const pct = Number(pourcentageAvance);
-  const taux = Number.isFinite(pct) && pct > 0 ? pct : POURCENTAGE_AVANCE_DEFAUT;
-  return Math.min(montant, Math.round((montant * taux) / 100));
+  return pricingAvance(
+    { pourcentage_avance: pourcentageAvance },
+    prixChoisi,
+  );
 }
 
 /** Montant réellement envoyé à PayTech : avance > 0, sinon acompte legacy. */
@@ -44,15 +44,17 @@ function montantLienPaiement(reservation = {}) {
 }
 
 /**
- * Crée un paiement PayTech (ou simulation) avec avance recalculée
- * depuis terrains.pourcentage_avance × prixChoisi.
+ * Crée un paiement PayTech (ou simulation).
+ * Réutilise montant_avance déjà stocké sur la réservation (même moteur que le devis UI).
+ * Ne recalcule que si l'avance est absente / nulle.
  */
 async function creerPaiement({ reservationId, terrainId, prixChoisi }) {
   const db = await getDb();
   const terrain = await queryOne(
     db,
-    'SELECT id, nom, pourcentage_avance FROM terrains WHERE id = ?',
-    [terrainId]
+    `SELECT id, nom, pourcentage_avance, acompte, montant_acompte, commission_pourcentage, commission, modele_revenus
+     FROM terrains WHERE id = ?`,
+    [terrainId],
   );
   if (!terrain) {
     const error = new Error('Terrain introuvable pour le paiement');
@@ -60,11 +62,29 @@ async function creerPaiement({ reservationId, terrainId, prixChoisi }) {
     throw error;
   }
 
-  const prix = Number(prixChoisi || 0);
-  const montantAvance = calculerMontantAvance(prix, terrain.pourcentage_avance);
+  const reservation = await queryOne(
+    db,
+    `SELECT id, montant, prix_total, montant_avance, montant_restant, acompte, reste_a_payer
+     FROM reservations WHERE id = ?`,
+    [reservationId],
+  );
+  if (!reservation) {
+    const error = new Error('Réservation introuvable pour le paiement');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const prix = Number(prixChoisi || reservation.prix_total || reservation.montant || 0);
+  const avanceExistante = Number(reservation.montant_avance);
+  const hasAvance =
+    Number.isFinite(avanceExistante) && avanceExistante > 0;
+
+  // Même formule que le devis gérant / création (évite divergence WhatsApp vs écran)
+  const montantAvance = hasAvance
+    ? avanceExistante
+    : pricingAvance(terrain, prix);
   const montantRestant = Math.max(0, prix - montantAvance);
 
-  // Synchroniser les colonnes réservation (sans renommer montant_acompte / acompte legacy)
   await runSql(
     db,
     `UPDATE reservations SET
@@ -73,7 +93,7 @@ async function creerPaiement({ reservationId, terrainId, prixChoisi }) {
       acompte = ?,
       reste_a_payer = ?
      WHERE id = ?`,
-    [montantAvance, montantRestant, montantAvance, montantRestant, reservationId]
+    [montantAvance, montantRestant, montantAvance, montantRestant, reservationId],
   );
 
   const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');

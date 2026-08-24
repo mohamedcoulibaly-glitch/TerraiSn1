@@ -155,8 +155,14 @@ async function instructionsPaiementDette(db) {
 async function confirmerManuellement(db, { reservationId, gerantId, note }) {
   const reservation = await queryOne(
     db,
-    `SELECT r.*, t.commission_pourcentage, t.pourcentage_avance, t.modele_revenus, t.commission,
-            t.acompte, t.montant_acompte, t.delai_paiement_dette_jours
+    `SELECT r.id, r.terrain_id, r.statut, r.code_reservation, r.montant, r.prix_total,
+            r.creneau_id, r.date, r.heure_debut, r.heure_fin,
+            r.montant_avance AS montant_avance,
+            r.acompte AS reservation_acompte,
+            r.montant_restant, r.reste_a_payer,
+            t.commission_pourcentage, t.pourcentage_avance, t.modele_revenus, t.commission,
+            t.acompte AS terrain_acompte, t.montant_acompte AS terrain_montant_acompte,
+            t.delai_paiement_dette_jours
      FROM reservations r
      JOIN terrains t ON t.id = r.terrain_id
      JOIN employes e ON e.terrain_id = t.id AND e.id = ?
@@ -177,7 +183,10 @@ async function confirmerManuellement(db, { reservationId, gerantId, note }) {
     throw error;
   }
 
-  const montantAvance = Number(reservation.montant_avance || reservation.acompte || 0);
+  // Avance de la réservation uniquement — jamais l'acompte de référence du terrain
+  const montantAvance = Number(
+    reservation.montant_avance || reservation.reservation_acompte || 0,
+  );
   const commission = calculerCommissionPrelevee(reservation, montantAvance);
   const periode = periodeCivile();
   const delaiJours = Math.max(7, Math.min(90, Number(reservation.delai_paiement_dette_jours) || 30));

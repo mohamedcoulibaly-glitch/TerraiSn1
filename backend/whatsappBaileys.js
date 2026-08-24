@@ -162,6 +162,7 @@ async function bindSocket(state, { force = false, reconnect = false, phoneNumber
     state.lastQrDataUrl = null;
     state.pairingCode = null;
     state.pairingPhone = null;
+    state.pairingExpiresAt = null;
     state.ready = false;
   }
 
@@ -175,7 +176,8 @@ async function bindSocket(state, { force = false, reconnect = false, phoneNumber
       console.log(`🔐 Baileys pair-success [${state.key}] — redémarrage attendu`);
     }
 
-    if (qr && !state.ready && !readCredsRegistered(dir)) {
+    // QR toujours généré par WA Web ; utile uniquement hors mode pairing téléphone
+    if (qr && !state.ready && !readCredsRegistered(dir) && !state.pairingPhone) {
       try {
         state.lastQrDataUrl = await QRCode.toDataURL(qr, {
           margin: 2,
@@ -195,6 +197,7 @@ async function bindSocket(state, { force = false, reconnect = false, phoneNumber
       state.initializing = false;
       state.lastQrDataUrl = null;
       state.pairingCode = null;
+      state.pairingExpiresAt = null;
       state.waState = 'ready';
       state.lastError = null;
       const id = sock.user?.id || '';
@@ -227,6 +230,7 @@ async function bindSocket(state, { force = false, reconnect = false, phoneNumber
         state.waState = 'logged_out';
         state.lastQrDataUrl = null;
         state.pairingCode = null;
+        state.pairingExpiresAt = null;
         sockets.delete(state.key);
         wipeAuthDir(dir);
         return;
@@ -236,49 +240,66 @@ async function bindSocket(state, { force = false, reconnect = false, phoneNumber
       if (restartRequired) {
         state.lastQrDataUrl = null;
         state.pairingCode = null;
+        state.pairingExpiresAt = null;
         state.waState = 'authenticating';
         state.initializing = true;
-        scheduleReconnect(state, phoneNumber, 800);
+        scheduleReconnect(state, phoneNumber || state.pairingPhone, 800);
         return;
       }
 
-      // QR expiré (408) ou autre coupure : reconnecter pour un nouveau QR / reprendre
+      // Code / QR expiré (408) : reconnect + re-demande pairing si numéro connu
       state.waState = 'disconnected';
       if (!readCredsRegistered(dir)) {
-        // Nouveau QR attendu
         state.lastQrDataUrl = null;
+        state.pairingCode = null;
+        state.pairingExpiresAt = null;
       }
-      scheduleReconnect(state, phoneNumber, code === 408 ? 500 : 1500);
+      scheduleReconnect(state, phoneNumber || state.pairingPhone, code === 408 ? 500 : 1500);
     }
   });
 
-  // Code d'appairage uniquement si demandé et pas déjà enregistré
-  const intl = toIntlPhone(phoneNumber);
-  if (
-    intl &&
-    !auth.creds?.registered &&
-    !reconnect &&
-    typeof sock.requestPairingCode === 'function'
-  ) {
+  // Code d'appairage si numéro fourni et session pas encore enregistrée
+  // (aussi après reconnect 408 : le code expire ~2 min)
+  const intl = toIntlPhone(phoneNumber || state.pairingPhone);
+  if (intl && !auth.creds?.registered && typeof sock.requestPairingCode === 'function') {
     try {
-      await waitMs(1500);
+      await waitMs(reconnect ? 800 : 1500);
       if (!state.ready && liveSocket(state.key)) {
         const code = await sock.requestPairingCode(intl);
         if (code) {
-          state.pairingCode = String(code).replace(/\s/g, '');
+          state.pairingCode = String(code).replace(/\s/g, '').toUpperCase();
           state.pairingPhone = intl;
+          state.pairingExpiresAt = Date.now() + 110_000; // ~2 min (marge 10s)
+          state.lastQrDataUrl = null; // PWA mobile : pairing code uniquement
           state.waState = 'qr_ready';
           state.initializing = true;
+          state.lastError = null;
           console.log(`🔑 Code d'appairage Baileys [${state.key}]: ${state.pairingCode}`);
         }
       }
     } catch (err) {
+      state.lastError = err.message || String(err);
       console.warn(`⚠️ Pairing Baileys [${state.key}]:`, err.message || err);
     }
   }
 }
 
+function clearExpiredPairing(state) {
+  if (
+    state.pairingCode &&
+    state.pairingExpiresAt &&
+    Date.now() > Number(state.pairingExpiresAt)
+  ) {
+    console.warn(`⌛ Code d'appairage expiré [${state.key}]`);
+    state.pairingCode = null;
+    state.pairingExpiresAt = null;
+    state.lastError = 'Le code de jumelage a expiré. Générez-en un nouveau.';
+    if (!state.ready) state.waState = 'disconnected';
+  }
+}
+
 async function ensure(state, opts = {}) {
+  clearExpiredPairing(state);
   if (state.ready && state.transport === 'baileys' && !opts.force) return state;
 
   const held = sockets.get(state.key);
@@ -393,4 +414,4 @@ async function logout(key) {
   wipeAuthDir(dir);
 }
 
-module.exports = { ensure, sendText, sendImage, logout, toBaileysJid };
+module.exports = { ensure, sendText, sendImage, logout, toBaileysJid, hasRegisteredCreds: (key) => readCredsRegistered(authDir(key)), authDir };

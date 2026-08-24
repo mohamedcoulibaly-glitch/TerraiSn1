@@ -85,6 +85,14 @@ function mapReservationGerantRow(row) {
       ? Date.now() >= fenetre.debutFenetre && Date.now() <= fenetre.finFenetre
       : false,
     pending_count: Number(row.pending_count || 1),
+    created_at: row.created_at || null,
+    verrou_expire_at: row.verrou_expire_at != null ? Number(row.verrou_expire_at) : null,
+    expire_at: row.expire_at || null,
+    lien_paiement: row.lien_paiement || null,
+    format_terrain: row.format_terrain || null,
+    montant: montantTotal,
+    prix_total: montantTotal,
+    acompte: montantAvance,
     politique_remboursement: evaluerRemboursement({
       terrain: { delai_remboursement_heures: row.delai_remboursement_heures },
       reservation: { ...row, date: dateYmd, heure_debut, heure_fin },

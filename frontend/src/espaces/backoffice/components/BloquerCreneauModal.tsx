@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Check, CloudRain, DoorClosed, MoreHorizontal, Repeat, Trophy, Wrench, X } from "lucide-react";
 import { toast } from "sonner";
-import { gerantApi, terrainsApi } from "@/lib/api";
+import { gerantApi } from "@/lib/api";
 import { localYmd } from "@/lib/localDate";
 import { cn } from "@/lib/utils";
 import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
@@ -98,9 +98,9 @@ function typeLabel(type?: string | null) {
 }
 
 async function loadFreeSlots(terrainId: number, date: string): Promise<FreeSlot[]> {
-  const data = (await terrainsApi.getCreneaux(terrainId, date)) as any;
+  const data = (await gerantApi.disponibilites(date)) as any;
   return (data?.creneaux || [])
-    .filter((c: any) => c.disponible !== false && c.statut !== "occupe" && c.statut !== "bloque")
+    .filter((c: any) => c.disponible !== false && c.statut !== "occupe" && c.statut !== "bloque" && c.statut !== "reserve")
     .map((c: any) => {
       const debut = String(c.heure_debut || c.heure || "").slice(0, 5);
       const fin =
