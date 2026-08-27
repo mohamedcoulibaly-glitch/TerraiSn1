@@ -31,6 +31,12 @@ import { cn } from "@/lib/utils";
 import Select2 from "@/components/Select2";
 import ContacterAdminCard from "./parametres/ContacterAdminCard";
 import { SubView, Surface } from "./parametres/ParametresChrome";
+import { labelNuitDuJourASuivant, optionsHeuresSelect2 } from "@/utils/heuresSelect2";
+
+function estFermetureNuit(heureFin: string) {
+  const h = parseInt(String(heureFin || "").substring(0, 2), 10);
+  return Number.isFinite(h) && h >= 0 && h <= 5;
+}
 
 type SectionId = "hub" | "compte" | "terrain" | "horaires" | "equipements" | "photos" | "whatsapp";
 
@@ -339,7 +345,8 @@ export default function ParametresGerant() {
 
   const saveHoraires = async () => {
     for (const h of horaires) {
-      if (isOpen(h) && h.heure_debut >= h.heure_fin) {
+      if (!isOpen(h) || estFermetureNuit(h.heure_fin)) continue;
+      if (h.heure_debut >= h.heure_fin) {
         toast.error(`${JOUR_LABELS[h.jour] || h.jour} : l’ouverture doit être avant la fermeture`);
         return;
       }
@@ -647,35 +654,32 @@ export default function ParametresGerant() {
                           Fermé ce jour
                         </p>
                       ) : (
-                        <div
-                          className="mt-2 flex items-center gap-2"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            type="time"
-                            value={h.heure_debut}
-                            onChange={(e) => updateHoraire(h.jour, { heure_debut: e.target.value })}
-                            className="h-12 flex-1 px-3 rounded-xl text-base outline-none"
-                            style={{
-                              background: "var(--g-surface)",
-                              color: "var(--g-text)",
-                              border: "1px solid var(--g-border)",
-                            }}
-                          />
-                          <span className="text-sm" style={{ color: "var(--g-muted)" }}>
-                            →
-                          </span>
-                          <input
-                            type="time"
-                            value={h.heure_fin}
-                            onChange={(e) => updateHoraire(h.jour, { heure_fin: e.target.value })}
-                            className="h-12 flex-1 px-3 rounded-xl text-base outline-none"
-                            style={{
-                              background: "var(--g-surface)",
-                              color: "var(--g-text)",
-                              border: "1px solid var(--g-border)",
-                            }}
-                          />
+                        <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-2">
+                            <Select2
+                              className="flex-1 min-w-0"
+                              ariaLabel={`Ouverture ${JOUR_LABELS[h.jour]}`}
+                              value={String(h.heure_debut || "").slice(0, 5)}
+                              onChange={(v) => updateHoraire(h.jour, { heure_debut: v })}
+                              options={optionsHeuresSelect2(h.heure_debut, h.jour)}
+                            />
+                            <span className="text-sm shrink-0" style={{ color: "var(--g-muted)" }}>
+                              →
+                            </span>
+                            <Select2
+                              className="flex-1 min-w-0"
+                              ariaLabel={`Fermeture ${JOUR_LABELS[h.jour]}`}
+                              value={String(h.heure_fin || "").slice(0, 5)}
+                              onChange={(v) => updateHoraire(h.jour, { heure_fin: v })}
+                              options={optionsHeuresSelect2(h.heure_fin, h.jour)}
+                            />
+                          </div>
+                          {estFermetureNuit(h.heure_fin) ? (
+                            <p style={{ color: "var(--g-primary)", fontSize: "12px" }}>
+                              🌙 Ce terrain ferme à {String(h.heure_fin).slice(0, 2)}h du matin (
+                              {labelNuitDuJourASuivant(h.jour)})
+                            </p>
+                          ) : null}
                         </div>
                       )}
                     </div>

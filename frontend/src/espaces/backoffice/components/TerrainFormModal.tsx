@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import Select2 from "@/components/Select2";
+import { optionsHeuresSelect2 } from "@/utils/heuresSelect2";
 import PctMontantPair, { montantDepuisPct } from "@/components/PctMontantPair";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
@@ -54,7 +55,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
     telephone: "",
     is_active: true,
     heure_debut: "06:00",
-    heure_fin: "00:00",
+    heure_fin: "03:00",
     photos: [] as string[],
     commodites: [] as CommoditeId[],
   });
@@ -82,7 +83,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         telephone: terrain.telephone || "",
         is_active: terrain.is_active ?? true,
         heure_debut: terrain.heure_debut || "06:00",
-        heure_fin: terrain.heure_fin || "00:00",
+        heure_fin: terrain.heure_fin || "03:00",
         photos: terrain.photos || [],
         commodites: parseCommodites(terrain.commodites),
       });
@@ -108,7 +109,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
         telephone: "",
         is_active: true,
         heure_debut: "06:00",
-        heure_fin: "00:00",
+        heure_fin: "03:00",
         photos: [],
         commodites: [],
       });
@@ -189,7 +190,7 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
           jours.map((jour) => ({
             jour,
             heure_debut: form.heure_debut || "06:00",
-            heure_fin: form.heure_fin || "00:00",
+            heure_fin: form.heure_fin || "03:00",
             est_ouvert: 1,
           })),
         );
@@ -419,31 +420,29 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
             </Label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="heure_debut" className="text-xs text-muted-foreground">
-                  Heure d&apos;ouverture
-                </Label>
-                <Input
+                <Label htmlFor="heure_debut">Heure d&apos;ouverture</Label>
+                <Select2
                   id="heure_debut"
-                  type="time"
-                  value={form.heure_debut}
-                  onChange={(e) => setForm({ ...form, heure_debut: e.target.value })}
+                  ariaLabel="Heure d'ouverture"
+                  value={String(form.heure_debut || "").slice(0, 5)}
+                  onChange={(heure_debut) => setForm({ ...form, heure_debut })}
+                  options={optionsHeuresSelect2(form.heure_debut)}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="heure_fin" className="text-xs text-muted-foreground">
-                  Heure de fermeture (00:00 = minuit)
-                </Label>
-                <Input
+                <Label htmlFor="heure_fin">Heure de fermeture</Label>
+                <Select2
                   id="heure_fin"
-                  type="time"
-                  value={form.heure_fin}
-                  onChange={(e) => setForm({ ...form, heure_fin: e.target.value })}
+                  ariaLabel="Heure de fermeture"
+                  value={String(form.heure_fin || "").slice(0, 5)}
+                  onChange={(heure_fin) => setForm({ ...form, heure_fin })}
+                  options={optionsHeuresSelect2(form.heure_fin)}
                 />
               </div>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              Plages libres (avant 08h / après 22h OK). Fin à 00:00 active le créneau « … minuit »
-              (vendredi 00h = Jeudi minuit).
+              Fermeture avant 05h = nuit prolongée (créneaux affichés « Nuit du [jour] »). Ex. 06h→03h :
+              ouvert jusqu&apos;à 3h du matin.
             </p>
           </div>
 

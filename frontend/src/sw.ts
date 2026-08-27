@@ -39,20 +39,19 @@ registerRoute(
   }),
 );
 
-/** Données terrains & réservations — stale-while-revalidate */
+/** Données API GET — stale-while-revalidate (hors SSE / events) */
 registerRoute(
   ({ url, request }) =>
     request.method === 'GET' &&
     url.pathname.startsWith('/api/') &&
-    (url.pathname.includes('/terrains') ||
-      url.pathname.includes('/reservations/mes') ||
-      url.pathname.includes('/reservations/')),
+    !url.pathname.includes('/events') &&
+    !url.pathname.includes('/stream'),
   new StaleWhileRevalidate({
-    cacheName: 'terrainsn-api-v1',
+    cacheName: 'terrainsn-api-v2',
     plugins: [
       new CacheableResponsePlugin({ statuses: [0, 200] }),
       new ExpirationPlugin({
-        maxEntries: 64,
+        maxEntries: 96,
         maxAgeSeconds: 60 * 60 * 24,
       }),
     ],

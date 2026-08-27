@@ -307,6 +307,7 @@ export default function GestionTerrains() {
           <thead>
             <tr>
               <th>Terrain</th>
+              <th>Horaires</th>
               <th>Localisation</th>
               <th>Contrat commercial</th>
               <th>Remboursement</th>
@@ -344,6 +345,27 @@ export default function GestionTerrains() {
                     <p className="sa-cell-title">{t.nom}</p>
                     <p className="sa-cell-sub">{t.adresse_theorique || t.adresse || t.quartier || "—"}{t.ville ? ` · ${t.ville}` : ""}</p>
                     </div>
+                  </td>
+                  <td>
+                    {(() => {
+                      const debut = String(t.heure_debut_typique || t.heure_debut || "06:00").slice(0, 5);
+                      const fin = String(t.heure_fin_typique || t.heure_fin || "23:00").slice(0, 5);
+                      const hFin = parseInt(fin.slice(0, 2), 10);
+                      const nuit = fin === "00:00" || (Number.isFinite(hFin) && hFin < 5);
+                      return (
+                        <span className="inline-flex items-center gap-1 text-[12px] font-medium">
+                          {debut.slice(0, 2)}h → {fin.slice(0, 2)}h
+                          {nuit ? (
+                            <span
+                              className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                              style={{ background: "rgba(79,70,229,0.12)", color: "#4338ca" }}
+                            >
+                              ✦
+                            </span>
+                          ) : null}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td onClick={(e) => e.stopPropagation()}>
                     <LocalisationCell terrain={t} onConfigurer={() => navigate(`/backoffice/superadmin/terrains/${t.id}?tab=localisation`)} />

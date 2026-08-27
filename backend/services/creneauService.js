@@ -8,10 +8,10 @@ const {
   buildSlotsForOpenDay,
   jourDepuisDate,
   addDaysYmd,
-  parseEndHour,
   labelHeureSenegal,
   courtLabelHeureSenegal,
 } = require('../scheduleService');
+const { getJourPercuBackend, estNuitProlongee } = require('../utils/creneauLabel');
 const { DEFAULT_FENETRE_RETARD_MIN, toYmd, estDansLaFenetreCheckIn, idPrioriteScannable } = require('./checkInFenetre');
 
 const STATUTS_OCCUPES_CRENEAU = ['reserve', 'en_attente_paiement', 'bloque', 'tournoi', 'abonnement', 'joue'];
@@ -59,13 +59,16 @@ function exclureCreneauxHorairesPasses(creneaux, dateStr, maintenant = new Date(
   const todayStr = toYmd(
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
   );
-  if (ymd !== todayStr) return list;
-
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
   return list.filter((c) => {
+    // Date technique du slot (nuit prolongée = lendemain calendaire)
+    const slotDate = toYmd(c.date || ymd);
+    if (slotDate > todayStr) return true;
+    if (slotDate < todayStr) return false;
+    // slotDate === aujourd'hui
     const debut = hhmm(c.heure_debut || c.heure);
     if (!debut || !/^\d{2}:\d{2}$/.test(debut)) return true;
-    // Dès que l'heure de début est atteinte ou dépassée → masqué
     return timeToMinutes(debut) > nowMinutes;
   });
 }
@@ -411,30 +414,24 @@ async function getDisponibilitesPourJoueur(database, terrain_id, date, options =
   ]);
   let planned = buildSlotsForOpenDay(dateStr, horaire);
 
-  const prevDate = addDaysYmd(dateStr, -1);
-  const prevJour = jourDepuisDate(prevDate);
-  const prevHoraire = await queryOne(database, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [
-    terrain_id,
-    prevJour,
-  ]);
-  if (prevHoraire && Number(prevHoraire.est_ouvert) && parseEndHour(prevHoraire.heure_fin) === 24) {
-    const hasMidnight = planned.some((s) => s.date === dateStr && s.heure_debut === '00:00');
-    if (!hasMidnight) {
-      planned = [
-        {
-          date: dateStr,
-          heure_debut: '00:00',
-          heure_fin: '01:00',
-          label: labelHeureSenegal(dateStr, '00:00'),
-          label_court: courtLabelHeureSenegal(dateStr, '00:00'),
-          est_minuit_culturel: true,
-          jour_tarif: prevJour,
-          date_affichage: prevDate,
-        },
-        ...planned,
-      ];
-    }
-  }
+  // Jour perçu = date sélectionnée :
+  // - créneaux du jour avec heure >= 5h
+  // - créneaux du lendemain 00h–04h59 (nuit prolongée)
+  // Exclure les 00h–04h du jour sélectionné (ils appartiennent à la veille perçue)
+  const dateLendemain = addDaysYmd(dateStr, 1);
+  planned = planned.filter((s) => {
+    const d = toYmd(s.date);
+    const h = parseInt(String(s.heure_debut || '').substring(0, 2), 10);
+    if (d === dateStr && Number.isFinite(h) && h < 5) return false;
+    if (d === dateStr) return true;
+    if (d === dateLendemain && Number.isFinite(h) && h < 5) return true;
+    return false;
+  });
+
+  // Si l'horaire du jour sélectionné n'a pas généré la nuit (ex. fermé) mais
+  // qu'on veut quand même… non : seuls les slots de buildSlotsForOpenDay comptent.
+  // Compat : si prev fermait en nuit et que buildSlots n'a pas émis (jour fermé),
+  // rien à injecter sur ce jour perçu.
 
   if (!planned.length) {
     return { creneaux: [], message: 'Fermé ce jour', horaire: horaire || null, calendrier: 'senegal' };
@@ -537,6 +534,10 @@ async function getDisponibilitesPourJoueur(database, terrain_id, date, options =
       label: slotPlan.label || labelHeureSenegal(slotDate, debut),
       label_court: slotPlan.label_court || courtLabelHeureSenegal(slotDate, debut),
       est_minuit_culturel: Boolean(slotPlan.est_minuit_culturel),
+      est_nuit_prolongee:
+        Boolean(slotPlan.est_nuit_prolongee) || estNuitProlongee(debut),
+      label_complet: (slotPlan.label || getJourPercuBackend(slotDate, debut).labelComplet),
+      date_affichage: slotPlan.date_affichage || (estNuitProlongee(debut) ? addDaysYmd(slotDate, -1) : slotDate),
       statut: enConflit ? (raison === 'bloque' ? 'bloque' : 'reserve') : 'libre',
       disponible: !enConflit,
       bloque: raison === 'bloque',
@@ -566,7 +567,9 @@ async function getDisponibilitesPourJoueur(database, terrain_id, date, options =
     horaire: horaire || null,
     calendrier: 'senegal',
     note_minuit:
-      'Le créneau 00:00 (ex. vendredi) s’affiche et se programme comme « Jeudi minuit ».',
+      'Les créneaux 00h–04h59 s’affichent comme « Nuit du [jour précédent] » (usage local Sénégal).',
+    note_nuit_prolongee:
+      'Les créneaux entre 00h00 et 04h59 sont affichés aux joueurs sous le label « Nuit du [jour précédent] ». La date technique reste correcte en base.',
     prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
     prix_moitie_base: Number(terrain.prix_moitie || 0),
     pourcentage_avance: Number(terrain.pourcentage_avance || 12.5),

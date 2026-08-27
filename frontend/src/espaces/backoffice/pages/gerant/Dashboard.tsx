@@ -11,7 +11,7 @@
   User,
   Wrench,
 } from "lucide-react";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, Fragment } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeRole } from "@/auth/roles";
@@ -30,6 +30,7 @@ import {
   useGerantWeek,
   useGerantLiveInvalidate,
 } from "@/hooks/useGerantLiveData";
+import { estNuitProlongee, getJourPercu, trierCreneaux } from "@/utils/creneauLabel";
 import BloquerCreneauModal from "@/espaces/backoffice/components/BloquerCreneauModal";
 import ReservationExpressModal from "@/espaces/backoffice/components/ReservationExpressModal";
 import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
@@ -112,10 +113,17 @@ function toCreneau(resa: TodayReservation, dayDate: string) {
  */
 function resolveLiveStatus(resa: TodayReservation, dayDate: string, nowMs: number): MatchStatus {
   if (resa.statut === "libre") return "libre";
-  if (resa.statut === "bloque" || resa.statut === "blocked") return "bloque";
   if (resa.statut === "en_attente") return "en_attente";
 
   const creneau = toCreneau(resa, dayDate);
+
+  // Abonnement / tournoi / blocage : même flux horaire — passé → terminé (masqué comme les autres)
+  if (resa.statut === "bloque" || resa.statut === "blocked") {
+    const { heureFinMs } = calculerFenetreCheckIn(creneau);
+    if (nowMs > heureFinMs) return "termine";
+    return "bloque";
+  }
+
   const flags = calculerFlagsMatch(creneau, resa.statut, nowMs);
   const scanned =
     Boolean(resa.qr_code_scanne_at) || ["match_joue", "joue"].includes(String(resa.statut || ""));
@@ -267,12 +275,17 @@ function QueueCard({
               bg: ui.bg,
             };
 
+  const nuitPercu = estNuitProlongee(resa.heure_debut)
+    ? getJourPercu(String(resa.date || dayDate).slice(0, 10), String(resa.heure_debut).slice(0, 5))
+    : null;
+
   return (
     <li
       className={`rounded-2xl p-3.5 ${isImminente ? "g-card-imminente" : ""}`}
       style={{
-        background:
-          status === "en_retard"
+        background: nuitPercu
+          ? "rgba(79, 70, 229, 0.06)"
+          : status === "en_retard"
             ? "color-mix(in srgb, var(--g-warning) 10%, var(--g-surface))"
             : isImminente
               ? "rgba(5,150,105,0.08)"
@@ -343,12 +356,22 @@ function QueueCard({
             </p>
           ) : null}
         </div>
-        <span
-          className="text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0"
-          style={{ background: badge.bg, color: badge.color }}
-        >
-          {badge.label}
-        </span>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span
+            className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
+            style={{ background: badge.bg, color: badge.color }}
+          >
+            {badge.label}
+          </span>
+          {nuitPercu ? (
+            <span
+              className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+              style={{ background: "rgba(79,70,229,0.12)", color: "#4338ca" }}
+            >
+              ✦ {nuitPercu.labelComplet}
+            </span>
+          ) : null}
+        </div>
       </div>
 
       {block === "en_attente" && (
@@ -638,8 +661,19 @@ function buildQueueBlocks({
       .flatMap((r) => hourKeysBetween(r.heure_debut, r.heure_fin)),
   );
   const mergedBlocages = mergeConsecutiveBlocages(blocages);
+  // Blocages encore actifs uniquement (abonnement / tournoi / indispo) — passés exclus comme les libres
+  const blocagesActifs = mergedBlocages.filter((b) => {
+    const debut = String(b.heure_debut).slice(0, 5);
+    const fin = String(b.heure_fin).slice(0, 5);
+    const { heureFinMs } = calculerFenetreCheckIn({
+      date: dayDate,
+      heure_debut: debut,
+      heure_fin: fin,
+    });
+    return nowMs <= heureFinMs;
+  });
   const blockedHours = new Set(
-    mergedBlocages.flatMap((b) => hourKeysBetween(b.heure_debut, b.heure_fin)),
+    blocagesActifs.flatMap((b) => hourKeysBetween(b.heure_debut, b.heure_fin)),
   );
   const libresAsCards: TodayReservation[] = freeSlots
     .filter((s) => {
@@ -654,7 +688,7 @@ function buildQueueBlocks({
       statut: "libre",
       date: dayDate,
     }));
-  const bloqueAsCards: TodayReservation[] = mergedBlocages.map((b) => ({
+  const bloqueAsCards: TodayReservation[] = blocagesActifs.map((b) => ({
     id: -2000 - b.blocage_ids[0],
     blocage_id: b.blocage_ids[0],
     blocage_ids: b.blocage_ids,
@@ -683,7 +717,15 @@ function buildQueueBlocks({
   const all = [...occupying, ...pendingCards, ...libresAsCards, ...bloqueAsCards];
   const byBlock = emptyQueueBlocks();
   for (const resa of all) {
-    byBlock[resolveQueueBlock(resa, dayDate, nowMs)].push(resa);
+    const block = resolveQueueBlock(resa, dayDate, nowMs);
+    // Abonnement / tournoi / blocage passés : disparaître (pas dans « terminés »)
+    if (
+      block === "termine" &&
+      (resa.statut === "bloque" || resa.statut === "blocked")
+    ) {
+      continue;
+    }
+    byBlock[block].push(resa);
   }
   (Object.keys(byBlock) as QueueBlock[]).forEach((key) => {
     byBlock[key].sort((a, b) => timeToMinutes(a.heure_debut) - timeToMinutes(b.heure_debut));
@@ -773,26 +815,51 @@ function FileAttenteBlocks({
     prioriteJoueur: prioriteResa?.joueur_nom || null,
   };
 
+  // File chronologique unique : libres + blocages (abo/tournoi/indispo) + réservés + en attente
+  const fileChrono = trierCreneaux([
+    ...queueBlocks.libre,
+    ...queueBlocks.bloque,
+    ...queueBlocks.reserve,
+    ...queueBlocks.en_attente,
+  ]);
+
   return (
     <div className="space-y-5">
       {([
         { key: "imminente" as const, items: queueBlocks.imminente },
         { key: "en_cours" as const, items: queueBlocks.en_cours },
-        { key: "libre" as const, items: queueBlocks.libre },
-        { key: "bloque" as const, items: queueBlocks.bloque },
-        { key: "reserve" as const, items: queueBlocks.reserve },
-        { key: "en_attente" as const, items: queueBlocks.en_attente },
+        { key: "file" as const, items: fileChrono },
       ]).map(({ key, items }) =>
         items.length === 0 ? null : (
           <ul key={key} className="space-y-3">
-            {items.map((resa) => (
-              <QueueCard
-                key={`${resa.id}-${resa.heure_debut}`}
-                resa={resa}
-                canScanNow={Boolean(prioriteScanId) && Number(resa.id) === Number(prioriteScanId)}
-                {...cardProps}
-              />
-            ))}
+            {trierCreneaux(items).map((resa, idx, arr) => {
+              const isNuit = estNuitProlongee(resa.heure_debut);
+              const prevNuit = idx > 0 && estNuitProlongee(arr[idx - 1].heure_debut);
+              const showSep = isNuit && !prevNuit;
+              const nuitLabel = isNuit
+                ? getJourPercu(String(resa.date || dayDate).slice(0, 10), String(resa.heure_debut).slice(0, 5))
+                    .labelComplet
+                : null;
+              return (
+                <Fragment key={`${resa.id}-${resa.heure_debut}`}>
+                  {showSep ? (
+                    <li className="list-none py-1">
+                      <p
+                        className="text-center text-[11px] font-medium"
+                        style={{ color: "#6366f1" }}
+                      >
+                        ── ✦ Après minuit ({nuitLabel?.toLowerCase() || "nuit prolongée"}) ──
+                      </p>
+                    </li>
+                  ) : null}
+                  <QueueCard
+                    resa={resa}
+                    canScanNow={Boolean(prioriteScanId) && Number(resa.id) === Number(prioriteScanId)}
+                    {...cardProps}
+                  />
+                </Fragment>
+              );
+            })}
           </ul>
         ),
       )}
@@ -899,6 +966,7 @@ const ManagerDashboard = () => {
       setFreeSlots([]);
       return;
     }
+    setFreeSlots([]); // évite d'afficher les créneaux libres d'un autre jour pendant le fetch
     try {
       // Endpoint gérant : journée complète (le filtre « passé » se fait dans buildQueueBlocks)
       const data = (await gerantApi.disponibilites(date)) as {
@@ -1023,15 +1091,28 @@ const ManagerDashboard = () => {
 
   const parJour = useMemo(() => {
     const acc: Record<string, TodayReservation[]> = {};
+    const addDays = (ymd: string, delta: number) => {
+      const d = new Date(`${ymd}T12:00:00`);
+      d.setDate(d.getDate() + delta);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    };
     for (const r of weekReservations as TodayReservation[]) {
-      const date = String(r.date || "").slice(0, 10);
-      if (!date) continue;
-      if (!acc[date]) acc[date] = [];
-      acc[date].push(r);
+      const dateTech = String(r.date || "").slice(0, 10);
+      if (!dateTech) continue;
+      // Nuit prolongée → jour perçu (veille)
+      const datePercue = estNuitProlongee(r.heure_debut) ? addDays(dateTech, -1) : dateTech;
+      if (!acc[datePercue]) acc[datePercue] = [];
+      acc[datePercue].push(r);
     }
     return Object.keys(acc)
       .sort()
-      .map((date) => ({ date, reservations: acc[date] }));
+      .map((date) => ({
+        date,
+        reservations: trierCreneaux(acc[date]),
+      }));
   }, [weekReservations]);
 
   const joursSemaine = useMemo(() => weekDates(dayDate), [dayDate]);

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { superAdminApi } from "@/services/superAdminApi";
+import Select2 from "@/components/Select2";
 
 export type TerrainFormatRow = {
   id?: number;
@@ -168,27 +169,26 @@ export default function FormatsTerrainEditor({ terrainId }: Props) {
                 <span className="text-[11px]" style={{ color: "var(--sa-muted)" }}>
                   Grille
                 </span>
-                <select
+                <Select2
                   value={f.map_grille || ""}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setFormats((prev) =>
                       prev.map((row, i) =>
                         i === idx
                           ? {
                               ...row,
-                              map_grille: (e.target.value || null) as "demi" | "entier" | null,
+                              map_grille: (v || null) as "demi" | "entier" | null,
                             }
                           : row,
                       ),
                     )
                   }
-                  className="mt-1 h-10 w-full rounded-lg px-2 text-sm"
-                  style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface)" }}
-                >
-                  <option value="">Prix fixe format</option>
-                  <option value="demi">→ Demi (grille)</option>
-                  <option value="entier">→ Entier (grille)</option>
-                </select>
+                  options={[
+                    { value: "", label: "Prix fixe format" },
+                    { value: "demi", label: "→ Demi (grille)" },
+                    { value: "entier", label: "→ Entier (grille)" },
+                  ]}
+                />
               </label>
               <label className="sm:col-span-2 flex items-center gap-2 min-h-[40px]">
                 <input

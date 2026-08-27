@@ -16,6 +16,16 @@ import { featureEnabled } from "@/lib/terrainFeatures";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
 import { useTerrainFullDetails } from "@/hooks/useJoueurData";
 import { localYmd } from "@/lib/localDate";
+import { hapticSelection, hapticSuccess } from "@/lib/haptics";
+import SkeletonCreneaux from "@/components/skeletons/SkeletonCreneaux";
+import { usePersistedState } from "@/hooks/usePersistedState";
+
+type FicheDraft = {
+  selectedDate: number;
+  selectedSlot: string | null;
+  selectedDuration: number;
+  fieldFormat: string;
+};
 
 function toLocalISO(d: Date) {
   const y = d.getFullYear();
@@ -49,6 +59,28 @@ function formatHourLabel(h: string) {
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
+const JOURS_CRENEAU = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
+
+function getLabelCreneau(date: string, heure_debut: string, heure_fin: string) {
+  const debut = String(heure_debut || "").slice(0, 5);
+  const fin = String(heure_fin || "").slice(0, 5);
+  const h = parseInt(debut.substring(0, 2), 10);
+  const heures = `${debut.replace(":", "h")} - ${fin.replace(":", "h")}`;
+
+  if (Number.isFinite(h) && h >= 0 && h < 5) {
+    const dateObj = new Date(`${String(date).slice(0, 10)}T12:00:00`);
+    const jour = JOURS_CRENEAU[dateObj.getDay()];
+    dateObj.setDate(dateObj.getDate() - 1);
+    const jourPrec = JOURS_CRENEAU[dateObj.getDay()];
+    return {
+      heures,
+      label: `Nuit du ${jourPrec} à ${jour}`,
+      estNuit: true,
+    };
+  }
+  return { heures, label: null as string | null, estNuit: false };
+}
+
 function getEndTime(startSlot: string, durationHours: number) {
   const [hh, mm = "00"] = String(startSlot).slice(0, 5).split(":");
   const total = parseInt(hh, 10) * 60 + parseInt(mm, 10) + Math.round(durationHours * 60);
@@ -71,10 +103,40 @@ const FieldDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
-  const [selectedDate, setSelectedDate] = useState(1);
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-  const [selectedDuration, setSelectedDuration] = useState(1);
-  const [fieldFormat, setFieldFormat] = useState<string>("moitie");
+  const draftKey = `joueur:fiche:${id || "x"}`;
+  const [draft, setDraft, { clear: clearFicheDraft }] = usePersistedState<FicheDraft>(
+    draftKey,
+    {
+      selectedDate: 1,
+      selectedSlot: null,
+      selectedDuration: 1,
+      fieldFormat: "moitie",
+    },
+  );
+  const selectedDate = draft.selectedDate;
+  const selectedSlot = draft.selectedSlot;
+  const selectedDuration = draft.selectedDuration;
+  const fieldFormat = draft.fieldFormat;
+  const setSelectedDate = (v: number | ((prev: number) => number)) =>
+    setDraft((d) => ({
+      ...d,
+      selectedDate: typeof v === "function" ? v(d.selectedDate) : v,
+    }));
+  const setSelectedSlot = (v: string | null | ((prev: string | null) => string | null)) =>
+    setDraft((d) => ({
+      ...d,
+      selectedSlot: typeof v === "function" ? v(d.selectedSlot) : v,
+    }));
+  const setSelectedDuration = (v: number | ((prev: number) => number)) =>
+    setDraft((d) => ({
+      ...d,
+      selectedDuration: typeof v === "function" ? v(d.selectedDuration) : v,
+    }));
+  const setFieldFormat = (v: string | ((prev: string) => string)) =>
+    setDraft((d) => ({
+      ...d,
+      fieldFormat: typeof v === "function" ? v(d.fieldFormat) : v,
+    }));
   const [formatsOpts, setFormatsOpts] = useState<FormatOption[]>([]);
   const [dureesOpts, setDureesOpts] = useState<DureeOption[]>([...DUREES_FALLBACK]);
   const [optionsBootstrapped, setOptionsBootstrapped] = useState(false);
@@ -382,6 +444,8 @@ const FieldDetails = () => {
     }
     const path = paymentPath();
     if (!requireLoginThen(path)) return;
+    hapticSuccess();
+    clearFicheDraft();
     navigate(path);
   };
 
@@ -475,6 +539,8 @@ const FieldDetails = () => {
                   src={src}
                   alt={`${terrain.nom} ${i + 1}`}
                   className="absolute inset-0 w-full h-full object-cover"
+                  loading={i === 0 ? "eager" : "lazy"}
+                  decoding="async"
                   draggable={false}
                 />
               </div>
@@ -485,7 +551,7 @@ const FieldDetails = () => {
           <button
             type="button"
             onClick={() => navigate(-1)}
-            className="absolute top-4 left-4 w-11 h-11 rounded-full bg-white/85 backdrop-blur-md flex items-center justify-center shadow-sm"
+            className="absolute left-4 w-11 h-11 rounded-full bg-white/85 backdrop-blur-md flex items-center justify-center shadow-sm top-[calc(1rem+env(safe-area-inset-top))]"
             aria-label="Retour"
           >
             <ArrowLeft className="w-5 h-5 text-[var(--primary)]" />
@@ -493,7 +559,7 @@ const FieldDetails = () => {
           <button
             type="button"
             onClick={toggleFav}
-            className="absolute top-4 right-4 w-11 h-11 rounded-full bg-white/85 backdrop-blur-md flex items-center justify-center"
+            className="absolute right-4 w-11 h-11 rounded-full bg-white/85 backdrop-blur-md flex items-center justify-center top-[calc(1rem+env(safe-area-inset-top))]"
             aria-label={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
           >
             <Heart className={`w-5 h-5 ${fav ? "fill-red-500 text-red-500" : "text-slate-600"}`} />
@@ -638,6 +704,7 @@ const FieldDetails = () => {
                   key={d.isoDate}
                   type="button"
                   onClick={() => {
+                    hapticSelection();
                     setSelectedDate(i);
                     setSelectedSlot(null);
                   }}
@@ -733,11 +800,7 @@ const FieldDetails = () => {
               3 · Créneaux disponibles
             </p>
             {loadingSlots ? (
-              <div className="grid grid-cols-3 gap-2">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="skeleton h-12 w-full rounded-xl" />
-                ))}
-              </div>
+              <SkeletonCreneaux count={6} />
             ) : fermeMotif ? (
               <p className="text-center py-5 text-sm text-[var(--color-warning)] font-medium">
                 {fermeMotif}
@@ -755,6 +818,11 @@ const FieldDetails = () => {
                     const available = Boolean(slot.disponible);
                     const fin = slot.heure_fin || getEndTime(heure, selectedDuration);
                     const long = (slot.duree_minutes || selectedDuration * 60) > 60;
+                    const labelCreneau = getLabelCreneau(
+                      String(slot.date || selectedIsoDate || "").slice(0, 10),
+                      String(heure || ""),
+                      String(fin || ""),
+                    );
                     const title =
                       slot.raison_indisponibilite ||
                       (available
@@ -765,9 +833,12 @@ const FieldDetails = () => {
                         key={`${heure}-${fin}`}
                         type="button"
                         disabled={!available}
-                        onClick={() => setSelectedSlot(heure)}
+                        onClick={() => {
+                          hapticSelection();
+                          setSelectedSlot(heure);
+                        }}
                         title={title}
-                        className={`min-h-[52px] rounded-xl text-sm font-semibold transition-all duration-200 border ${
+                        className={`min-h-[52px] rounded-xl text-sm font-semibold transition-[transform,opacity] duration-200 border will-change-transform ${
                           long ? "col-span-2" : ""
                         } ${
                           !available
@@ -777,9 +848,15 @@ const FieldDetails = () => {
                               : "bg-[var(--primary-glow,rgba(30,64,175,0.08))] text-[var(--primary)] border-[var(--primary)]"
                         }`}
                       >
-                        <span className="block">
-                          {formatHourLabel(heure)} - {formatHourLabel(fin)}
-                        </span>
+                        <span className="block">{labelCreneau.heures}</span>
+                        {labelCreneau.estNuit ? (
+                          <span
+                            className="block"
+                            style={{ fontSize: "10px", color: "var(--primary)", opacity: 0.8 }}
+                          >
+                            {labelCreneau.label}
+                          </span>
+                        ) : null}
                         {long ? (
                           <span
                             className={`block text-[10px] font-bold mt-0.5 ${
@@ -809,7 +886,7 @@ const FieldDetails = () => {
                   })}
                 </div>
                 <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
-                  Vert = disponible · Gris = indisponible
+                  Bleu = disponible · Gris = indisponible
                 </p>
               </>
             )}
@@ -939,7 +1016,7 @@ const FieldDetails = () => {
       {/* Barre sticky : réserver en ligne OU appeler si WA gérant down */}
       {hasSlot && stickyRecap && canBrowseSlots && (
         <div
-          className="fixed inset-x-0 bottom-16 md:bottom-0 z-50 px-4 py-3 animate-in slide-in-from-bottom-4 fade-in duration-300"
+          className="fixed inset-x-0 bottom-16 md:bottom-0 z-50 px-4 py-3 native-sheet-enter md:pb-[max(0.75rem,env(safe-area-inset-bottom))]"
           style={{
             background: "color-mix(in srgb, var(--surface, #fff) 94%, transparent)",
             backdropFilter: "blur(14px)",

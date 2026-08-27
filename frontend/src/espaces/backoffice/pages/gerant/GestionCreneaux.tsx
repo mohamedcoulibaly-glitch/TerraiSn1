@@ -278,7 +278,7 @@ const ManagerCalendar = () => {
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-[var(--color-text-secondary)]">
         <span className="inline-flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-[color-mix(in_srgb,var(--color-success)_40%,white)]" />{" "}
+          <span className="w-2.5 h-2.5 rounded-full bg-[color-mix(in_srgb,var(--color-primary)_40%,white)]" />{" "}
           Libre
         </span>
         <span className="inline-flex items-center gap-1.5">
@@ -301,7 +301,7 @@ const ManagerCalendar = () => {
               key={time}
               className={`bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-3 flex items-center gap-3 ${
                 status === "free"
-                  ? "border-l-4 border-l-[var(--color-success)]"
+                  ? "border-l-4 border-l-[var(--color-primary)]"
                   : status === "reserved"
                     ? "border-l-4 border-l-[var(--color-warning)]"
                     : "border-l-4 border-l-[var(--color-danger)]"
@@ -315,7 +315,7 @@ const ManagerCalendar = () => {
               </p>
               <div className="flex-1 min-w-0">
                 {status === "free" && (
-                  <span className="inline-flex text-[11px] font-medium px-2.5 py-1 rounded-full bg-[color-mix(in_srgb,var(--color-success)_12%,white)] text-[var(--color-success)]">
+                  <span className="inline-flex text-[11px] font-medium px-2.5 py-1 rounded-full bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] text-[var(--color-primary)]">
                     Libre
                   </span>
                 )}

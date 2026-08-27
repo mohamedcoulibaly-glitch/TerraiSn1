@@ -26,8 +26,8 @@ export default function DesktopNavbar() {
   ];
 
   return (
-    <header className="hidden md:flex fixed top-0 inset-x-0 z-50 h-16 items-center bg-[var(--nav-bg)] backdrop-blur-xl border-b border-[var(--nav-border)]">
-      <div className="h-full w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-6">
+    <header className="hidden md:flex fixed top-0 inset-x-0 z-50 h-[calc(4rem+env(safe-area-inset-top))] items-end pb-0 bg-[var(--nav-bg)] backdrop-blur-xl border-b border-[var(--nav-border)] pt-[env(safe-area-inset-top)]">
+      <div className="h-16 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-6">
         <Link
           to="/"
           className="text-[15px] font-semibold tracking-tight shrink-0"

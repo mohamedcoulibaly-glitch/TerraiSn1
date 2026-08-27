@@ -6,6 +6,7 @@ import { localYmd } from "@/lib/localDate";
 import { cn } from "@/lib/utils";
 import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
 import { featureEnabled } from "@/lib/terrainFeatures";
+import { clearDraft, readDraft, writeDraft } from "@/hooks/usePersistedState";
 
 type Blocage = {
   id: number;
@@ -40,6 +41,25 @@ type FreeSlot = {
 };
 
 type Mode = "manuel" | "abonnement" | "tournoi";
+
+type BlocageDraft = {
+  mode: Mode;
+  date: string;
+  motif: string | null;
+  selected: string[];
+  libelle: string;
+  dateDebut: string;
+  dateFin: string;
+  heureDebut: string;
+  heureFin: string;
+  joursAbo: string[];
+  joursTournoi: string[];
+  montant: string;
+};
+
+function blocageDraftKey(terrainId?: number) {
+  return `gerant:blocage:${terrainId || "x"}`;
+}
 
 type Props = {
   open: boolean;
@@ -154,27 +174,85 @@ export default function BloquerCreneauModal({
 
   useEffect(() => {
     if (!open) return;
-    setMode("manuel");
-    setDate(localYmd());
-    setMotif("pluie");
-    setSelected(new Set());
+    const draft = readDraft<BlocageDraft>(blocageDraftKey(terrainId));
+    if (draft) {
+      setMode(draft.mode || "manuel");
+      setDate(draft.date || localYmd());
+      setMotif((draft.motif as (typeof MOTIFS)[number]["value"]) || "pluie");
+      setSelected(new Set(draft.selected || []));
+      setLibelle(draft.libelle || "");
+      setDateDebut(draft.dateDebut || localYmd());
+      setDateFin(draft.dateFin || localYmd());
+      setHeureDebut(draft.heureDebut || "08:00");
+      setHeureFin(draft.heureFin || "12:00");
+      setJoursAbo(
+        new Set(
+          draft.joursAbo?.length
+            ? draft.joursAbo
+            : ["lundi", "mardi", "mercredi", "jeudi", "vendredi"],
+        ),
+      );
+      setJoursTournoi(
+        new Set(draft.joursTournoi?.length ? draft.joursTournoi : ["samedi", "dimanche"]),
+      );
+      setMontant(draft.montant || "");
+    } else {
+      setMode("manuel");
+      setDate(localYmd());
+      setMotif("pluie");
+      setSelected(new Set());
+      setLibelle("");
+      setDateDebut(localYmd());
+      setDateFin(localYmd());
+      setHeureDebut("08:00");
+      setHeureFin("12:00");
+      setJoursAbo(new Set(["lundi", "mardi", "mercredi", "jeudi", "vendredi"]));
+      setJoursTournoi(new Set(["samedi", "dimanche"]));
+      setMontant("");
+    }
     setShowList(false);
     setLocalBlocages(blocages);
     setBusy(false);
     setConfirmBlock(false);
-    setLibelle("");
-    setDateDebut(localYmd());
-    setDateFin(localYmd());
-    setHeureDebut("08:00");
-    setHeureFin("12:00");
-    setJoursAbo(new Set(["lundi", "mardi", "mercredi", "jeudi", "vendredi"]));
-    setJoursTournoi(new Set(["samedi", "dimanche"]));
-    setMontant("");
     gerantApi
       .listBlocageGroupes()
       .then((data: any) => setGroupes(data?.groupes || []))
       .catch(() => setGroupes([]));
-  }, [open, blocages]);
+  }, [open, terrainId]);
+
+  useEffect(() => {
+    if (!open || busy) return;
+    writeDraft(blocageDraftKey(terrainId), {
+      mode,
+      date,
+      motif,
+      selected: [...selected],
+      libelle,
+      dateDebut,
+      dateFin,
+      heureDebut,
+      heureFin,
+      joursAbo: [...joursAbo],
+      joursTournoi: [...joursTournoi],
+      montant,
+    } satisfies BlocageDraft);
+  }, [
+    open,
+    busy,
+    terrainId,
+    mode,
+    date,
+    motif,
+    selected,
+    libelle,
+    dateDebut,
+    dateFin,
+    heureDebut,
+    heureFin,
+    joursAbo,
+    joursTournoi,
+    montant,
+  ]);
 
   const slotsDate = date;
 
@@ -294,6 +372,7 @@ export default function BloquerCreneauModal({
         toast.success(result?.message || `${result?.count || creneaux.length} créneau(x) bloqué(s) ✓`);
       }
       await refreshAfterChange();
+      clearDraft(blocageDraftKey(terrainId));
     } catch (err: any) {
       toast.error(err?.message || "Blocage impossible");
     } finally {

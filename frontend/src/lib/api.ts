@@ -4,6 +4,10 @@ import {
   queuePendingReservation,
   cacheTerrainsList,
   getCachedTerrainsList,
+  cacheProfile,
+  getCachedProfile,
+  cacheRecentTerrain,
+  getCachedRecentTerrain,
   isOnline,
   type CachedReservation,
 } from './offlineStore';
@@ -409,7 +413,15 @@ export const terrainsApi = {
   },
 
   async get(id: number | string) {
-    return await request(`/terrains/${id}`);
+    try {
+      const data = await request(`/terrains/${id}`);
+      await cacheRecentTerrain(id, data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedRecentTerrain(id);
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   /** Un seul round-trip : terrain + photos + créneaux du jour. */
@@ -421,7 +433,15 @@ export const terrainsApi = {
     if (opts?.date) q.set('date', opts.date);
     if (opts?.duree_minutes != null) q.set('duree_minutes', String(opts.duree_minutes));
     const qs = q.toString();
-    return await request(`/terrains/${id}/full-details${qs ? `?${qs}` : ''}`);
+    try {
+      const data = await request(`/terrains/${id}/full-details${qs ? `?${qs}` : ''}`);
+      await cacheRecentTerrain(id, data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedRecentTerrain(id);
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async commoditesCatalog() {
@@ -1170,19 +1190,51 @@ export const adminApi = {
 // ============================================================
 export const profilApi = {
   async get() {
-    return await request('/profil');
+    try {
+      const data = await request('/profil');
+      await cacheProfile('me', data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedProfile('me');
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async getJoueur() {
-    return await request('/profil/joueur');
+    try {
+      const data = await request('/profil/joueur');
+      await cacheProfile('joueur', data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedProfile('joueur');
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async getGerant() {
-    return await request('/profil/gerant');
+    try {
+      const data = await request('/profil/gerant');
+      await cacheProfile('gerant', data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedProfile('gerant');
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async getProprietaire() {
-    return await request('/profil/proprietaire');
+    try {
+      const data = await request('/profil/proprietaire');
+      await cacheProfile('proprietaire', data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedProfile('proprietaire');
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async getAdmin() {

@@ -26,32 +26,74 @@ function borderUrgence(jours: number | null, due: number) {
   return "var(--g-primary)";
 }
 
+function CommissionSkeleton() {
+  return (
+    <section
+      className="rounded-2xl px-4 py-3.5"
+      style={{
+        background: "var(--g-surface)",
+        borderLeft: "4px solid var(--g-border)",
+        borderRadius: 16,
+        padding: "14px 16px",
+      }}
+      aria-busy="true"
+      aria-label="Chargement commission"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="skeleton h-4 w-28 rounded" />
+          <div className="skeleton h-7 w-40 rounded" />
+          <div className="skeleton h-3 w-52 rounded" />
+        </div>
+        <div className="skeleton h-10 w-24 rounded-xl shrink-0" />
+      </div>
+    </section>
+  );
+}
+
 export default function CommissionDueCard({ enabled = true }: { enabled?: boolean }) {
   const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
-  const [displayDue, setDisplayDue] = useState(0);
+  const [displayDue, setDisplayDue] = useState<number | null>(null);
   const [soldeAnime, setSoldeAnime] = useState(false);
 
   useEffect(() => {
     if (!enabled) {
       setData(null);
+      setDisplayDue(null);
+      setLoading(false);
       return;
     }
+    let cancelled = false;
+    setLoading(true);
+    setDisplayDue(null);
     gerantApi
       .dettes()
       .then((d) => {
+        if (cancelled) return;
         setData(d);
         const due = Number(
           d?.resume?.solde_restant ?? d?.resume?.dette_en_cours ?? d?.resume?.total_dette ?? 0,
         );
         setDisplayDue(due);
       })
-      .catch(() => setData(null));
+      .catch(() => {
+        if (cancelled) return;
+        setData(null);
+        setDisplayDue(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [enabled]);
 
   const resume = data?.resume || {};
-  const due = Number(resume.solde_restant ?? resume.dette_en_cours ?? resume.total_dette ?? displayDue ?? 0);
+  const dueAmount = displayDue ?? 0;
   const nb = Number(resume.nb_reservations_manuelles || 0);
   const periode = String(data?.periode || "");
   const dateEcheance = String(resume.date_echeance || "");
@@ -63,18 +105,19 @@ export default function CommissionDueCard({ enabled = true }: { enabled?: boolea
     "Pour régler : utilise le bouton Payer. Le compteur se met à jour après confirmation.";
 
   const borderColor = useMemo(
-    () => borderUrgence(joursRestants, displayDue),
-    [joursRestants, displayDue],
+    () => borderUrgence(joursRestants, dueAmount),
+    [joursRestants, dueAmount],
   );
 
   if (!enabled) return null;
+  if (loading || displayDue == null) return <CommissionSkeleton />;
 
   const handlePaiementReussi = (montantRegle: number, soldeRestant: number) => {
-    const from = displayDue;
+    const from = dueAmount;
     const to = Math.max(0, soldeRestant);
     setSoldeAnime(true);
     const start = performance.now();
-    const duration = 1000;
+    const duration = 320;
     const tick = (now: number) => {
       const t = Math.min(1, (now - start) / duration);
       setDisplayDue(Math.round(from + (to - from) * t));
@@ -107,12 +150,12 @@ export default function CommissionDueCard({ enabled = true }: { enabled?: boolea
     }
   };
 
-  const regle = displayDue <= 0;
+  const regle = dueAmount <= 0;
 
   return (
     <>
       <section
-        className="rounded-2xl px-4 py-3.5 transition-colors duration-500"
+        className="rounded-2xl px-4 py-3.5 transition-colors duration-300"
         style={{
           background: regle ? "var(--g-success-bg, var(--g-primary-glow))" : "var(--g-surface)",
           borderLeft: `4px solid ${borderColor}`,
@@ -143,9 +186,9 @@ export default function CommissionDueCard({ enabled = true }: { enabled?: boolea
                     : "var(--g-warning)",
               }}
             >
-              {regle ? "Tout est réglé ✓" : fcfa(displayDue)}
+              {regle ? "Tout est réglé ✓" : fcfa(dueAmount)}
             </p>
-            {statut === "partiellement_regle" && displayDue > 0 ? (
+            {statut === "partiellement_regle" && dueAmount > 0 ? (
               <span
                 className="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold"
                 style={{ background: "var(--g-warning-bg)", color: "var(--g-warning)" }}
@@ -154,12 +197,12 @@ export default function CommissionDueCard({ enabled = true }: { enabled?: boolea
               </span>
             ) : null}
             {!regle && dateEcheance ? (
-              <TimerEcheance dateEcheance={dateEcheance} delaiTotal={delaiTotal} dette={displayDue} />
+              <TimerEcheance dateEcheance={dateEcheance} delaiTotal={delaiTotal} dette={dueAmount} />
             ) : null}
           </div>
           {!regle ? (
             <BoutonPayerDette
-              montantDu={displayDue}
+              montantDu={dueAmount}
               periodeId={periode}
               onPaiementReussi={handlePaiementReussi}
             />
@@ -167,11 +210,11 @@ export default function CommissionDueCard({ enabled = true }: { enabled?: boolea
         </div>
 
         <p className="mt-2 text-[12px]" style={{ color: "var(--g-muted)" }}>
-          {displayDue > 0
+          {dueAmount > 0
             ? `${nb} réservation(s) confirmées hors paiement en ligne ce mois`
             : "Toutes les commissions sont à jour ✓"}
         </p>
-        {due > 0 || displayDue > 0 ? (
+        {dueAmount > 0 ? (
           <button
             type="button"
             onClick={() => setOpen(true)}
@@ -222,7 +265,7 @@ export default function CommissionDueCard({ enabled = true }: { enabled?: boolea
               className="mt-3 rounded-xl px-3 py-2.5 font-bold"
               style={{ background: "var(--g-warning-bg)", color: "var(--g-warning)" }}
             >
-              Total à régler : {fcfa(displayDue)}
+              Total à régler : {fcfa(dueAmount)}
             </div>
             <p className="mt-3 text-[11px]" style={{ color: "var(--g-muted)" }}>
               {instructions}

@@ -3,6 +3,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
 import HeroSearchBar from "@/espaces/joueur/components/hero/HeroSearchBar";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import HeroVideo from "@/components/HeroVideo";
 
 export type HeroSharedProps = {
   searchQuery?: string;
@@ -22,35 +23,39 @@ function useHeroUser(userProp?: any) {
   return { user, isAuthenticated, initials, photo };
 }
 
+/**
+ * Header Plein Écran / Bleed — vidéo collée aux bords gauche, droit et haut (PWA native).
+ * Desktop (md+) : légèrement contenu sous la navbar, coins arrondis.
+ */
 export function HeroResponsive(props: HeroSharedProps) {
   const navigate = useNavigate();
   const { user, isAuthenticated, initials, photo } = useHeroUser(props.user);
 
   return (
-    <div className="relative w-full mb-2 md:mb-3 md:mt-3">
-      {/* Bloc vidéo agrandi */}
-      <div className="relative w-full h-[35vh] min-h-[260px] max-h-[380px] md:h-[320px] md:max-h-none lg:h-[360px] overflow-hidden md:rounded-3xl md:border md:border-[var(--border)] md:shadow-[var(--shadow-lg)] bg-[var(--surface)]">
-        <video
-          autoPlay
-          loop
-          muted
-          playsInline
-          aria-hidden="true"
-          className="absolute inset-0 w-full h-full object-cover object-center z-0"
-          poster="/images/hero-placeholder.jpg"
-        >
-          <source src="/videos/terrainsn-hero.mp4" type="video/mp4" />
-        </video>
+    <div className="relative w-full mb-2 md:mb-4">
+      {/* Mobile : edge-to-edge | Desktop : carte dans le flux */}
+      <div
+        className={[
+          "relative w-full overflow-hidden bg-[#0B1F17]",
+          "h-[38vh] min-h-[280px] max-h-[440px]",
+          "md:h-[300px] lg:h-[340px]",
+          /* Bleed mobile — aucun rayon / bordure / marge */
+          "rounded-none border-0 shadow-none m-0",
+          /* Desktop — immersion adoucie sous la navbar */
+          "md:rounded-3xl md:border md:border-[var(--border)] md:shadow-[var(--shadow-lg)]",
+        ].join(" ")}
+      >
+        <HeroVideo />
 
         <div
           className="absolute inset-0 z-10 pointer-events-none"
           style={{
             background:
-              "linear-gradient(180deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.65) 100%)",
+              "linear-gradient(180deg, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.55) 55%, rgba(0,0,0,0.72) 100%)",
           }}
         />
 
-        <header className="relative z-20 flex md:hidden items-center justify-between px-4 pt-[calc(1.5rem+env(safe-area-inset-top,0px))]">
+        <header className="relative z-20 flex md:hidden items-center justify-between px-4 pt-[calc(0.75rem+env(safe-area-inset-top,0px))]">
           <span
             className="font-sans text-lg font-extrabold tracking-tight text-white"
             style={{ filter: "drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6))" }}
@@ -77,7 +82,7 @@ export function HeroResponsive(props: HeroSharedProps) {
           </div>
         </header>
 
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center px-5 md:px-8 lg:px-10">
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-end md:items-center px-5 pb-14 md:pb-0 md:px-8 lg:px-10">
           <h1
             className="max-w-xl font-sans text-2xl font-extrabold not-italic leading-tight tracking-tight text-white sm:text-3xl md:text-4xl lg:text-[2.75rem]"
             style={{
@@ -96,8 +101,8 @@ export function HeroResponsive(props: HeroSharedProps) {
         </div>
       </div>
 
-      {/* Barre de recherche flottante — chevauche le bas du hero */}
-      <div className="relative z-20 px-3 sm:px-4 md:px-6 -mt-7">
+      {/* Recherche flottante — chevauche le bas du hero */}
+      <div className="relative z-20 px-4 sm:px-6 md:px-0 -mt-7 md:-mt-8 max-w-3xl md:mx-auto">
         <HeroSearchBar
           searchQuery={props.searchQuery}
           onSearchChange={props.onSearchChange}

@@ -128,7 +128,10 @@ router.get('/profile', async (req, res) => {
 
 router.get('/terrains', async (req, res) => {
   const db = await getDb();
-  res.json(await queryAll(db, `SELECT t.*, p.nom AS proprietaire_nom FROM terrains t
+  res.json(await queryAll(db, `SELECT t.*, p.nom AS proprietaire_nom,
+      (SELECT h.heure_debut FROM horaires h WHERE h.terrain_id = t.id AND h.est_ouvert = 1 ORDER BY h.id ASC LIMIT 1) AS heure_debut_typique,
+      (SELECT h.heure_fin FROM horaires h WHERE h.terrain_id = t.id AND h.est_ouvert = 1 ORDER BY h.id ASC LIMIT 1) AS heure_fin_typique
+    FROM terrains t
     LEFT JOIN proprietaires p ON p.id = t.proprietaire_id ORDER BY t.created_at DESC`));
 });
 
@@ -170,7 +173,7 @@ router.post('/terrains', async (req, res) => {
       await commoditesService.setTerrainCommodites(db, terrainId, ids, actor);
     }
     for (const jour of ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']) {
-      await runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, '06:00', '00:00']);
+      await runSql(db, 'INSERT INTO horaires (terrain_id, jour, heure_debut, heure_fin, est_ouvert) VALUES (?, ?, ?, ?, 1)', [terrainId, jour, '06:00', '03:00']);
     }
     if ((modele_revenus || 'commission') === 'abonnement') {
       await ensurePendingAbonnement(db, terrainId, Number(abonnement_montant || 0));
@@ -1180,6 +1183,29 @@ router.put('/terrains/:id/features', async (req, res) => {
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
   const list = await transaction(db, async () => await terrainFeaturesService.saveFeatures(db, terrainId, req.body?.features || [], req.user?.id));
   res.json(list);
+});
+
+router.get('/nuit-prolongee', async (req, res) => {
+  const db = await getDb();
+  const row = await queryOne(db, 'SELECT valeur FROM plateforme_settings WHERE cle = ?', ['heure_fermeture_maximale']);
+  res.json({
+    heure_fermeture_maximale: row?.valeur || '03:00',
+    heure_debut_nuit_prolongee: '00:00',
+  });
+});
+
+router.put('/nuit-prolongee', async (req, res) => {
+  const db = await getDb();
+  const allowed = new Set(['23:00', '00:00', '01:00', '02:00', '03:00', '04:00']);
+  const val = String(req.body?.heure_fermeture_maximale || '03:00').slice(0, 5);
+  if (!allowed.has(val)) return res.status(400).json({ error: 'Heure de fermeture maximale invalide' });
+  const existing = await queryOne(db, 'SELECT cle FROM plateforme_settings WHERE cle = ?', ['heure_fermeture_maximale']);
+  if (existing) {
+    await runSql(db, 'UPDATE plateforme_settings SET valeur = ?, updated_at = CURRENT_TIMESTAMP WHERE cle = ?', [val, 'heure_fermeture_maximale']);
+  } else {
+    await runSql(db, 'INSERT INTO plateforme_settings (cle, valeur) VALUES (?, ?)', ['heure_fermeture_maximale', val]);
+  }
+  res.json({ heure_fermeture_maximale: val, heure_debut_nuit_prolongee: '00:00' });
 });
 
 router.get('/whatsapp/status', async (req, res) => {

@@ -1,4 +1,4 @@
-const webpush = require('web-push');
+﻿const webpush = require('web-push');
 const { getDb, queryAll, queryOne, runSql } = require('./database');
 const logger = require('./logger');
 const {
@@ -265,10 +265,25 @@ function formaterHeure(heureStr) {
 
 function formaterDateCourt(dateStr) {
   try {
-    return new Date(dateStr).toLocaleDateString('fr-SN', { weekday: 'short', day: 'numeric', month: 'short' });
+    const raw = String(dateStr || '').slice(0, 10);
+    return new Date(`${raw}T12:00:00`).toLocaleDateString('fr-SN', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    });
   } catch {
     return String(dateStr || '');
   }
+}
+
+function formaterDateHeurePush(date, heure_debut) {
+  const { getJourPercuBackend } = require('./utils/creneauLabel');
+  const { labelComplet, estNuitProlongee, datePercue } = getJourPercuBackend(date, heure_debut);
+  const heure = formaterHeure(heure_debut);
+  if (estNuitProlongee) {
+    return `${formaterDateCourt(datePercue)} · ${labelComplet} à ${heure}`;
+  }
+  return `${formaterDateCourt(date)} à ${heure}`;
 }
 
 function formaterMontant(montant) {
@@ -614,7 +629,7 @@ function pushPayloadBase(r, extra = {}) {
 async function notifyReservationConfirmee(reservationId, { sansAvance = false } = {}) {
   const r = await reservationContext(reservationId);
   if (!r) return;
-  const corps = `${r.terrain_nom} · ${formaterDateCourt(r.date)} à ${formaterHeure(r.heure_debut)}`;
+  const corps = `${r.terrain_nom} · ${formaterDateHeurePush(r.date, r.heure_debut)}`;
   const type = sansAvance || String(r.politique_paiement || '') === 'sans_avance'
     ? 'RESA_CONFIRMEE_SANS_AVANCE'
     : 'RESA_CONFIRMEE';
@@ -628,13 +643,13 @@ async function notifyReservationConfirmee(reservationId, { sansAvance = false } 
   const gerant = await getGerantActor(r.terrain_id);
   if (gerant) {
     await envoyerPush(gerant.userId, 'NOUVELLE_RESA', pushPayloadBase(r, {
-      corps: `${r.joueur_prenom || r.joueur_nom || 'Joueur'} · ${formaterDateCourt(r.date)} à ${formaterHeure(r.heure_debut)}`,
+      corps: `${r.joueur_prenom || r.joueur_nom || 'Joueur'} · ${formaterDateHeurePush(r.date, r.heure_debut)}`,
       url: `/backoffice/gerant/reservations/${reservationId}`,
     }), gerant.accountType);
   }
   if (r.proprietaire_id) {
     await envoyerPush(r.proprietaire_id, 'MATCH_CONFIRME_TERRAIN', pushPayloadBase(r, {
-      corps: `${r.terrain_nom} · ${formaterDateCourt(r.date)} à ${formaterHeure(r.heure_debut)}`,
+      corps: `${r.terrain_nom} · ${formaterDateHeurePush(r.date, r.heure_debut)}`,
       url: '/backoffice/proprietaire',
     }), 'proprietaire');
   }
@@ -644,7 +659,7 @@ async function notifyLienPaiement(reservationId) {
   const r = await reservationContext(reservationId);
   if (!r) return;
   if (String(r.politique_paiement || 'avance') === 'sans_avance') return;
-  const corps = `${r.terrain_nom} · ${formaterDateCourt(r.date)} à ${formaterHeure(r.heure_debut)}`;
+  const corps = `${r.terrain_nom} · ${formaterDateHeurePush(r.date, r.heure_debut)}`;
   if (r.joueur_id) {
     await envoyerPush(r.joueur_id, 'RESA_EN_ATTENTE', pushPayloadBase(r, {
       titre: '⏳ Paiement en attente',
@@ -682,7 +697,7 @@ async function notifyCreneauPris(reservationId) {
 async function notifyAnnulation(reservationId, { traiteParGerant = false } = {}) {
   const r = await reservationContext(reservationId);
   if (!r) return;
-  const corps = `${r.terrain_nom} · ${formaterDateCourt(r.date)} à ${formaterHeure(r.heure_debut)}`;
+  const corps = `${r.terrain_nom} · ${formaterDateHeurePush(r.date, r.heure_debut)}`;
   if (r.joueur_id) {
     await envoyerPush(r.joueur_id, 'RESA_ANNULEE_GERANT', pushPayloadBase(r, {
       corps,

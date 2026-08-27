@@ -1,7 +1,10 @@
 /**
  * Utilitaires créneaux + calendrier culturel sénégalais.
- * Règle métier : vendredi 00:00 (calendaire) se programme / s'affiche comme « Jeudi minuit ».
+ * Nuit prolongée : créneaux 00h–04h59 du lendemain perçus comme « Nuit du [veille] ».
+ * Date technique DB toujours correcte ; seul l'affichage change.
  */
+
+const { getJourPercuBackend, estNuitProlongee } = require('./utils/creneauLabel');
 
 const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 const JOURS_LABEL = {
@@ -12,6 +15,12 @@ const JOURS_LABEL = {
   jeudi: 'Jeudi',
   vendredi: 'Vendredi',
   samedi: 'Samedi',
+};
+
+/** Horaires d'ouverture par défaut (fermeture nuit prolongée). */
+const HORAIRES_DEFAUT = {
+  heure_ouverture: '06:00',
+  heure_fermeture: '03:00',
 };
 
 function parseHour(time) {
@@ -35,17 +44,30 @@ function normalizeHourString(time) {
     if (h === 24) return '00:00';
     return formatHour(h);
   }
+  // Accepte 00:00–23:59 (nuit prolongée incluse) — aucune heure bloquée
   const h = Math.min(23, Math.max(0, parseInt(m[1], 10) || 0));
   const min = Math.min(59, Math.max(0, parseInt(m[2] || '0', 10) || 0));
-  // Compat tarifs / grilles horaires : si minutes absentes → :00
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 
-/** Interprète heure_fin "00:00" comme fin de journée (24h exclusive). */
+/**
+ * Interprète heure_fin.
+ * - "00:00" historique = jusqu'à minuit (24 exclusive) + extension culturelle au moins 00–01
+ * - 01:00–04:59 = fermeture en nuit prolongée le lendemain (exclusive)
+ * - sinon = heure exclusive le même jour (ou overnight si < début)
+ */
 function parseEndHour(time) {
   const raw = String(time || '').trim();
   if (!raw || raw === '00:00' || raw === '0:00' || raw === '24:00' || raw === '24') return 24;
   return parseHour(raw);
+}
+
+/** Fermeture en nuit prolongée (00:00–04:59). */
+function isFermetureNuitProlongee(heureFin) {
+  const raw = String(heureFin || '').trim().slice(0, 5);
+  if (raw === '00:00' || raw === '0:00') return true;
+  const h = parseHour(raw);
+  return h >= 0 && h < 5;
 }
 
 function dateAtNoon(dateStr) {
@@ -73,20 +95,23 @@ function veilleJour(jour) {
 }
 
 /**
- * Label affiché : vendredi 00:00 → « Jeudi minuit ».
+ * Label affiché : mardi 01:00 → « Nuit du Lundi » ; vendredi 00:00 → « Nuit du Jeudi ».
  */
 function labelHeureSenegal(dateStr, heureDebut) {
   const h = parseHour(heureDebut);
-  if (h === 0 || h === 24) {
-    const veille = veilleJour(jourDepuisDate(dateStr));
-    return `${JOURS_LABEL[veille] || 'Veille'} minuit`;
+  if (estNuitProlongee(heureDebut) || h === 24) {
+    const { labelComplet } = getJourPercuBackend(dateStr, h === 24 ? '00:00' : heureDebut);
+    return labelComplet;
   }
   return formatHour(h);
 }
 
 function courtLabelHeureSenegal(dateStr, heureDebut) {
   const h = parseHour(heureDebut);
-  if (h === 0 || h === 24) return 'Minuit';
+  if (estNuitProlongee(heureDebut) || h === 24) {
+    const { labelComplet } = getJourPercuBackend(dateStr, h === 24 ? '00:00' : heureDebut);
+    return labelComplet;
+  }
   return formatHour(h);
 }
 
@@ -99,7 +124,6 @@ function hourlySlots(heureDebut, heureFin) {
   let start = parseHour(heureDebut);
   let end = parseEndHour(heureFin);
   if (start === 24) start = 0;
-  // Same-day or until midnight
   if (end > start) {
     const slots = [];
     for (let h = start; h < end; h += 1) {
@@ -113,7 +137,7 @@ function hourlySlots(heureDebut, heureFin) {
     return slots;
   }
   if (end === start) return [];
-  // Overnight wrap: e.g. 22:00 → 06:00
+  // Overnight wrap: e.g. 22:00 → 06:00 ou 06:00 → 03:00
   const slots = [];
   for (let h = start; h < 24; h += 1) {
     const next = h + 1;
@@ -134,19 +158,35 @@ function hourlySlots(heureDebut, heureFin) {
 }
 
 /**
- * Plages d'ouverture pour une date calendaire, avec extension « minuit culturel ».
- * Si jeudi ferme à 00:00 → inclut vendredi 00:00–01:00 labellisé « Jeudi minuit ».
+ * Heure de fin exclusive de la nuit prolongée sur le lendemain.
+ * - 00:00 historique → au moins jusqu'à 01:00 (créneau minuit culturel)
+ * - 03:00 → jusqu'à 03:00 (créneaux 00–01, 01–02, 02–03)
+ */
+function nuitProlongeeEndExclusive(heureFin) {
+  const raw = String(heureFin || '').trim().slice(0, 5);
+  if (raw === '00:00' || raw === '0:00' || raw === '24:00') return 1;
+  const h = parseHour(raw);
+  if (h >= 0 && h < 5) return h;
+  return 0;
+}
+
+/**
+ * Plages d'ouverture pour une date calendaire, avec extension nuit prolongée.
+ * Si lundi ferme à 03:00 → slots lundi 06→24 + mardi 00→03 labellisés « Nuit du Lundi ».
  */
 function buildSlotsForOpenDay(dateStr, horaire) {
   if (!horaire || !Number(horaire.est_ouvert)) return [];
 
   const start = parseHour(horaire.heure_debut);
   const endExclusive = parseEndHour(horaire.heure_fin);
-  const isUntilMidnight = String(horaire.heure_fin || '').startsWith('00') || endExclusive === 24;
+  const nuitClose = isFermetureNuitProlongee(horaire.heure_fin);
+  const overnight = nuitClose || endExclusive < start;
 
   const result = [];
-  const sameDayEnd = endExclusive === 24 ? 24 : endExclusive;
+  const jourTarif = jourDepuisDate(dateStr);
 
+  // Créneaux du jour calendaire (jusqu'à minuit si overnight / nuit)
+  const sameDayEnd = overnight ? 24 : endExclusive;
   if (sameDayEnd > start) {
     for (let h = start; h < sameDayEnd && h < 24; h += 1) {
       const heure_debut = formatHour(h);
@@ -158,40 +198,32 @@ function buildSlotsForOpenDay(dateStr, horaire) {
         label: labelHeureSenegal(dateStr, heure_debut),
         label_court: courtLabelHeureSenegal(dateStr, heure_debut),
         est_minuit_culturel: false,
-        jour_tarif: jourDepuisDate(dateStr),
-      });
-    }
-  } else if (sameDayEnd < start) {
-    // Overnight stored on opening day until 24 then early morning on same calendar booking day is unusual;
-    // for wrap we only emit until 24 on this date; morning slots belong to next calendar day generation.
-    for (let h = start; h < 24; h += 1) {
-      const heure_debut = formatHour(h);
-      const heure_fin = h + 1 >= 24 ? '00:00' : formatHour(h + 1);
-      result.push({
-        date: dateStr,
-        heure_debut,
-        heure_fin,
-        label: labelHeureSenegal(dateStr, heure_debut),
-        label_court: courtLabelHeureSenegal(dateStr, heure_debut),
-        est_minuit_culturel: false,
-        jour_tarif: jourDepuisDate(dateStr),
+        est_nuit_prolongee: false,
+        jour_tarif: jourTarif,
       });
     }
   }
 
-  // Extension culturelle : nuit → jour calendaire suivant à 00:00
-  if (isUntilMidnight) {
+  // Extension nuit prolongée → jour calendaire suivant
+  if (overnight) {
     const nextDate = addDaysYmd(dateStr, 1);
-    result.push({
-      date: nextDate,
-      heure_debut: '00:00',
-      heure_fin: '01:00',
-      label: labelHeureSenegal(nextDate, '00:00'),
-      label_court: 'Minuit',
-      est_minuit_culturel: true,
-      jour_tarif: jourDepuisDate(dateStr), // tarif de la veille (jeudi)
-      date_affichage: dateStr,
-    });
+    const endNuit = nuitClose ? nuitProlongeeEndExclusive(horaire.heure_fin) : endExclusive;
+    for (let h = 0; h < endNuit; h += 1) {
+      const heure_debut = formatHour(h);
+      const heure_fin = formatHour(h + 1);
+      const perc = getJourPercuBackend(nextDate, heure_debut);
+      result.push({
+        date: nextDate,
+        heure_debut,
+        heure_fin,
+        label: perc.labelComplet,
+        label_court: perc.labelComplet,
+        est_minuit_culturel: h === 0,
+        est_nuit_prolongee: true,
+        jour_tarif: jourTarif,
+        date_affichage: dateStr,
+      });
+    }
   }
 
   return result;
@@ -199,7 +231,7 @@ function buildSlotsForOpenDay(dateStr, horaire) {
 
 /**
  * Bornes utiles pour grilles admin (min/max sur la semaine).
- * heure_max exclusive ; 24 autorisé pour minuit.
+ * heure_max exclusive ; 24 autorisé pour minuit / nuit prolongée.
  */
 function bornesHorairesSemaine(horairesRows = []) {
   let min = 8;
@@ -209,22 +241,27 @@ function bornesHorairesSemaine(horairesRows = []) {
     if (!Number(h.est_ouvert)) continue;
     const s = parseHour(h.heure_debut);
     const e = parseEndHour(h.heure_fin);
+    const nuit = isFermetureNuitProlongee(h.heure_fin);
     if (!found) {
       min = s;
-      max = e;
+      max = nuit ? 24 : e;
       found = true;
     } else {
       min = Math.min(min, s);
-      max = Math.max(max, e === 24 ? 24 : e);
+      max = Math.max(max, nuit ? 24 : e === 24 ? 24 : e);
     }
   }
   if (!found) return { heure_min: 6, heure_max: 24 };
-  // Inclure éventuellement 0 pour afficher minuit culturel dans tarifs
   if (max >= 24) {
     min = Math.min(min, 0);
     max = 24;
   }
   return { heure_min: Math.max(0, min), heure_max: Math.min(24, Math.max(max, min + 1)) };
+}
+
+function validerHeure(heure) {
+  const regex = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+  return regex.test(String(heure || '').trim());
 }
 
 function validateHorairePayload(h) {
@@ -233,24 +270,44 @@ function validateHorairePayload(h) {
   if (fin === '24:00') fin = '00:00';
   fin = normalizeHourString(fin);
   const start = parseHour(debut);
-  const end = parseEndHour(fin);
+  const endHour = parseHour(fin);
+  const nuit = isFermetureNuitProlongee(fin);
+
   if (start < 0 || start > 23) {
     const err = new Error('Heure de début invalide (0–23h)');
     err.statusCode = 400;
     throw err;
   }
-  // fin 00:00 = jusqu'à minuit OK ; sinon fin doit différer
-  if (end !== 24 && end === start) {
-    const err = new Error('Heure de fin doit être après le début (00:00 = jusqu\'à minuit)');
+  if (!validerHeure(debut) || !validerHeure(fin)) {
+    const err = new Error('Format d\'heure invalide (HH:MM)');
     err.statusCode = 400;
     throw err;
   }
-  return { ...h, heure_debut: debut, heure_fin: fin === '00:00' || end === 24 ? '00:00' : fin };
+
+  // Fermeture nuit prolongée (00h–04h59) = OK
+  if (nuit) {
+    return { ...h, heure_debut: debut, heure_fin: fin };
+  }
+
+  // Même jour : fin doit être après début
+  if (endHour > start) {
+    return { ...h, heure_debut: debut, heure_fin: fin };
+  }
+
+  // Fermeture entre 05h et heure_ouverture → invalide
+  if (endHour >= 5 && endHour <= start) {
+    const err = new Error('Heure de fermeture invalide');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return { ...h, heure_debut: debut, heure_fin: fin };
 }
 
 module.exports = {
   JOURS,
   JOURS_LABEL,
+  HORAIRES_DEFAUT,
   parseHour,
   parseEndHour,
   formatHour,
@@ -264,4 +321,7 @@ module.exports = {
   buildSlotsForOpenDay,
   bornesHorairesSemaine,
   validateHorairePayload,
+  validerHeure,
+  isFermetureNuitProlongee,
+  nuitProlongeeEndExclusive,
 };

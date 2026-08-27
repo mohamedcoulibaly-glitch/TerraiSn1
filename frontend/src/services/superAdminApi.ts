@@ -188,6 +188,9 @@ export const superAdminApi = {
   terrainFeatures: (id: number) => adminRequest(`/admin/terrains/${id}/features`),
   saveTerrainFeatures: (id: number, features: { cle: string; actif: boolean }[]) =>
     adminRequest(`/admin/terrains/${id}/features`, { method: "PUT", body: JSON.stringify({ features }) }),
+  getNuitProlongeeSettings: () => adminRequest("/admin/nuit-prolongee"),
+  saveNuitProlongeeSettings: (body: { heure_fermeture_maximale: string }) =>
+    adminRequest("/admin/nuit-prolongee", { method: "PUT", body: JSON.stringify(body) }),
   whatsappStatus: () => adminRequest("/admin/whatsapp/status"),
   whatsappQr: () => adminRequest("/admin/whatsapp/qr"),
   whatsappConnect: (force = false) =>

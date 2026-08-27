@@ -973,35 +973,53 @@ async function countCreneauxLibres(db, terrainId, dateStr) {
   const horaire = await queryOne(db, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [terrainId, jour]);
   if (!horaire || !horaire.est_ouvert) return { libres: 0, total: 0, ferme: true };
 
-  const startHour = parseInt(String(horaire.heure_debut).split(':')[0], 10);
-  const endHour = parseInt(String(horaire.heure_fin).split(':')[0], 10);
-  if (!Number.isFinite(startHour) || !Number.isFinite(endHour) || endHour <= startHour) {
-    return { libres: 0, total: 0, ferme: true };
-  }
+  const planned = buildSlotsForOpenDay(dateStr, horaire).filter((s) => {
+    const slotDate = String(s.date).slice(0, 10);
+    const h = parseInt(String(s.heure_debut).slice(0, 2), 10);
+    if (slotDate === dateStr && h >= 5) return true;
+    if (slotDate !== dateStr && h < 5) return true;
+    return false;
+  });
+  if (!planned.length) return { libres: 0, total: 0, ferme: true };
+
+  const datesNeeded = [...new Set(planned.map((s) => String(s.date).slice(0, 10)))];
+  const placeholders = datesNeeded.map(() => '?').join(',');
 
   const reservations = await queryAll(
     db,
-    "SELECT heure_debut, heure_fin FROM reservations WHERE terrain_id = ? AND date = ? AND statut IN ('confirme', 'acceptee')",
-    [terrainId, dateStr]
+    `SELECT date, heure_debut, heure_fin FROM reservations WHERE terrain_id = ? AND date IN (${placeholders}) AND statut IN ('confirme', 'acceptee')`,
+    [terrainId, ...datesNeeded],
   );
   const blocages = await queryAll(
     db,
-    'SELECT heure_debut, heure_fin FROM blocages_creneaux WHERE terrain_id = ? AND date = ?',
-    [terrainId, dateStr]
+    `SELECT date, heure_debut, heure_fin FROM blocages_creneaux WHERE terrain_id = ? AND date IN (${placeholders})`,
+    [terrainId, ...datesNeeded],
   );
 
   let libres = 0;
-  const total = endHour - startHour;
-  for (let h = startHour; h < endHour; h++) {
-    const slot = `${String(h).padStart(2, '0')}:00`;
-    const isReserved = reservations.some((r) => slot >= r.heure_debut && slot < r.heure_fin);
-    const isBlocked = blocages.some((b) => slot >= b.heure_debut && slot < b.heure_fin);
+  const total = planned.length;
+  for (const slotPlan of planned) {
+    const slotDate = String(slotPlan.date).slice(0, 10);
+    const slot = String(slotPlan.heure_debut).slice(0, 5);
+    const slotFin = String(slotPlan.heure_fin).slice(0, 5);
+    const isReserved = reservations.some(
+      (r) =>
+        String(r.date).slice(0, 10) === slotDate &&
+        slot < String(r.heure_fin).slice(0, 5) &&
+        slotFin > String(r.heure_debut).slice(0, 5),
+    );
+    const isBlocked = blocages.some(
+      (b) =>
+        String(b.date).slice(0, 10) === slotDate &&
+        slot < String(b.heure_fin).slice(0, 5) &&
+        slotFin > String(b.heure_debut).slice(0, 5),
+    );
     if (isReserved || isBlocked) continue;
 
     const creneau = await queryOne(
       db,
       'SELECT statut FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ?',
-      [terrainId, dateStr, slot]
+      [terrainId, slotDate, slot],
     );
     if (!creneau || creneau.statut === 'libre') libres += 1;
   }
@@ -1170,7 +1188,7 @@ app.get('/api/terrains', async (req, res) => {
 
     if (hasGeo) {
       const distanceMax = parseFloat(distance_max);
-      const maxKm = Number.isFinite(distanceMax) && distanceMax > 0 ? distanceMax : 10;
+      const hasDistanceFilter = Number.isFinite(distanceMax) && distanceMax > 0;
       terrains = terrains
         .map((t) => {
           const tLat = Number(t.latitude);
@@ -1179,13 +1197,16 @@ app.get('/api/terrains', async (req, res) => {
             ? Math.round(haversineKm(userLat, userLng, tLat, tLng) * 10) / 10
             : null;
           return { ...t, distance_km };
-        })
-        .filter((t) => t.distance_km === null || t.distance_km <= maxKm)
-        .sort((a, b) => {
-          if (a.distance_km === null) return 1;
-          if (b.distance_km === null) return -1;
-          return a.distance_km - b.distance_km;
         });
+      // Ne filtre par rayon que si distance_max est explicitement fourni
+      if (hasDistanceFilter) {
+        terrains = terrains.filter((t) => t.distance_km === null || t.distance_km <= distanceMax);
+      }
+      terrains = terrains.sort((a, b) => {
+        if (a.distance_km === null) return 1;
+        if (b.distance_km === null) return -1;
+        return a.distance_km - b.distance_km;
+      });
     }
 
     res.json(await attachPhotosToTerrains(db, terrains));

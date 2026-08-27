@@ -4,6 +4,7 @@ const QRCode = require('qrcode');
 const client = require('./whatsappClient');
 const { getDb, queryOne, runSql } = require('./database');
 const pushService = require('./pushService');
+const { getJourPercuBackend } = require('./utils/creneauLabel');
 
 function firePush(work) {
   Promise.resolve()
@@ -41,7 +42,8 @@ function normalizeTelephoneStore(telephone) {
 }
 
 function formaterDate(dateStr) {
-  return new Date(dateStr).toLocaleDateString('fr-SN', {
+  const raw = String(dateStr || '').slice(0, 10);
+  return new Date(`${raw}T12:00:00`).toLocaleDateString('fr-SN', {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -50,6 +52,16 @@ function formaterDate(dateStr) {
 
 function formaterHeure(heureStr) {
   return String(heureStr || '').substring(0, 5);
+}
+
+/** Label date+heure avec nuit prolongée */
+function formaterDateHeureCreneau(date, heure_debut) {
+  const { labelComplet, estNuitProlongee, datePercue } = getJourPercuBackend(date, heure_debut);
+  const heure = formaterHeure(heure_debut);
+  if (estNuitProlongee) {
+    return `${formaterDate(datePercue)} · ${labelComplet} à ${heure}`;
+  }
+  return `${formaterDate(date)} à ${heure}`;
 }
 
 function formaterMontant(montant) {
@@ -289,8 +301,7 @@ async function envoyerLienPaiement(reservationId) {
     tel,
     `👋 Salut ${prenom} !\n\n` +
       `Le gérant de *${data.terrain_nom}* a enregistré ta réservation ` +
-      `pour le ${formaterDate(data.date)} ` +
-      `à ${formaterHeure(data.heure_debut)}.\n\n` +
+      `pour le ${formaterDateHeureCreneau(data.date, data.heure_debut)}.\n\n` +
       `Pour confirmer ta place, paie ton avance de ` +
       `*${formaterMontant(avance)}* ici :\n` +
       `👉 ${lien}\n\n` +
@@ -321,7 +332,7 @@ async function envoyerConfirmation(reservationId) {
     `⚽ C'est confirmé ${prenom} !\n\n` +
     `Ton terrain t'attend :\n` +
     `📍 ${data.terrain_nom} — ${quartier}\n` +
-    `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
+    `🗓️ ${formaterDateHeureCreneau(data.date, data.heure_debut)}\n` +
     `🏷️ Code : *${data.code_reservation}*\n\n` +
     (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
     `💰 Avance payée : ${formaterMontant(montantsReservation(data).avance)}\n` +
@@ -356,7 +367,7 @@ async function envoyerConfirmation(reservationId) {
   if (data.terrain_id) {
     await notifierGerantTerrain(
       data.terrain_id,
-      `Paiement reçu. Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}.`,
+      `Paiement reçu. Joueur : ${data.joueur_nom}. ${formaterDateHeureCreneau(data.date, data.heure_debut)}. Code : ${data.code_reservation}.`,
       'platform',
     ).catch((err) => {
       console.warn('⚠️ Notif gérant après confirmation:', err.message || err);
@@ -384,7 +395,7 @@ async function envoyerConfirmationManuelle(reservationId) {
     `⚽ C'est confirmé ${prenom} !\n\n` +
     `Ton terrain t'attend :\n` +
     `📍 ${data.terrain_nom} — ${quartier}\n` +
-    `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
+    `🗓️ ${formaterDateHeureCreneau(data.date, data.heure_debut)}\n` +
     `🏷️ Code : *${data.code_reservation}*\n\n` +
     (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
     `💰 Avance reçue : ${formaterMontant(montantsReservation(data).avance)} ✓\n` +
@@ -428,7 +439,7 @@ async function envoyerCreneauPris(reservationId) {
   await envoyerWhatsApp(
     tel,
     `😕 Oups ${prenom}...\n\n` +
-      `Ce créneau du ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)} ` +
+      `Ce créneau du ${formaterDateHeureCreneau(data.date, data.heure_debut)} ` +
       `vient d'être confirmé par un autre joueur.\n\n` +
       `Ton lien de paiement n'est plus valable.\n\n` +
       `Voici ce qui est encore dispo :\n` +
@@ -543,7 +554,7 @@ async function envoyerAnnulation(
   if (tel) {
     await envoyerWhatsApp(
       tel,
-      `ℹ️ ${prenom || 'Salut'}, ta réservation *${code}* du ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)} a été annulée ${initiateur}.\n\n` +
+      `ℹ️ ${prenom || 'Salut'}, ta réservation *${code}* du ${formaterDateHeureCreneau(data.date, data.heure_debut)} a été annulée ${initiateur}.\n\n` +
         `${detailRemboursement}\n\n` +
         `D'autres créneaux sont dispo ici :\n` +
         `👉 ${lienDispo}`,
@@ -557,7 +568,7 @@ async function envoyerAnnulation(
     data.terrain_id,
     `⚠️ Réservation annulée — *${code}*\n\n` +
       `${joueurLabel} (${telJoueur})\n` +
-      `${formaterDate(data.date)} · ${formaterHeure(data.heure_debut)}–${formaterHeure(data.heure_fin)}\n` +
+      `${formaterDateHeureCreneau(data.date, data.heure_debut)}–${formaterHeure(data.heure_fin)}\n` +
       `Type : *${typeLabel}*\n` +
       `Créneau libéré — disponible pour une nouvelle réservation.`,
   );
@@ -646,7 +657,7 @@ async function envoyerConfirmationSansAvance(reservationId) {
     `⚽ C'est confirmé ${prenom} !\n\n` +
     `Ton terrain t'attend :\n` +
     `📍 ${data.terrain_nom} — ${quartier}\n` +
-    `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
+    `🗓️ ${formaterDateHeureCreneau(data.date, data.heure_debut)}\n` +
     `🏷️ Code : *${data.code_reservation}*\n\n` +
     (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
     `💵 Règlement complet sur place : ${formaterMontant(total)}\n` +
@@ -680,7 +691,7 @@ async function envoyerConfirmationSansAvance(reservationId) {
   if (data.terrain_id) {
     await notifierGerantTerrain(
       data.terrain_id,
-      `Réservation sans avance confirmée. Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}. Total sur place : ${formaterMontant(total)}.`,
+      `Réservation sans avance confirmée. Joueur : ${data.joueur_nom}. ${formaterDateHeureCreneau(data.date, data.heure_debut)}. Code : ${data.code_reservation}. Total sur place : ${formaterMontant(total)}.`,
       'platform',
     ).catch((err) => {
       console.warn('⚠️ Notif gérant après confirmation sans avance:', err.message || err);
@@ -694,6 +705,8 @@ module.exports = {
   normalizeTelephoneStore,
   formaterDate,
   formaterHeure,
+  formaterDateHeureCreneau,
+  getJourPercuBackend,
   formaterMontant,
   envoyerMessage,
   envoyerWhatsApp,

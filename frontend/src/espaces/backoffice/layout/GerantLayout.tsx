@@ -7,6 +7,8 @@ import { gerantApi, getGerantTerrainActif, setGerantTerrainActif } from "@/lib/a
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import WhatsAppInfraBanner from "@/espaces/backoffice/components/WhatsAppInfraBanner";
 import WhatsAppGerantSessionBanner from "@/espaces/backoffice/components/WhatsAppGerantSessionBanner";
+import Select2 from "@/components/Select2";
+import { hapticSelection } from "@/lib/haptics";
 
 const TABS = [
   {
@@ -171,23 +173,14 @@ export default function GerantLayout() {
           Espace gérant
         </p>
         {multi ? (
-          <select
-            value={terrainActif ?? ""}
-            onChange={(e) => applyTerrain(Number(e.target.value))}
-            className="mt-3 w-full text-sm font-semibold rounded-lg px-2 py-1.5 border"
-            style={{
-              background: "var(--g-surface)",
-              borderColor: "var(--g-border)",
-              color: "var(--g-text)",
-            }}
-            aria-label="Terrain actif"
-          >
-            {terrains.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.nom}
-              </option>
-            ))}
-          </select>
+          <Select2
+            className="mt-3"
+            size="sm"
+            ariaLabel="Terrain actif"
+            value={String(terrainActif ?? "")}
+            onChange={(v) => applyTerrain(Number(v))}
+            options={terrains.map((t) => ({ value: String(t.id), label: t.nom }))}
+          />
         ) : null}
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
@@ -220,31 +213,23 @@ export default function GerantLayout() {
 
       <div className="flex-1 flex flex-col min-w-0 pb-[calc(56px+env(safe-area-inset-bottom))] md:pb-0">
         <header
-          className="sticky top-0 z-30 h-14 px-4 flex items-center justify-between gap-3"
+          className="sticky top-0 z-30 pt-[env(safe-area-inset-top)]"
           style={{ background: "var(--g-surface)", borderBottom: "1px solid var(--g-border)" }}
         >
+          <div className="h-14 px-4 flex items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
             <p className="font-bold text-[16px] truncate leading-tight" style={{ color: "var(--g-text)" }}>
               {greeting}
             </p>
             {multi ? (
-              <select
-                value={terrainActif ?? ""}
-                onChange={(e) => applyTerrain(Number(e.target.value))}
-                className="mt-0.5 text-sm font-semibold rounded-lg px-2 py-0.5 border max-w-full"
-                style={{
-                  background: "var(--g-surface)",
-                  borderColor: "var(--g-border)",
-                  color: "var(--g-text)",
-                }}
-                aria-label="Terrain actif"
-              >
-                {terrains.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.nom}
-                  </option>
-                ))}
-              </select>
+              <Select2
+                className="mt-0.5 max-w-[220px]"
+                size="sm"
+                ariaLabel="Terrain actif"
+                value={String(terrainActif ?? "")}
+                onChange={(v) => applyTerrain(Number(v))}
+                options={terrains.map((t) => ({ value: String(t.id), label: t.nom }))}
+              />
             ) : (
               <p className="text-[12px] truncate" style={{ color: "var(--g-muted)" }}>
                 {subtitle}
@@ -252,6 +237,7 @@ export default function GerantLayout() {
             )}
           </div>
           <HeaderAvatar user={user} />
+          </div>
         </header>
 
         <WhatsAppInfraBanner visible={waDown} tone="gerant" />
@@ -276,7 +262,8 @@ export default function GerantLayout() {
                 key={tab.id}
                 to={tab.route}
                 end={Boolean(tab.end)}
-                className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 text-[11px] font-medium"
+                onClick={() => hapticSelection()}
+                className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-[transform,opacity] duration-150 active:scale-95"
                 style={{ color: active ? "var(--g-nav-active)" : "var(--g-muted)" }}
               >
                 <tab.icon className="w-5 h-5" />

@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
 import { proprietaireApi } from "@/lib/api";
 import { useOwnerRealtime } from "@/hooks/useOwnerRealtime";
+import { hapticSelection } from "@/lib/haptics";
 
 const TABS = [
   { id: "dashboard", label: "Aperçu", icon: LayoutDashboard, route: "/backoffice/proprietaire", end: true },
@@ -163,7 +164,8 @@ export default function ProprietaireChrome() {
                 key={tab.id}
                 to={tab.route}
                 end={tab.end}
-                className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 text-[11px] font-medium"
+                onClick={() => hapticSelection()}
+                className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-[transform,opacity] duration-150 active:scale-95"
                 style={{ color: active ? "var(--p-nav-active)" : "var(--p-muted)" }}
               >
                 <tab.icon className="w-5 h-5" />

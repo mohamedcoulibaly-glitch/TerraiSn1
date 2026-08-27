@@ -11,9 +11,16 @@ import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
 import { fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
 import { useTerrainFullDetails } from "@/hooks/useJoueurData";
 import SilentSyncDot from "@/components/SilentSyncDot";
+import { clearDraft, usePersistedState } from "@/hooks/usePersistedState";
 
 import omIcon from "@/assets/images.png";
 import waveIcon from "@/assets/wave-banque-en-ligne-au-senegal-pour-paiement-transfert-argents.jpg";
+
+type PaymentDraft = {
+  selected: "wave" | "orange_money" | "";
+  name: string;
+  phone: string;
+};
 
 const Payment = () => {
   const navigate = useNavigate();
@@ -31,9 +38,18 @@ const Payment = () => {
     date,
     duree_minutes: Math.round(dureeHours * 60),
   });
-  const [selected, setSelected] = useState<"wave" | "orange_money" | "">("wave");
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const payDraftKey = `joueur:paiement:${id || "x"}:${date}:${slot}:${fieldFormat}`;
+  const [payDraft, setPayDraft, { clear: clearPayDraft }] = usePersistedState<PaymentDraft>(
+    payDraftKey,
+    { selected: "wave", name: "", phone: "" },
+  );
+  const selected = payDraft.selected;
+  const name = payDraft.name;
+  const phone = payDraft.phone;
+  const setSelected = (v: "wave" | "orange_money" | "") =>
+    setPayDraft((d) => ({ ...d, selected: v }));
+  const setName = (v: string) => setPayDraft((d) => ({ ...d, name: v }));
+  const setPhone = (v: string) => setPayDraft((d) => ({ ...d, phone: v }));
   const [processing, setProcessing] = useState(false);
   const deposit = calculerMontantAvance(montant, terrain?.pourcentage_avance);
   const reste = Math.max(0, montant - deposit);
@@ -51,11 +67,12 @@ const Payment = () => {
 
   useEffect(() => {
     if (!isAuthenticated || !user) return;
-    setName((prev) => prev || [user.prenom, user.nom].filter(Boolean).join(" ") || user.nom || "");
-    if (user.telephone) {
-      setPhone((prev) => prev || formatPhoneDisplay(String(user.telephone)));
-    }
-  }, [isAuthenticated, user]);
+    setPayDraft((prev) => ({
+      ...prev,
+      name: prev.name || [user.prenom, user.nom].filter(Boolean).join(" ") || user.nom || "",
+      phone: prev.phone || (user.telephone ? formatPhoneDisplay(String(user.telephone)) : ""),
+    }));
+  }, [isAuthenticated, user, setPayDraft]);
 
   const endTime = slot
     ? (() => {
@@ -102,6 +119,8 @@ const Payment = () => {
       });
 
       localStorage.setItem("terrainsn_last_reservation_id", String(reservation.id));
+      clearPayDraft();
+      clearDraft(`joueur:fiche:${id || "x"}`);
       hapticSuccess();
 
       if (sansAvance || reservation.sans_avance || reservation.mode_paiement === "sans_avance") {

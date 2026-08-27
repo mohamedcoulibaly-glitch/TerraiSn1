@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, X, AlertTriangle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, X, AlertTriangle, Moon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
@@ -9,6 +9,13 @@ import { cn, formatFcfa } from "@/lib/utils";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import { WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
 import { featureEnabled } from "@/lib/terrainFeatures";
+import { clearDraft, readDraft, writeDraft } from "@/hooks/usePersistedState";
+import {
+  estNuitProlongee,
+  getJourPercu,
+  grouperParPeriode,
+  trierCreneaux,
+} from "@/utils/creneauLabel";
 
 type JoueurConnu = {
   id: number;
@@ -27,8 +34,10 @@ type Prefill = {
 type Slot = {
   heure: string;
   heure_fin?: string;
+  date?: string;
   disponible?: boolean;
   statut?: string;
+  est_nuit_prolongee?: boolean;
 };
 
 type Props = {
@@ -40,6 +49,27 @@ type Props = {
 };
 
 type Step = 1 | 2 | 3;
+
+type ExpressDraft = {
+  step: Step;
+  dateSelectionnee: string;
+  selectedSlot: string | null;
+  selectedDuration: number;
+  heureDebutManuelle: string;
+  heureFinManuelle: string;
+  modeHoraire: "liste" | "manuel";
+  formatTerrain: string;
+  joueurTel: string;
+  joueurPrenom: string;
+  joueurNomFamille: string;
+  joueurId: number | null;
+  payChoice: "lien" | "manuel";
+  noteManuel: string;
+};
+
+function expressDraftKey(terrainId?: number) {
+  return `gerant:resa-express:${terrainId || "x"}`;
+}
 
 function toLocalISO(d: Date) {
   const y = d.getFullYear();
@@ -129,6 +159,7 @@ export default function ReservationExpressModal({
   const [heureDebutManuelle, setHeureDebutManuelle] = useState("");
   const [heureFinManuelle, setHeureFinManuelle] = useState("");
   const [modeHoraire, setModeHoraire] = useState<"liste" | "manuel">("liste");
+  const [nuitWarnDismissed, setNuitWarnDismissed] = useState(false);
   const [verifState, setVerifState] = useState<"idle" | "loading" | "ok" | "conflit">("idle");
   const [verifMsg, setVerifMsg] = useState<string | null>(null);
   const [formatTerrain, setFormatTerrain] = useState<string>("moitie");
@@ -195,24 +226,60 @@ export default function ReservationExpressModal({
   ).trim();
 
   const freeSlots = useMemo(
-    () => creneaux.filter((s) => s.disponible !== false && s.statut !== "bloque"),
+    () =>
+      trierCreneaux(
+        creneaux
+          .filter((s) => s.disponible !== false && s.statut !== "bloque")
+          .map((s) => ({ ...s, heure_debut: formatHourLabel(s.heure) })),
+      ).map(({ heure_debut, ...rest }) => ({ ...rest, heure: heure_debut })),
     [creneaux],
   );
+  const freeSlotsGroupes = useMemo(
+    () =>
+      grouperParPeriode(
+        freeSlots.map((s) => ({
+          ...s,
+          heure_debut: formatHourLabel(s.heure),
+          date: String(s.date || selectedDate).slice(0, 10),
+        })),
+      ),
+    [freeSlots, selectedDate],
+  );
+
+  /** Date technique DB : nuit prolongée = lendemain du jour perçu sélectionné */
+  const bookingDateTechnique = useMemo(() => {
+    const slot = freeSlots.find((s) => formatHourLabel(s.heure) === heureDebutEffective);
+    if (slot?.date) return String(slot.date).slice(0, 10);
+    if (heureDebutEffective && estNuitProlongee(heureDebutEffective)) {
+      const d = new Date(`${selectedDate}T12:00:00`);
+      d.setDate(d.getDate() + 1);
+      return toLocalISO(d);
+    }
+    return selectedDate;
+  }, [freeSlots, heureDebutEffective, selectedDate]);
+
+  const selectedNuitInfo = useMemo(() => {
+    if (!heureDebutEffective || !estNuitProlongee(heureDebutEffective)) return null;
+    return getJourPercu(bookingDateTechnique, heureDebutEffective);
+  }, [heureDebutEffective, bookingDateTechnique]);
+
   const noFreeToday = selectedDate === todayIso && !loadingSlots && freeSlots.length === 0 && !lockedCreneau;
 
   useEffect(() => {
     if (!open) return;
 
+    const draftKey = expressDraftKey(terrainId);
+    const draft = readDraft<ExpressDraft>(draftKey);
     const iso = prefill?.date || localYmd();
-    setStep(1);
-    setDateSelectionnee(iso);
-    setSelectedSlot(prefill?.heure_debut ? formatHourLabel(prefill.heure_debut) : null);
-    setHeureDebutManuelle(prefill?.heure_debut ? formatHourLabel(prefill.heure_debut) : "");
-    setHeureFinManuelle(prefill?.heure_fin ? formatHourLabel(prefill.heure_fin) : "");
-    setModeHoraire(prefill?.heure_debut && prefill?.heure_fin ? "liste" : "liste");
-    setVerifState("idle");
-    setVerifMsg(null);
-    if (prefill?.heure_debut && prefill?.heure_fin) {
+
+    // Préfill créneau verrouillé (depuis la file) : on force le créneau, mais on garde le joueur du brouillon
+    if (lockedCreneau && prefill?.heure_debut && prefill?.heure_fin) {
+      setStep(draft?.step && draft.step > 1 ? draft.step : 1);
+      setDateSelectionnee(iso);
+      setSelectedSlot(formatHourLabel(prefill.heure_debut));
+      setHeureDebutManuelle(formatHourLabel(prefill.heure_debut));
+      setHeureFinManuelle(formatHourLabel(prefill.heure_fin));
+      setModeHoraire("liste");
       const startM =
         parseInt(prefill.heure_debut.slice(0, 2), 10) * 60 +
         parseInt(prefill.heure_debut.slice(3, 5) || "0", 10);
@@ -223,27 +290,103 @@ export default function ReservationExpressModal({
       if (!(durH > 0)) durH = 1;
       const match = dureesOpts.find((d) => Math.abs(d.hours - durH) < 0.01);
       setSelectedDuration(match ? match.hours : Math.min(3, Math.max(1, Math.round(durH))));
+      setFormatTerrain(draft?.formatTerrain || "moitie");
+      setJoueurTel(draft?.joueurTel || "");
+      setJoueurPrenom(draft?.joueurPrenom || "");
+      setJoueurNomFamille(draft?.joueurNomFamille || "");
+      setJoueurId(draft?.joueurId ?? null);
+      setJoueurConnu(null);
+      setLookupState(draft?.joueurTel ? "idle" : "idle");
+      setPayChoice(draft?.payChoice || "lien");
+      setNoteManuel(draft?.noteManuel || "");
+    } else if (draft) {
+      setStep(draft.step || 1);
+      setDateSelectionnee(draft.dateSelectionnee || iso);
+      setSelectedSlot(draft.selectedSlot);
+      setSelectedDuration(draft.selectedDuration || 1);
+      setHeureDebutManuelle(draft.heureDebutManuelle || "");
+      setHeureFinManuelle(draft.heureFinManuelle || "");
+      setModeHoraire(draft.modeHoraire || "liste");
+      setFormatTerrain(draft.formatTerrain || "moitie");
+      setJoueurTel(draft.joueurTel || "");
+      setJoueurPrenom(draft.joueurPrenom || "");
+      setJoueurNomFamille(draft.joueurNomFamille || "");
+      setJoueurId(draft.joueurId ?? null);
+      setJoueurConnu(null);
+      setLookupState("idle");
+      setPayChoice(draft.payChoice || "lien");
+      setNoteManuel(draft.noteManuel || "");
     } else {
+      setStep(1);
+      setDateSelectionnee(iso);
+      setSelectedSlot(null);
+      setHeureDebutManuelle("");
+      setHeureFinManuelle("");
+      setModeHoraire("liste");
       setSelectedDuration(1);
+      setFormatTerrain("moitie");
+      setJoueurTel("");
+      setJoueurPrenom("");
+      setJoueurNomFamille("");
+      setJoueurId(null);
+      setJoueurConnu(null);
+      setLookupState("idle");
+      setPayChoice("lien");
+      setNoteManuel("");
     }
-    setFormatTerrain("moitie");
-    setJoueurTel("");
-    setJoueurPrenom("");
-    setJoueurNomFamille("");
-    setJoueurId(null);
-    setJoueurConnu(null);
-    setLookupState("idle");
+
+    setVerifState("idle");
+    setVerifMsg(null);
     setDevis(null);
-    setPayChoice("lien");
-    setNoteManuel("");
     setBusy(false);
     setDoneMsg(null);
     setWaGateOpen(false);
+    setNuitWarnDismissed(false);
     gerantApi
       .whatsappStatus()
       .then((s: any) => setWaConnected(Boolean(s?.connected) && !s?.mock))
       .catch(() => setWaConnected(null));
-  }, [open, prefill]);
+  }, [open, prefill, terrainId, lockedCreneau]);
+
+  // Autosave brouillon pendant la saisie
+  useEffect(() => {
+    if (!open || busy || doneMsg) return;
+    writeDraft(expressDraftKey(terrainId), {
+      step,
+      dateSelectionnee,
+      selectedSlot,
+      selectedDuration,
+      heureDebutManuelle,
+      heureFinManuelle,
+      modeHoraire,
+      formatTerrain,
+      joueurTel,
+      joueurPrenom,
+      joueurNomFamille,
+      joueurId,
+      payChoice,
+      noteManuel,
+    } satisfies ExpressDraft);
+  }, [
+    open,
+    busy,
+    doneMsg,
+    terrainId,
+    step,
+    dateSelectionnee,
+    selectedSlot,
+    selectedDuration,
+    heureDebutManuelle,
+    heureFinManuelle,
+    modeHoraire,
+    formatTerrain,
+    joueurTel,
+    joueurPrenom,
+    joueurNomFamille,
+    joueurId,
+    payChoice,
+    noteManuel,
+  ]);
 
   useEffect(() => {
     if (!open || !terrainId) return;
@@ -321,24 +464,28 @@ export default function ReservationExpressModal({
         let slots: Slot[] = (data?.creneaux || []).map((s: any) => ({
           heure: s.heure || s.heure_debut,
           heure_fin: s.heure_fin,
+          date: String(s.date || selectedDate).slice(0, 10),
           disponible: s.disponible,
           statut: s.statut,
+          est_nuit_prolongee: Boolean(s.est_nuit_prolongee) || estNuitProlongee(s.heure || s.heure_debut),
         }));
-        // Express : ne pas proposer un départ déjà passé (aujourd'hui)
+        // Express : ne pas proposer un départ déjà passé (date technique du slot)
         const today = localYmd();
-        if (selectedDate === today) {
-          const now = new Date();
-          const nowMin = now.getHours() * 60 + now.getMinutes();
-          slots = slots.filter((s) => {
-            const [h, m] = String(s.heure || "").slice(0, 5).split(":").map(Number);
-            if (!Number.isFinite(h)) return true;
-            return h * 60 + (m || 0) > nowMin;
-          });
-        }
+        const now = new Date();
+        const nowMin = now.getHours() * 60 + now.getMinutes();
+        slots = slots.filter((s) => {
+          const slotDate = String(s.date || selectedDate).slice(0, 10);
+          if (slotDate > today) return true;
+          if (slotDate < today) return false;
+          const [h, m] = String(s.heure || "").slice(0, 5).split(":").map(Number);
+          if (!Number.isFinite(h)) return true;
+          return h * 60 + (m || 0) > nowMin;
+        });
         if (slots.length === 0) {
           slots = ["18:00", "19:00", "20:00", "21:00"].map((heure) => ({
             heure,
             heure_fin: getEndTime(heure, 1),
+            date: selectedDate,
             disponible: true,
             statut: "libre",
           }));
@@ -376,7 +523,7 @@ export default function ReservationExpressModal({
       reservationsApi
         .verifierDisponibilite({
           terrain_id: terrainId,
-          date: selectedDate,
+          date: bookingDateTechnique,
           heure_debut: heureDebutEffective,
           heure_fin: heureFin,
         })
@@ -407,7 +554,7 @@ export default function ReservationExpressModal({
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [open, terrainId, selectedDate, heureDebutEffective, heureFin, selectedDuration]);
+  }, [open, terrainId, selectedDate, heureDebutEffective, heureFin, selectedDuration, bookingDateTechnique]);
   useEffect(() => {
     if (!open || telLocal.length !== 9) {
       setLookupState("idle");
@@ -488,7 +635,7 @@ export default function ReservationExpressModal({
     const t = window.setTimeout(() => {
       gerantApi
         .getDevis({
-          date: selectedDate,
+          date: bookingDateTechnique,
           heure_debut: heureDebutEffective,
           heure_fin: heureFin,
           format: formatTerrain,
@@ -604,8 +751,8 @@ export default function ReservationExpressModal({
     try {
       const result = (await reservationsApi.createGerant({
         terrain_id: terrainId,
-        date: selectedDate,
-        heure_debut: heureDebutEffective,
+        date: bookingDateTechnique,
+          heure_debut: heureDebutEffective,
         heure_fin: heureFin,
         joueur_nom: nom,
         joueur_prenom: joueurPrenom.trim() || undefined,
@@ -622,6 +769,13 @@ export default function ReservationExpressModal({
       };
 
       onCreated?.();
+      clearDraft(expressDraftKey(terrainId));
+
+      if (selectedNuitInfo) {
+        toast.message(`Créneau créé pour la ${selectedNuitInfo.labelComplet.toLowerCase()} ✦`, {
+          description: "Il apparaîtra dans la vue du jour perçu pour les joueurs.",
+        });
+      }
 
       const prenom = String(result?.joueur_nom || nom).split(" ")[0];
       if (result?.whatsapp_sent) {
@@ -678,7 +832,7 @@ export default function ReservationExpressModal({
       if (sansAvance) {
         const created = (await reservationsApi.createGerant({
           terrain_id: terrainId,
-          date: selectedDate,
+          date: bookingDateTechnique,
           heure_debut: heureDebutEffective,
           heure_fin: heureFin,
           joueur_nom: nom,
@@ -690,6 +844,7 @@ export default function ReservationExpressModal({
         })) as { reservation_id?: number };
         if (!created?.reservation_id) throw new Error("Réservation non créée");
         onCreated?.();
+        clearDraft(expressDraftKey(terrainId));
         setDoneMsg("Réservation confirmée ✓ — paiement sur place");
         toast.success("Réservation confirmée — total à encaisser sur place");
         window.setTimeout(() => {
@@ -700,8 +855,8 @@ export default function ReservationExpressModal({
       }
       const created = (await reservationsApi.createGerant({
         terrain_id: terrainId,
-        date: selectedDate,
-        heure_debut: heureDebutEffective,
+        date: bookingDateTechnique,
+          heure_debut: heureDebutEffective,
         heure_fin: heureFin,
         joueur_nom: nom,
         joueur_prenom: joueurPrenom.trim() || undefined,
@@ -713,6 +868,7 @@ export default function ReservationExpressModal({
       if (!created?.reservation_id) throw new Error("Réservation non créée");
       await gerantApi.confirmerManuellement(created.reservation_id, noteManuel.trim() || undefined);
       onCreated?.();
+      clearDraft(expressDraftKey(terrainId));
       setDoneMsg("Réservation confirmée ✓ — Commission en dette");
       toast.success("Réservation confirmée ✓ — Commission en dette");
       window.setTimeout(() => {
@@ -984,45 +1140,128 @@ export default function ReservationExpressModal({
                         Aucun créneau libre ce jour
                       </p>
                     ) : (
-                      <div className="flex flex-col gap-2">
-                        {freeSlots.map((slot) => {
-                          const heure = formatHourLabel(slot.heure);
-                          const fin = formatHourLabel(slot.heure_fin || getEndTime(heure, selectedDuration));
-                          const selected = selectedSlot === heure;
-                          const long = selectedDuration > 1;
+                      <div className="flex flex-col gap-3">
+                        {Object.entries(freeSlotsGroupes).map(([periode, slots]) => {
+                          const isNuit = periode.startsWith("Nuit prolongée");
+                          const nuitLabel = isNuit
+                            ? getJourPercu(
+                                String(slots[0]?.date || selectedDate).slice(0, 10),
+                                String(slots[0]?.heure_debut || "00:00"),
+                              ).labelComplet
+                            : null;
                           return (
-                            <button
-                              key={heure}
-                              type="button"
-                              disabled={lockedCreneau && heure !== selectedSlot}
-                              onClick={() => setSelectedSlot(heure)}
-                              className={cn(
-                                "min-h-[48px] rounded-xl border px-4 text-left text-sm font-semibold transition-colors",
-                                long ? "py-3" : "",
-                                selected
-                                  ? "border-[var(--g-primary)] bg-[var(--g-primary)] text-white"
-                                  : "border-gray-200 bg-white text-[var(--g-primary)]",
-                              )}
-                            >
-                              {formatHourPill(heure)} - {formatHourPill(fin)}
-                              <span className={cn("ml-1 font-normal opacity-70", selected ? "text-white/80" : "")}>
-                                · {formatDureeLabel(selectedDuration)}
-                              </span>
-                              {long ? (
-                                <span
-                                  className={cn(
-                                    "ml-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold",
-                                    selected ? "bg-white/20 text-white" : "bg-blue-50 text-blue-600",
-                                  )}
-                                >
-                                  {formatDureeLabel(selectedDuration)}
-                                </span>
-                              ) : null}
-                            </button>
+                            <div key={periode}>
+                              <p
+                                className={cn(
+                                  "mb-1.5 text-[11px] font-semibold uppercase tracking-wide flex items-center gap-1.5",
+                                  isNuit ? "text-indigo-700" : "text-neutral-400",
+                                )}
+                                style={
+                                  isNuit
+                                    ? {
+                                        background: "rgba(79,70,229,0.08)",
+                                        borderRadius: 8,
+                                        padding: "6px 8px",
+                                      }
+                                    : undefined
+                                }
+                              >
+                                {isNuit ? <Moon className="w-3 h-3" /> : null}
+                                {isNuit ? `✦ ${nuitLabel}` : periode}
+                              </p>
+                              <div className="flex flex-col gap-2">
+                                {slots.map((slot: any) => {
+                                  const heure = formatHourLabel(slot.heure || slot.heure_debut);
+                                  const fin = formatHourLabel(
+                                    slot.heure_fin || getEndTime(heure, selectedDuration),
+                                  );
+                                  const selected = selectedSlot === heure;
+                                  const long = selectedDuration > 1;
+                                  const nuit = slot.est_nuit_prolongee || estNuitProlongee(heure);
+                                  const perc = nuit
+                                    ? getJourPercu(String(slot.date || selectedDate).slice(0, 10), heure)
+                                    : null;
+                                  return (
+                                    <button
+                                      key={`${slot.date}-${heure}`}
+                                      type="button"
+                                      disabled={lockedCreneau && heure !== selectedSlot}
+                                      onClick={() => {
+                                        setSelectedSlot(heure);
+                                        setNuitWarnDismissed(false);
+                                      }}
+                                      className={cn(
+                                        "min-h-[48px] rounded-xl border px-4 text-left text-sm font-semibold transition-colors",
+                                        long ? "py-3" : "",
+                                        selected
+                                          ? "border-[var(--g-primary)] bg-[var(--g-primary)] text-white"
+                                          : "border-gray-200 bg-white text-[var(--g-primary)]",
+                                        nuit && !selected && "border-indigo-200",
+                                      )}
+                                      style={
+                                        nuit && !selected
+                                          ? { background: "rgba(79,70,229,0.04)" }
+                                          : undefined
+                                      }
+                                    >
+                                      {formatHourPill(heure)} - {formatHourPill(fin)}
+                                      {nuit ? " ✦" : ""}
+                                      <span
+                                        className={cn(
+                                          "ml-1 font-normal opacity-70",
+                                          selected ? "text-white/80" : "",
+                                        )}
+                                      >
+                                        · {formatDureeLabel(selectedDuration)}
+                                      </span>
+                                      {nuit && perc ? (
+                                        <span
+                                          className={cn(
+                                            "block text-[11px] italic font-normal mt-0.5",
+                                            selected ? "text-white/70" : "text-indigo-600/80",
+                                          )}
+                                        >
+                                          ({perc.labelComplet})
+                                        </span>
+                                      ) : null}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           );
                         })}
                       </div>
                     )}
+                    {selectedNuitInfo && !nuitWarnDismissed ? (
+                      <div
+                        className="mt-3 rounded-xl px-3 py-2.5 text-xs flex items-start gap-2"
+                        style={{
+                          background: "rgba(79,70,229,0.08)",
+                          border: "1px solid rgba(79,70,229,0.25)",
+                          color: "#4338ca",
+                        }}
+                      >
+                        <Moon className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <div className="min-w-0 flex-1">
+                          <p>
+                            Ce créneau sera affiché comme « {selectedNuitInfo.labelComplet} » pour les
+                            joueurs. La date enregistrée reste le{" "}
+                            {new Date(`${bookingDateTechnique}T12:00:00`).toLocaleDateString("fr-FR", {
+                              weekday: "long",
+                            })}
+                            .
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setNuitWarnDismissed(true)}
+                            className="mt-2 text-[11px] font-semibold underline"
+                          >
+                            J&apos;ai compris
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                   )}
 

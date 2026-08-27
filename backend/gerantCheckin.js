@@ -175,7 +175,7 @@ async function marquerReservationJouee({ db, reservation, gerantId, methode }) {
             WHEN operational_stage IN ('match', 'checkout', 'closed') THEN operational_stage
             ELSE 'match'
           END
-      WHERE id = ? AND statut = 'confirme'`, [reservation.id]);
+      WHERE id = ? AND statut IN ('confirme', 'acceptee')`, [reservation.id]);
     if (rowsModified(db) !== 1) {
       const error = new Error('Seule une reservation confirmee peut etre scannee');
       error.statusCode = 400;
@@ -225,7 +225,7 @@ async function traiterScanQrReservation(req, res) {
         qr_code_scanne_at: reservation.qr_code_scanne_at,
       });
     }
-    if (reservation.statut !== 'confirme') {
+    if (!['confirme', 'acceptee'].includes(String(reservation.statut || ''))) {
       return res.status(400).json({
         error: "Cette réservation n'est pas dans un état valide.",
         code: 'QR_BAD_STATUS',
@@ -625,11 +625,33 @@ function mountGerantCheckinRoutes(app) {
       const terrain = await queryOne(db, 'SELECT id, nom FROM terrains WHERE id = ?', [terrainId]);
       if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
+  // Journée gérant = aujourd'hui + créneaux nuit prolongée (00h–04h59) de demain
+      const demainDate = (() => {
+        const [y, m, d] = date.split('-').map(Number);
+        const dt = new Date(y, m - 1, d + 1, 12, 0, 0);
+        return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      })();
+
       const rows = await queryAll(db, `
         ${reservationsGerantListSql()}
-          AND r.date = ?
-        ORDER BY r.heure_debut ASC, r.heure_fin ASC
-      `, [terrainId, date]);
+          AND (
+            r.date = ?
+            OR (
+              r.date = ?
+              AND EXTRACT(HOUR FROM r.heure_debut::time) < 5
+            )
+          )
+        ORDER BY
+          CASE
+            WHEN r.date = ? AND EXTRACT(HOUR FROM r.heure_debut::time) >= 5
+              THEN EXTRACT(HOUR FROM r.heure_debut::time)
+            WHEN r.date = ?
+              THEN EXTRACT(HOUR FROM r.heure_debut::time) + 24
+            ELSE 99
+          END ASC,
+          r.heure_debut ASC,
+          r.heure_fin ASC
+      `, [terrainId, date, demainDate, date, demainDate]);
 
       res.json({
         date,

@@ -7,16 +7,26 @@ import SkeletonProfil from "@/components/skeletons/SkeletonProfil";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useTheme } from "@/contexts/ThemeContext";
 import { ProfileAccount, ProfileError, ProfileShell, StatGrid, readonlyInput } from "./ProfileBlocks";
+import { clearDraft, readDraft, usePersistedState } from "@/hooks/usePersistedState";
 
 type JoueurProfile = {
   account: ProfileAccount & { quartier?: string; date_naissance?: string };
   stats: { reservations_totales: number; matchs_joues: number; terrain_prefere: string };
 };
 
+type ProfilForm = { prenom: string; nom: string; quartier: string; date_naissance: string };
+
+const PROFIL_DRAFT_KEY = "joueur:profil-edit";
+
 export default function ProfilJoueur() {
   const { theme } = useTheme();
   const [data, setData] = useState<JoueurProfile | null>(null);
-  const [form, setForm] = useState({ prenom: "", nom: "", quartier: "", date_naissance: "" });
+  const [form, setForm, { clear: clearProfilDraft }] = usePersistedState<ProfilForm>(PROFIL_DRAFT_KEY, {
+    prenom: "",
+    nom: "",
+    quartier: "",
+    date_naissance: "",
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -31,14 +41,27 @@ export default function ProfilJoueur() {
       .then((payload: JoueurProfile) => {
         if (!mounted) return;
         setData(payload);
-        setForm({
+        const draft = readDraft<ProfilForm>(PROFIL_DRAFT_KEY);
+        const fromApi: ProfilForm = {
           prenom: payload.account.prenom || "",
           nom: payload.account.nom || "",
           quartier: payload.account.quartier || "",
           date_naissance: payload.account.date_naissance
             ? String(payload.account.date_naissance).slice(0, 10)
             : "",
-        });
+        };
+        // Garde le brouillon local s'il diffère déjà de l'API
+        if (
+          draft &&
+          (draft.prenom !== fromApi.prenom ||
+            draft.nom !== fromApi.nom ||
+            draft.quartier !== fromApi.quartier ||
+            draft.date_naissance !== fromApi.date_naissance)
+        ) {
+          setForm(draft);
+        } else {
+          setForm(fromApi);
+        }
       })
       .catch((err) => {
         if (!mounted) return;
@@ -52,7 +75,7 @@ export default function ProfilJoueur() {
     return () => {
       mounted = false;
     };
-  }, [reloadKey]);
+  }, [reloadKey, setForm]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -61,6 +84,16 @@ export default function ProfilJoueur() {
       await profilApi.updateJoueur(form);
       const refreshed = (await profilApi.getJoueur()) as JoueurProfile;
       setData(refreshed);
+      clearProfilDraft();
+      clearDraft(PROFIL_DRAFT_KEY);
+      setForm({
+        prenom: refreshed.account.prenom || "",
+        nom: refreshed.account.nom || "",
+        quartier: refreshed.account.quartier || "",
+        date_naissance: refreshed.account.date_naissance
+          ? String(refreshed.account.date_naissance).slice(0, 10)
+          : "",
+      });
       toast.success("Profil enregistre");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Impossible d'enregistrer");

@@ -36,7 +36,7 @@ const BottomNav = () => {
 
   return (
     <nav
-      className="md:hidden fixed bottom-0 inset-x-0 z-40 pb-[env(safe-area-inset-bottom)]"
+      className="md:hidden fixed bottom-0 inset-x-0 z-40 pb-[env(safe-area-inset-bottom)] gpu-transition"
       style={{ background: "var(--nav-bg)", borderTop: "1px solid var(--nav-border)" }}
       aria-label="Navigation principale"
     >
@@ -48,7 +48,7 @@ const BottomNav = () => {
               key={item.label}
               type="button"
               onClick={() => handleNav(item.path)}
-              className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 text-[11px] font-medium"
+              className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-[transform,opacity] duration-150 active:scale-95"
               style={{ color: isActive ? "var(--primary)" : "var(--text-muted)" }}
               aria-label={item.label}
               aria-current={isActive ? "page" : undefined}

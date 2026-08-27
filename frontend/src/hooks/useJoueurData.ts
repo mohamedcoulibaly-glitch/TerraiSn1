@@ -94,7 +94,13 @@ export function useTerrainFullDetails(
     gcTime: GC_MS,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
-    placeholderData: (prev) => prev,
+    placeholderData: (prev) => {
+      // Ne pas recycler un planning d'une autre date/durée (évite flash créneaux obsolètes)
+      if (!prev) return undefined;
+      const prevDate = String(prev?.planning?.date || "").slice(0, 10);
+      if (prevDate && prevDate !== date) return undefined;
+      return prev;
+    },
   });
 
   const isInitialLoading = query.isLoading && !query.data;

@@ -197,6 +197,9 @@ export default function ScannerModal({
   const scanningRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const facingRef = useRef<CameraFacing>("environment");
+  const submitScanRef = useRef<(rawValue: string) => Promise<void>>(async () => undefined);
+  const onCloseRef = useRef(onClose);
+  const onSuccessRef = useRef(onSuccess);
   const [result, setResult] = useState<ScanResult>({ state: "scan" });
   const [flash, setFlash] = useState<"green" | "red" | null>(null);
   const [manualCode, setManualCode] = useState("");
@@ -205,6 +208,9 @@ export default function ScannerModal({
   const [facing, setFacing] = useState<CameraFacing>("environment");
 
   const isModeB = expectedReservationId != null && String(expectedReservationId) !== "";
+
+  onCloseRef.current = onClose;
+  onSuccessRef.current = onSuccess;
 
   const stopCamera = useCallback(() => {
     if (rafRef.current != null) {
@@ -304,7 +310,7 @@ export default function ScannerModal({
           title: "✅ Entrée validée !",
           reservation: payload.reservation,
         });
-        if (payload.reservation) onSuccess?.(payload.reservation);
+        if (payload.reservation) onSuccessRef.current?.(payload.reservation);
       } catch (err) {
         const error = err as Error & {
           code?: string;
@@ -361,12 +367,32 @@ export default function ScannerModal({
           });
           return;
         }
+        if (error.code === "QR_BAD_STATUS") {
+          triggerFlash("red");
+          setResult({
+            state: "invalid",
+            title: "❌ Réservation non scannable",
+            text: error.message || "Cette réservation n'est pas confirmée.",
+          });
+          return;
+        }
+        if (error.code === "QR_MISSING") {
+          triggerFlash("red");
+          setResult({
+            state: "invalid",
+            title: "❌ QR code manquant",
+            text: "Scanne le QR reçu par WhatsApp, ou saisis le code manuellement.",
+          });
+          return;
+        }
 
         triggerFlash("red");
         setResult({
           state: "invalid",
           title: "❌ QR code non reconnu",
-          text: "Demande au joueur de montrer le QR reçu par WhatsApp. Si le problème persiste, utilise la validation manuelle.",
+          text:
+            error.message ||
+            "Demande au joueur de montrer le QR reçu par WhatsApp. Si le problème persiste, utilise la validation manuelle.",
         });
       }
     },
@@ -374,14 +400,21 @@ export default function ScannerModal({
       expectedReservationId,
       isModeB,
       matchesExpected,
-      onSuccess,
       stopCamera,
       triggerFlash,
     ],
   );
 
+  submitScanRef.current = submitScan;
+
   const startCamera = useCallback(
     async (nextFacing: CameraFacing = facingRef.current) => {
+      if (typeof window !== "undefined" && !window.isSecureContext) {
+        throw new Error(
+          "Caméra bloquée : ouvre l'app en HTTPS (ou localhost). Sur téléphone, utilise un tunnel HTTPS (ex. ngrok).",
+        );
+      }
+
       stopCamera();
       setResult({ state: "scan" });
       setHint("Place le QR bien en face, bien éclairé");
@@ -431,7 +464,7 @@ export default function ScannerModal({
             const codes = await detector.detect(video);
             const raw = codes?.[0]?.rawValue;
             if (raw) {
-              await submitScan(raw);
+              await submitScanRef.current(raw);
               return;
             }
           }
@@ -445,7 +478,7 @@ export default function ScannerModal({
               inversionAttempts: "attemptBoth",
             });
             if (code?.data) {
-              await submitScan(code.data);
+              await submitScanRef.current(code.data);
               return;
             }
           }
@@ -462,9 +495,10 @@ export default function ScannerModal({
         void scanLoop();
       });
     },
-    [stopCamera, submitScan],
+    [stopCamera],
   );
 
+  // Uniquement `open` : évite le redémarrage caméra à chaque re-render du Dashboard
   useEffect(() => {
     if (!open) {
       stopCamera();
@@ -488,19 +522,20 @@ export default function ScannerModal({
       });
     });
     return stopCamera;
-  }, [open, startCamera, stopCamera]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         stopCamera();
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [open, stopCamera, onClose]);
+  }, [open, stopCamera]);
 
   const flipCamera = () => {
     const next: CameraFacing = facingRef.current === "environment" ? "user" : "environment";

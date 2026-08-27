@@ -21,7 +21,10 @@ export default function FinancesPage() {
   const refreshTimer = useRef<number | null>(null);
 
   const load = useCallback((quiet = false) => {
-    if (!quiet) setLoading(true);
+    if (!quiet) {
+      setLoading(true);
+      setData(null);
+    }
     setError("");
     gerantApi
       .finances(periode)
@@ -94,17 +97,16 @@ export default function FinancesPage() {
         })}
       </div>
 
-      {loading && !data ? (
+      <CommissionDueCard enabled={featureEnabled(features, "dette_commission", true)} />
+
+      {loading ? (
         <FinancesSkeleton />
       ) : error ? (
         <p className="text-sm py-8 text-center" style={{ color: "var(--g-danger)" }}>
           {error}
         </p>
       ) : data ? (
-        <>
-          <CommissionDueCard enabled={featureEnabled(features, "dette_commission", true)} />
-          <FinancesView data={data} />
-        </>
+        <FinancesView data={data} />
       ) : null}
     </div>
   );
