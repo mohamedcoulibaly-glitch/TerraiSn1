@@ -19,9 +19,10 @@ function run(cmd, cwd, env = {}) {
 }
 
 function install(dir) {
+  // Sur Render, NODE_ENV=production saute les devDependencies (vite, plugins…).
   const lock = path.join(dir, 'package-lock.json');
-  const cmd = fs.existsSync(lock) ? 'npm ci' : 'npm install';
-  run(cmd, dir);
+  const cmd = fs.existsSync(lock) ? 'npm ci --include=dev' : 'npm install --include=dev';
+  run(cmd, dir, { NODE_ENV: 'development' });
 }
 
 console.log('TerrainSN — build Render');
@@ -30,10 +31,12 @@ install(path.join(root, 'frontend'));
 install(path.join(root, 'admin-frontend'));
 
 run('npm run build', path.join(root, 'frontend'), {
+  NODE_ENV: 'production',
   VITE_API_URL: '/api',
 });
 
 run('npm run build', path.join(root, 'admin-frontend'), {
+  NODE_ENV: 'production',
   VITE_API_URL: '/api',
   VITE_BASE: '/admin/',
 });
