@@ -8,6 +8,8 @@
     "dev:app": "node dev.js --no-admin",
     "dev:admin": "node dev.js --no-frontend",
     "accounts": "node dev.js --accounts",
+    "start": "node backend/index.js",
+    "build:render": "node scripts/render-build.js",
     "test": "npm test --prefix backend && npm test --prefix frontend",
     "test:unit": "npm run test:unit --prefix backend && npm test --prefix frontend",
     "test:parcours": "npm run test:parcours --prefix backend && npm test --prefix frontend -- parcoursJoueurGerant",

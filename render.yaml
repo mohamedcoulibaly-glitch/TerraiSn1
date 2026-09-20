@@ -1,46 +1,31 @@
-# TerrainSN — Blueprint Render (déploiement en 1 minute)
-# Dashboard → New → Blueprint → connecter ce repo → Apply
+# TerrainSN — Blueprint Render (plan gratuit / Node natif)
+# Dashboard → New → Blueprint → ce repo → branche MOHAMED_COULIBALY → Apply
 # Doc : DEPLOY_RENDER.md
 #
-# Prérequis : plan Starter (disque persistant SQLite). 1 seule instance.
+# Plan free : pas de disque persistant (SQLite + seed à chaque machine neuve).
+# Pour Docker + disque : voir Dockerfile (plan Starter).
 
 services:
   - type: web
     name: terrainsn
-    runtime: docker
-    plan: starter
+    runtime: node
+    plan: free
     region: frankfurt
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    buildCommand: npm run build:render
+    startCommand: npm start
     healthCheckPath: /health
     autoDeploy: true
-    numInstances: 1
-    disk:
-      name: terrainsn-data
-      mountPath: /data
-      sizeGB: 2
     envVars:
       - key: NODE_ENV
         value: production
-      - key: DB_PATH
-        value: /data/terrainsn.db
-      - key: UPLOAD_ROOT
-        value: /data/uploads
-      - key: PUBLIC_DIR
-        value: /app/public
-      - key: ADMIN_PUBLIC_DIR
-        value: /app/public-admin
-      # Secrets JWT générés automatiquement au premier déploiement
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
-      # Seed démo au premier boot (base vide). Passer à true après si besoin de figer.
       - key: SKIP_SEED
         value: "false"
       - key: FORCE_SEED
         value: "false"
-      # Mode démo prod sans vraies clés paiement / WhatsApp
       - key: WHATSAPP_MOCK
         value: "true"
       - key: PAYTECH_MOCK
@@ -55,9 +40,5 @@ services:
         value: test
       - key: COOKIE_SAMESITE
         value: lax
-      # APP_DOMAIN est auto-rempli depuis RENDER_EXTERNAL_URL au démarrage.
-      # Optionnel : forcer l'URL publique après le 1er deploy :
-      # - key: APP_DOMAIN
-      #   value: https://terrainsn.onrender.com
       - key: VAPID_SUBJECT
         value: mailto:contact@terrainsn.com
