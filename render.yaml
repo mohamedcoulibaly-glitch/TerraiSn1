@@ -1,0 +1,63 @@
+# TerrainSN — Blueprint Render (déploiement en 1 minute)
+# Dashboard → New → Blueprint → connecter ce repo → Apply
+# Doc : DEPLOY_RENDER.md
+#
+# Prérequis : plan Starter (disque persistant SQLite). 1 seule instance.
+
+services:
+  - type: web
+    name: terrainsn
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    numInstances: 1
+    disk:
+      name: terrainsn-data
+      mountPath: /data
+      sizeGB: 2
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_PATH
+        value: /data/terrainsn.db
+      - key: UPLOAD_ROOT
+        value: /data/uploads
+      - key: PUBLIC_DIR
+        value: /app/public
+      - key: ADMIN_PUBLIC_DIR
+        value: /app/public-admin
+      # Secrets JWT générés automatiquement au premier déploiement
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      # Seed démo au premier boot (base vide). Passer à true après si besoin de figer.
+      - key: SKIP_SEED
+        value: "false"
+      - key: FORCE_SEED
+        value: "false"
+      # Mode démo prod sans vraies clés paiement / WhatsApp
+      - key: WHATSAPP_MOCK
+        value: "true"
+      - key: PAYTECH_MOCK
+        value: "true"
+      - key: PAYMENT_MODE
+        value: simulation
+      - key: PAYMENT_PROVIDER
+        value: paydunya
+      - key: PAYDUNYA_MODE
+        value: test
+      - key: PAYTECH_ENV
+        value: test
+      - key: COOKIE_SAMESITE
+        value: lax
+      # APP_DOMAIN est auto-rempli depuis RENDER_EXTERNAL_URL au démarrage.
+      # Optionnel : forcer l'URL publique après le 1er deploy :
+      # - key: APP_DOMAIN
+      #   value: https://terrainsn.onrender.com
+      - key: VAPID_SUBJECT
+        value: mailto:contact@terrainsn.com

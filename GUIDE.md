@@ -2,6 +2,11 @@
 
 App réservation de terrains — React (Vite) + Express + SQLite + PWA. **Prérequis :** Node.js 18+.
 
+## Déploiement Render
+
+Guide complet : **[DEPLOY_RENDER.md](./DEPLOY_RENDER.md)**  
+`Render → New → Blueprint → ce repo → Apply` (seed démo inclus au 1er boot).
+
 ## Lancer
 
 ```bash

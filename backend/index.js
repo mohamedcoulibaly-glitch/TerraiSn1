@@ -1,4 +1,13 @@
 require('dotenv').config();
+
+// Render injecte RENDER_EXTERNAL_URL — sert de APP_DOMAIN / CORS si non définis
+if (!process.env.APP_DOMAIN && process.env.RENDER_EXTERNAL_URL) {
+  process.env.APP_DOMAIN = process.env.RENDER_EXTERNAL_URL;
+}
+if (!process.env.CORS_ORIGINS && process.env.APP_DOMAIN) {
+  process.env.CORS_ORIGINS = process.env.APP_DOMAIN;
+}
+
 require('./whatsappClient');
 const express = require('express');
 const cors = require('cors');
@@ -87,10 +96,12 @@ function refreshTableFor(accountType) {
 }
 
 function setRefreshCookie(res, refreshToken) {
+  const sameSiteRaw = String(process.env.COOKIE_SAMESITE || 'lax').toLowerCase();
+  const sameSite = ['strict', 'lax', 'none'].includes(sameSiteRaw) ? sameSiteRaw : 'lax';
   res.cookie('refresh_token', refreshToken, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    secure: process.env.NODE_ENV === 'production' || sameSite === 'none',
+    sameSite,
     maxAge: 30 * 24 * 60 * 60 * 1000,
     path: '/',
   });
@@ -314,7 +325,12 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 }
 
 // Middleware
-const allowedOrigins = (process.env.CORS_ORIGINS || process.env.APP_DOMAIN || 'http://localhost:8080,http://localhost:8081,http://127.0.0.1:8080,http://127.0.0.1:8081')
+const allowedOrigins = (
+  process.env.CORS_ORIGINS
+  || process.env.APP_DOMAIN
+  || process.env.RENDER_EXTERNAL_URL
+  || 'http://localhost:8080,http://localhost:8081,http://127.0.0.1:8080,http://127.0.0.1:8081'
+)
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -3082,10 +3098,17 @@ app.patch('/api/profil/admin', authMiddleware, requireRole('super_admin'), async
 });
 
 // ============================================================
-// SERVE STATIC (production)
+// SERVE STATIC (production) — frontend + admin (même origine)
 // ============================================================
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '..', 'dist'), {
+  const PUBLIC_DIR = process.env.PUBLIC_DIR
+    ? path.resolve(process.env.PUBLIC_DIR)
+    : path.join(__dirname, '..', 'frontend', 'dist');
+  const ADMIN_PUBLIC_DIR = process.env.ADMIN_PUBLIC_DIR
+    ? path.resolve(process.env.ADMIN_PUBLIC_DIR)
+    : path.join(__dirname, '..', 'admin-frontend', 'dist');
+
+  const staticHeaders = {
     maxAge: '1y',
     immutable: true,
     setHeaders(res, filePath) {
@@ -3095,10 +3118,42 @@ if (process.env.NODE_ENV === 'production') {
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       }
     },
-  }));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));
-  });
+  };
+
+  const isApiOrAssetPath = (reqPath) =>
+    reqPath.startsWith('/api')
+    || reqPath.startsWith('/uploads')
+    || reqPath.startsWith('/webhook')
+    || reqPath.startsWith('/health')
+    || reqPath.startsWith('/whatsapp-qr')
+    || reqPath.startsWith('/paydunya')
+    || reqPath.startsWith('/paytech');
+
+  if (fs.existsSync(ADMIN_PUBLIC_DIR)) {
+    app.use('/admin', express.static(ADMIN_PUBLIC_DIR, staticHeaders));
+    app.get(/^\/admin(\/.*)?$/, (req, res, next) => {
+      if (path.extname(req.path)) return next();
+      res.sendFile(path.join(ADMIN_PUBLIC_DIR, 'index.html'), (err) => {
+        if (err) next();
+      });
+    });
+    logger.info('index.js', `Admin SPA servie depuis ${ADMIN_PUBLIC_DIR} (/admin)`);
+  }
+
+  if (fs.existsSync(PUBLIC_DIR)) {
+    app.use(express.static(PUBLIC_DIR, staticHeaders));
+    app.get('*', (req, res, next) => {
+      if (isApiOrAssetPath(req.path) || req.path.startsWith('/admin')) {
+        return next();
+      }
+      res.sendFile(path.join(PUBLIC_DIR, 'index.html'), (err) => {
+        if (err) next();
+      });
+    });
+    logger.info('index.js', `Frontend SPA servi depuis ${PUBLIC_DIR}`);
+  } else {
+    logger.warn('index.js', `PUBLIC_DIR introuvable (${PUBLIC_DIR}) — API seule`);
+  }
 }
 
 // ============================================================
@@ -3202,7 +3257,12 @@ async function ensureSeedData(db) {
 async function start() {
   const db = await getDb(); // Initialize DB + migrations
   const skipSeed = String(process.env.SKIP_SEED || '').toLowerCase() === 'true' || process.env.SKIP_SEED === '1';
-  if (!skipSeed) {
+  const forceSeed = String(process.env.FORCE_SEED || '').toLowerCase() === 'true' || process.env.FORCE_SEED === '1';
+  if (forceSeed) {
+    logger.info('index.js', 'FORCE_SEED=true — rechargement complet des donnees de demo');
+    const { seed } = require('./seed');
+    await seed();
+  } else if (!skipSeed) {
     await ensureSeedData(db);
   }
   programmerResumeHebdomadaire();
@@ -3247,7 +3307,10 @@ async function start() {
     }
   }, 5 * 60 * 1000);
   app.listen(PORT, () => {
-    logger.info('index.js', `TerrainSN API demarree sur http://localhost:${PORT}`);
+    logger.info('index.js', `TerrainSN API demarree sur le port ${PORT}`);
+    if (process.env.APP_DOMAIN) {
+      logger.info('index.js', `APP_DOMAIN=${process.env.APP_DOMAIN}`);
+    }
     const { resoudreIpnUrl } = require('./lib/publicIpnUrl');
     resoudreIpnUrl()
       .then((ipn) => logger.info('index.js', `IPN paiement (${activeGateway()}) : ${ipn}`))

@@ -17,7 +17,9 @@
     "test:all": "npm test && npm run test:e2e",
     "lint": "npm run lint --prefix frontend",
     "build": "npm run build --prefix frontend && npm run build --prefix admin-frontend",
-    "ci": "npm test && npm run lint && npm run build"
+    "ci": "npm test && npm run lint && npm run build",
+    "docker:build": "docker build -t terrainsn .",
+    "docker:up": "docker compose up --build"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.0"

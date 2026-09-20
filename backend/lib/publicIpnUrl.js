@@ -10,7 +10,11 @@ function stripSlash(url) {
 }
 
 function appDomain() {
-  return stripSlash(process.env.APP_DOMAIN || 'http://localhost:8080');
+  return stripSlash(
+    process.env.APP_DOMAIN
+      || process.env.RENDER_EXTERNAL_URL
+      || 'http://localhost:8080'
+  );
 }
 
 function isPublicHttps(url) {

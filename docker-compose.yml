@@ -1,32 +1,35 @@
 services:
   api:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
-    image: terrainsn-api:local
+    image: terrainsn:local
     ports:
       - "3001:3001"
     environment:
       NODE_ENV: production
       PORT: 3001
       DB_PATH: /data/terrainsn.db
+      UPLOAD_ROOT: /data/uploads
+      PUBLIC_DIR: /app/public
+      ADMIN_PUBLIC_DIR: /app/public-admin
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh-in-production}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
+      APP_DOMAIN: ${APP_DOMAIN:-http://localhost:3001}
       WHATSAPP_MOCK: ${WHATSAPP_MOCK:-true}
       PAYTECH_MOCK: ${PAYTECH_MOCK:-true}
       PAYMENT_MODE: ${PAYMENT_MODE:-simulation}
       SKIP_SEED: ${SKIP_SEED:-false}
+      COOKIE_SAMESITE: lax
     volumes:
       - terrainsn-data:/data
-      - terrainsn-uploads:/app/uploads
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 45s
 
 volumes:
   terrainsn-data:
-  terrainsn-uploads:

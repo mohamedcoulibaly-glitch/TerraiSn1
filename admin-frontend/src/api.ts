@@ -1,4 +1,5 @@
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const API = import.meta.env.VITE_API_URL
+  || (import.meta.env.DEV ? 'http://localhost:3001/api' : '/api');
 export const token = () => localStorage.getItem('admin_token');
 export async function request(path: string, options: RequestInit = {}) {
   const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token() ? { Authorization: `Bearer ${token()}` } : {}), ...(options.headers || {}) } });

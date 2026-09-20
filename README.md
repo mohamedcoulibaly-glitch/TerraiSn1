@@ -2,6 +2,14 @@
 
 App de réservation de terrains (Sénégal) — React + Express + PWA.
 
+## Déployer sur Render (1 minute)
+
+Voir **[DEPLOY_RENDER.md](./DEPLOY_RENDER.md)** : Blueprint `render.yaml` + Docker all-in-one + seed démo automatique.
+
+```text
+Render → New → Blueprint → sélectionner ce repo → Apply
+```
+
 ## Lancer en local
 
 ```bash

@@ -3,7 +3,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { queryAll, queryOne } = require('./database');
 
-const UPLOAD_ROOT = path.join(__dirname, 'uploads');
+const UPLOAD_ROOT = process.env.UPLOAD_ROOT
+  ? path.resolve(process.env.UPLOAD_ROOT)
+  : path.join(__dirname, 'uploads');
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_TYPES = {
   'image/jpeg': 'jpg',

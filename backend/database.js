@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const dbPath = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.resolve(__dirname, 'terrainsn.db');
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 let db = null;
 let loadedMtime = 0;
