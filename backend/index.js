@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { getDb, queryAll, queryOne, runSql, saveDb, transaction } = require('./database');
 const paytechService = require('./paytechService');
+const { activeGateway } = require('./lib/paymentGateway');
 const notificationService = require('./notificationService');
 const pushService = require('./pushService');
 const otpService = require('./otpService');
@@ -34,6 +35,7 @@ const {
 } = require('./terrainPhotoService');
 const { saveProfilePhoto } = require('./profilePhotoService');
 const { logActivite } = require('./services/auditService');
+const { resumeListeTerrain } = require('./services/contratService');
 const scoreService = require('./services/scoreService');
 const { assertFenetreScanQr, calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
 const { serializeQrPayload, parseQrPayload, assertQrMatchesReservation } = require('./services/qrPayload');
@@ -45,6 +47,8 @@ const {
   normalizeHourString,
 } = require('./reservationLockService');
 const { calculerPrixReservation, prixHoraireEffectif, calculerDevis, calculerMontantAvance } = require('./pricingService');
+const { executerAnnulation } = require('./services/annulationService');
+const { traiterFenetresExpirees } = require('./services/payoutEngine');
 const {
   buildSlotsForOpenDay,
   jourDepuisDate,
@@ -158,7 +162,34 @@ function parsePhotos(raw) {
 
 function serializeTerrain(terrain) {
   if (!terrain) return terrain;
-  return { ...terrain, photos: parsePhotos(terrain.photos) };
+  const {
+    wave_numero,
+    om_numero,
+    wave_statut,
+    om_statut,
+    wave_verifie_at,
+    om_verifie_at,
+    payout_frais_politique,
+    frais_payout_pct_gerant,
+    frais_payout_pct_plateforme,
+    canal_reversement,
+    gerant_id,
+    numeros_identiques_whatsapp,
+    ...publicFields
+  } = terrain;
+  const remboursementAutorise = Number(terrain.remboursement_autorise) === 1;
+  const delai = remboursementAutorise ? Number(terrain.delai_remboursement_heures || 0) : 0;
+  return {
+    ...publicFields,
+    photos: parsePhotos(terrain.photos),
+    politique_annulation: {
+      remboursement_autorise: remboursementAutorise && delai > 0,
+      delai_remboursement_heures: delai,
+      texte: (remboursementAutorise && delai > 0)
+        ? `Remboursé si tu annules dans les ${delai} h`
+        : 'Annulation sans remboursement',
+    },
+  };
 }
 
 function profileTableFor(accountType) {
@@ -211,7 +242,7 @@ function buildProfileStats(db, reqUser) {
       terrainAssocie: `${Number(terrains.total || 0)} terrain(s)`,
       stats: [
         { label: 'Terrains', value: Number(terrains.total || 0) },
-        { label: 'Revenus du mois', value: Number(revenue.montants_reverses || 0) },
+        { label: 'Versé au gérant', value: Number(revenue.verse_au_gerant || 0) },
       ],
     };
   }
@@ -283,7 +314,7 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 }
 
 // Middleware
-const allowedOrigins = (process.env.CORS_ORIGINS || process.env.APP_DOMAIN || 'http://localhost:8080')
+const allowedOrigins = (process.env.CORS_ORIGINS || process.env.APP_DOMAIN || 'http://localhost:8080,http://localhost:8081,http://127.0.0.1:8080,http://127.0.0.1:8081')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -296,6 +327,22 @@ app.use(cors({
 }));
 app.use(cookieParser());
 app.use(express.json({ limit: '8mb' }));
+app.use(express.urlencoded({ extended: true, limit: '8mb' }));
+
+app.get(['/health', '/api/health'], (_req, res) => {
+  const paymentService = require('./services/payment');
+  const { targetProvider, providerRole } = require('./lib/paymentGateway');
+  res.status(200).json({
+    status: 'ok',
+    service: 'terrainsn-api',
+    payment_gateway: activeGateway(),
+    payment_provider: targetProvider(),
+    payment_role: providerRole(targetProvider()),
+    payment: paymentService.describe(),
+    uptime: Math.round(process.uptime()),
+  });
+});
+
 fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
 app.use('/uploads', express.static(UPLOAD_ROOT));
 
@@ -339,27 +386,43 @@ mountGerantCheckinRoutes(app);
 mountGerantCrmRoutes(app);
 
 const rateLimitBuckets = new Map();
-function rateLimit({ windowMs, max, keyPrefix }) {
+function rateLimit({ windowMs, max, keyPrefix, countFailuresOnly = false }) {
   return (req, res, next) => {
+    if (process.env.NODE_ENV !== 'production' && process.env.AUTH_RATE_LIMIT !== '1') {
+      return next();
+    }
     const ip = req.ip || req.socket?.remoteAddress || 'unknown';
-    const phone = req.body?.telephone || req.body?.identifier || req.body?.email || '';
-    const key = `${keyPrefix}:${ip}:${String(phone).replace(/\D/g, '')}`;
+    const rawId = String(req.body?.telephone || req.body?.identifier || req.body?.email || '');
+    const idKey = rawId.includes('@') ? rawId.trim().toLowerCase() : String(rawId).replace(/\D/g, '');
+    const key = `${keyPrefix}:${ip}:${idKey}`;
     const now = Date.now();
     const bucket = rateLimitBuckets.get(key) || { count: 0, resetAt: now + windowMs };
     if (bucket.resetAt <= now) {
       bucket.count = 0;
       bucket.resetAt = now + windowMs;
     }
-    bucket.count += 1;
-    rateLimitBuckets.set(key, bucket);
-    if (bucket.count > max) {
+    if (bucket.count >= max) {
       return res.status(429).json({ error: 'Trop de tentatives. Veuillez reessayer plus tard.' });
     }
+    if (!countFailuresOnly) {
+      bucket.count += 1;
+      rateLimitBuckets.set(key, bucket);
+      return next();
+    }
+    res.on('finish', () => {
+      if (res.statusCode === 401 || res.statusCode === 403) {
+        const current = rateLimitBuckets.get(key) || { count: 0, resetAt: now + windowMs };
+        current.count += 1;
+        rateLimitBuckets.set(key, current);
+      } else if (res.statusCode < 400) {
+        rateLimitBuckets.delete(key);
+      }
+    });
     return next();
   };
 }
 
-const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 12, keyPrefix: 'auth' });
+const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 12, keyPrefix: 'auth', countFailuresOnly: true });
 const otpRateLimit = rateLimit({ windowMs: 10 * 60 * 1000, max: 5, keyPrefix: 'otp' });
 
 // ============================================================
@@ -997,8 +1060,9 @@ app.get('/api/terrains', async (req, res) => {
       params.push(q, q, q);
     }
     if (search) {
-      query += ' AND (t.nom LIKE ? OR t.ville LIKE ? OR t.adresse LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      const raw = String(search).trim();
+      query += ' AND (t.nom LIKE ? OR t.ville LIKE ? OR t.adresse LIKE ? OR t.telephone LIKE ?)';
+      params.push(`%${raw}%`, `%${raw}%`, `%${raw}%`, `%${raw}%`);
     }
 
     // Surface stockée en description côté admin (pas de colonne dédiée)
@@ -1306,7 +1370,19 @@ app.get('/api/terrains/:id/devis', async (req, res) => {
       return res.status(400).json({ error: 'date, heure_debut et heure_fin requis' });
     }
     const devis = calculerDevis(db, terrain, { date, heure_debut, heure_fin, format_terrain });
-    res.json(devis);
+    const remboursementAutorise = Number(terrain.remboursement_autorise) === 1;
+    const delai = remboursementAutorise ? Number(terrain.delai_remboursement_heures || 0) : 0;
+    res.json({
+      ...devis,
+      politique_annulation: {
+        remboursement_autorise: remboursementAutorise && delai > 0,
+        delai_remboursement_heures: delai,
+        texte: (remboursementAutorise && delai > 0)
+          ? `Remboursé si tu annules dans les ${delai} h`
+          : 'Annulation sans remboursement',
+      },
+      copy_checkout: `Tu paies ${devis.montant_avance} maintenant (hors frais opérateur). Le jour J, ${devis.montant_restant} sur place.`,
+    });
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
@@ -1317,10 +1393,10 @@ app.get('/api/terrains/:id/devis', async (req, res) => {
 app.post('/api/terrains', authMiddleware, requireRole('proprietaire'), async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone, commodites, heure_debut, heure_fin } = req.body;
+    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, latitude, longitude, description, telephone, commodites, heure_debut, heure_fin } = req.body;
     const prixEntier = Number(prix_entier || prix_heure);
     const prixMoitie = Number(prix_moitie || prixEntier * 0.6);
-    const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : 8));
+    const pourcentageAvance = 12.5;
     const avanceTerrain = Math.round((prixEntier * pourcentageAvance) / 100);
     const result = runSql(db, `INSERT INTO terrains
       (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, description, telephone, commodites)
@@ -1347,9 +1423,9 @@ app.put('/api/terrains/:id', authMiddleware, requireRole('proprietaire'), async 
     const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ? AND proprietaire_id = ?', [Number(req.params.id), req.user.id]);
     if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
-    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, montant_acompte, acompte, pourcentage_avance, latitude, longitude, description, telephone, is_active, commodites } = req.body;
+    const { nom, adresse, ville, sport, type, prix_heure, prix_moitie, prix_entier, latitude, longitude, description, telephone, is_active, commodites } = req.body;
     const prixEntier = Number(prix_entier || prix_heure || terrain.prix_entier || terrain.prix_heure);
-    const pourcentageAvance = Number(pourcentage_avance || (montant_acompte || acompte ? (Number(montant_acompte || acompte) * 100) / prixEntier : terrain.pourcentage_avance || 8));
+    const pourcentageAvance = Number(terrain.pourcentage_avance || 12.5);
     const avanceTerrain = Math.round((prixEntier * pourcentageAvance) / 100);
     const commoditesJson =
       commodites !== undefined ? serializeCommodites(commodites) : (terrain.commodites || '[]');
@@ -1451,10 +1527,13 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
       joueur_id: joueurIdBody,
       mode: modeBody,
       anonyme: anonymeBody,
+      methode_paiement: methodePaiementBody,
+      canal_paiement: canalPaiementBody,
     } = req.body;
-    /** 'paiement' = lien PayTech + WA | 'bloquer' = hold sur place sans lien */
+    /** 'paiement' = lien prestataire + WA | 'bloquer' = hold sur place sans lien */
     const mode = modeBody === 'bloquer' ? 'bloquer' : 'paiement';
     const anonyme = Boolean(anonymeBody);
+    const preferredChannel = methodePaiementBody || canalPaiementBody;
     const terrainId = terrainIdForce || Number(terrain_id);
     if (!joueur_nom || (!anonyme && !joueur_telephone)) {
       return res.status(400).json({ error: 'Nom et téléphone du joueur requis' });
@@ -1493,7 +1572,7 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
     const montantAvance = mode === 'bloquer' ? 0 : calculerMontantAvance(terrain, montant);
     const montantRestant = Math.max(0, montant - montantAvance);
     const verrouExpireAt = mode === 'bloquer' ? null : Date.now() + lockDurationMs;
-    // Bloquer = confirmé (scan possible). Paiement = en_attente jusqu'au PayTech.
+    // Bloquer = confirmé (scan possible). Paiement = en_attente jusqu'au webhook prestataire.
     const statutInitial = mode === 'bloquer' ? 'confirme' : 'en_attente';
 
     // Lier au compte joueur pour que la résa apparaisse dans Mes réservations + push.
@@ -1597,7 +1676,9 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
 
     if (mode === 'paiement') {
       try {
-        const payment = await paytechService.creerLienPaiement(reservation);
+        const payment = await paytechService.creerLienPaiement(reservation, {
+          preferredChannel,
+        });
         runSql(db, 'UPDATE reservations SET lien_paiement = ?, reference_paytech = ? WHERE id = ?', [
           payment.redirectUrl,
           payment.reference,
@@ -1608,6 +1689,7 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
           lien_paiement: payment.redirectUrl,
           reference_paytech: payment.reference,
           redirect_url: payment.redirectUrl,
+          canal_paiement: payment.canal_paiement || preferredChannel || null,
         };
       } catch (error) {
         transaction(db, () => {
@@ -1692,7 +1774,10 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
         statut: statutInitial,
         whatsapp_sent,
         whatsapp_error,
+        id: reservation.id,
+        reference_paytech: reservation.reference_paytech || null,
         lien_paiement: reservation.lien_paiement || null,
+        redirect_url: reservation.redirect_url || reservation.lien_paiement || null,
       });
     }
 
@@ -1808,6 +1893,39 @@ app.post('/api/reservations/:id/renvoyer-lien', authMiddleware, requireRole('ger
   } catch (error) {
     console.error('Renvoi WhatsApp:', error);
     res.status(503).json({ error: error.message || 'Envoi WhatsApp impossible' });
+  }
+});
+
+/** Joueur : régénère un lien de paiement frais (URLs HTTPS ngrok à jour) */
+app.post('/api/reservations/:id(\\d+)/relancer-paiement', authMiddleware, requireRole('joueur'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND joueur_id = ?', [
+      Number(req.params.id),
+      req.user.id,
+    ]);
+    if (!reservation) return res.status(404).json({ error: 'Réservation introuvable' });
+    if (reservation.statut !== 'en_attente') {
+      return res.status(400).json({ error: 'Cette réservation n’est plus en attente de paiement' });
+    }
+    const payment = await paytechService.creerLienPaiement(reservation, {
+      preferredChannel: req.body?.methode_paiement || req.body?.canal_paiement || reservation.canal_paiement,
+    });
+    runSql(db, 'UPDATE reservations SET lien_paiement = ?, reference_paytech = ? WHERE id = ?', [
+      payment.redirectUrl,
+      payment.reference,
+      reservation.id,
+    ]);
+    return res.json({
+      id: reservation.id,
+      redirect_url: payment.redirectUrl,
+      lien_paiement: payment.redirectUrl,
+      reference_paytech: payment.reference,
+      canal_paiement: payment.canal_paiement || null,
+    });
+  } catch (error) {
+    logger.error('index.js', 'Relancer paiement joueur', error);
+    return res.status(error.statusCode || 500).json({ error: error.message || 'Impossible de créer le lien de paiement' });
   }
 });
 
@@ -1945,7 +2063,6 @@ app.get('/api/reservations/mes', optionalAuth, async (req, res) => {
 app.put('/api/reservations/:id/annuler', optionalAuth, async (req, res) => {
   try {
     const db = await getDb();
-    // Si pas connecté, chercher la réservation juste par ID (joueur sans compte)
     let reservation;
     if (req.user) {
       reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND joueur_id = ?', [Number(req.params.id), req.user.id]);
@@ -1956,23 +2073,11 @@ app.put('/api/reservations/:id/annuler', optionalAuth, async (req, res) => {
     if (!['en_attente', 'confirme', 'acceptee'].includes(reservation.statut)) {
       return res.status(400).json({ error: 'Réservation ne peut pas être annulée' });
     }
-    transaction(db, () => {
-      db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')", [reservation.id]);
-      if (rowsModified(db) !== 1) {
-        const error = new Error('Réservation ne peut pas être annulée');
-        error.statusCode = 400;
-        throw error;
-      }
-      if (reservation.statut === 'en_attente') {
-        libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
-      } else {
-        libererCreneauxReservation(db, reservation, ['reserve', 'en_attente_paiement']);
-      }
-    });
-    res.json({ message: 'Réservation annulée' });
+    const result = await executerAnnulation(db, reservation);
+    res.json({ message: 'Réservation annulée', rembourse: result.rembourse, politique: result.politique });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Erreur serveur' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -1984,24 +2089,16 @@ app.patch('/api/gerant/reservations/:id/annuler', authMiddleware, requireRole('g
     if (!['en_attente', 'confirme', 'acceptee'].includes(reservation.statut)) {
       return res.status(400).json({ error: 'Reservation ne peut pas etre annulee' });
     }
-    transaction(db, () => {
-      db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')", [req.user.id, reservation.id]);
-      if (rowsModified(db) !== 1) {
-        const error = new Error('Reservation ne peut pas etre annulee');
-        error.statusCode = 400;
-        throw error;
-      }
-      libererCreneauxReservation(db, reservation, ['en_attente_paiement', 'reserve']);
-    });
+    const result = await executerAnnulation(db, reservation, { traitePar: req.user.id });
     await logActivite({
       gerant_id: req.user.id,
       terrain_id: reservation.terrain_id,
       action: 'reservation_annulee',
       reservation_id: reservation.id,
-      details: { statut_avant: reservation.statut },
+      details: { statut_avant: reservation.statut, rembourse: result.rembourse },
     }).catch((error) => logger.error('index.js', 'Log activite reservation_annulee', error));
     await scoreService.recalculerScore(req.user.id, reservation.terrain_id).catch((error) => logger.error('index.js', 'Recalcul score annulation', error));
-    res.json({ message: 'Reservation annulee' });
+    res.json({ message: 'Reservation annulee', rembourse: result.rembourse, politique: result.politique });
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
@@ -2013,7 +2110,7 @@ app.put('/api/reservations/:id/traiter', authMiddleware, requireRole('gerant', '
     const db = await getDb();
     const { action } = req.body;
     if (action === 'acceptee') {
-      return res.status(400).json({ error: 'Une réservation ne peut être confirmée que par le webhook PayTech' });
+      return res.status(400).json({ error: 'Une réservation ne peut être confirmée que par le webhook de paiement' });
     }
     if (action !== 'refusee') {
       return res.status(400).json({ error: 'Action invalide' });
@@ -2083,7 +2180,19 @@ app.get('/api/proprietaire/stats', authMiddleware, requireRole('proprietaire'), 
     const terrainStats = terrains.map(t => {
       const revenue = revenueRows.find((row) => Number(row.id) === Number(t.id)) || {};
       const resCount = queryOne(db, 'SELECT COUNT(*) as count FROM reservations WHERE terrain_id = ?', [t.id]);
-      return { nom: t.nom, id: t.id, reservations: resCount.count, revenue: Number(revenue.montants_reverses || 0), occupancy: Math.min(Math.round((resCount.count / 50) * 100), 100) };
+      return {
+        nom: t.nom,
+        id: t.id,
+        reservations: resCount.count,
+        revenue: Number(revenue.verse_au_gerant || 0),
+        verse_au_gerant: Number(revenue.verse_au_gerant || 0),
+        encore_du: Number(revenue.encore_du || 0),
+        avances_encaissees: Number(revenue.avances_encaissees || 0),
+        occupancy: Math.min(Math.round((resCount.count / 50) * 100), 100),
+        payout_mode: t.payout_mode || 'retrait',
+        pourcentage_avance: Number(t.pourcentage_avance || 0),
+        commission_pourcentage: Number(t.commission_pourcentage || 0),
+      };
     });
 
     const weeklyRevenue = [];
@@ -2092,22 +2201,20 @@ app.get('/api/proprietaire/stats', authMiddleware, requireRole('proprietaire'), 
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().split('T')[0];
       const rev = queryOne(db, `SELECT
-        COALESCE(SUM(CASE
-          WHEN t.modele_revenus = 'commission'
-          THEN COALESCE(p.montant_acompte, 0) - COALESCE(p.montant_commission, ROUND(COALESCE(p.montant_acompte, 0) * COALESCE(t.commission_pourcentage, 0) / 100.0))
-          ELSE COALESCE(p.montant_acompte, 0)
-        END), 0) as total
-        FROM reservations r
-        JOIN terrains t ON t.id = r.terrain_id
-        LEFT JOIN paiements p ON p.reservation_id = r.id AND p.statut = 'paye'
-        WHERE r.terrain_id IN (${placeholders}) AND r.date = ? AND ${playedStatusSql('r')}`, [...terrainIds, dateStr]);
+        COALESCE(SUM(CASE WHEN d.statut != 'annule_rembourse' THEN d.du_gerant ELSE 0 END), 0) as total
+        FROM dus d
+        JOIN reservations r ON r.id = d.reservation_id
+        WHERE d.terrain_id IN (${placeholders}) AND r.date = ?`, [...terrainIds, dateStr]);
       weeklyRevenue.push({ day: ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][d.getDay()], revenue: rev.total });
     }
 
     res.json({
-      totalRevenue: revenueTotals.montants_reverses,
+      totalRevenue: revenueTotals.verse_au_gerant,
+      verseAuGerant: revenueTotals.verse_au_gerant,
+      encoreDu: revenueTotals.encore_du,
       totalAvances: revenueTotals.avances_encaissees,
       totalCommission: revenueTotals.commissions_prelevees,
+      beneficiaire: 'gerant',
       occupancyRate: terrainStats.length > 0 ? Math.round(terrainStats.reduce((s, t) => s + t.occupancy, 0) / terrainStats.length) : 0,
       totalReservations: totalRes.count,
       pendingReservations: pendingRes.count,
@@ -2131,7 +2238,8 @@ app.get('/api/proprietaire/profile', authMiddleware, requireRole('proprietaire')
     if (!account) return res.status(404).json({ error: 'Profil proprietaire introuvable' });
 
     const terrains = queryAll(db, `SELECT id, nom, ville, adresse, type, is_active, modele_revenus,
-      pourcentage_avance, commission_pourcentage, abonnement_montant, achat_definitif_montant, achat_definitif_paye
+      pourcentage_avance, commission_pourcentage, abonnement_montant, achat_definitif_montant, achat_definitif_paye,
+      payout_mode, remboursement_autorise, delai_remboursement_heures
       FROM terrains WHERE proprietaire_id = ? ORDER BY created_at DESC`, [propId]);
     const revenueRows = queryAll(db, ownerRevenueRowsSql({ ownerWhere: 't.proprietaire_id = ?', dateWhere: '' }), [propId]);
     const revenue = summarizeOwnerRevenue(revenueRows);
@@ -2173,7 +2281,11 @@ app.get('/api/proprietaire/terrains', authMiddleware, requireRole('proprietaire'
       FROM terrains t LEFT JOIN avis a ON a.terrain_id = t.id
       WHERE t.proprietaire_id = ? GROUP BY t.id
     `, [req.user.id]);
-    res.json(terrains.map(serializeTerrain));
+    res.json(terrains.map((row) => {
+      const publicT = serializeTerrain(row);
+      const resume = resumeListeTerrain(db, row);
+      return { ...publicT, contrat_resume: resume.contrat_resume };
+    }));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -3089,7 +3201,10 @@ async function ensureSeedData(db) {
 
 async function start() {
   const db = await getDb(); // Initialize DB + migrations
-  await ensureSeedData(db);
+  const skipSeed = String(process.env.SKIP_SEED || '').toLowerCase() === 'true' || process.env.SKIP_SEED === '1';
+  if (!skipSeed) {
+    await ensureSeedData(db);
+  }
   programmerResumeHebdomadaire();
   programmerSurveillanceConfiance();
   programmerRappelsReservations();
@@ -3101,6 +3216,17 @@ async function start() {
       await appliquerSuspensionsAbonnements().catch((error) => {
         logger.error('index.js', 'Suspension abonnements planifiee', error);
       });
+    });
+    cron.schedule('*/5 * * * *', async () => {
+      try {
+        const dbJob = await getDb();
+        const results = await traiterFenetresExpirees(dbJob);
+        if (results.length) {
+          logger.info('index.js', `Fenetres remboursement traitees: ${results.length}`);
+        }
+      } catch (error) {
+        logger.error('index.js', 'Job fenetres remboursement', error);
+      }
     });
   }
   setInterval(async () => {
@@ -3122,6 +3248,10 @@ async function start() {
   }, 5 * 60 * 1000);
   app.listen(PORT, () => {
     logger.info('index.js', `TerrainSN API demarree sur http://localhost:${PORT}`);
+    const { resoudreIpnUrl } = require('./lib/publicIpnUrl');
+    resoudreIpnUrl()
+      .then((ipn) => logger.info('index.js', `IPN paiement (${activeGateway()}) : ${ipn}`))
+      .catch(() => {});
   }).on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
       logger.error('index.js', `Port ${PORT} deja utilise. Arretez l'autre process ou changez PORT.`);

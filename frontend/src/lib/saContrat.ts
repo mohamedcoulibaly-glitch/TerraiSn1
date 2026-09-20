@@ -2,7 +2,17 @@ export type CanalStatut = "absent" | "saisi" | "test_envoye" | "verifie";
 export type PayoutMode = "auto" | "retrait";
 export type FraisPolitique = "gerant" | "plateforme" | "partage";
 export type CanalReversement = "wave" | "om" | "les_deux";
-export type StatutDu = "en_fenetre" | "payable" | "verse" | "echec" | "annule_rembourse";
+export type StatutDu = "en_fenetre" | "payable" | "verse" | "echec" | "annule_rembourse" | "demande_retrait";
+
+export type StatutPayout = "en_cours" | "en_attente" | "envoye" | "echec" | "annule";
+
+export function labelStatutPayout(statut?: string): string {
+  if (statut === "envoye") return "Traité";
+  if (statut === "en_attente" || statut === "en_cours") return "En attente";
+  if (statut === "echec") return "Échoué";
+  if (statut === "annule") return "Annulé";
+  return statut || "—";
+}
 
 export type AvenantContrat = {
   at: string;
@@ -103,6 +113,43 @@ function readStore(): OpsStore {
 
 function writeStore(store: OpsStore) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+}
+
+export function overlayFromBackend(contrat: any): ContratOverlay {
+  if (!contrat) return { ...CONTRAT_DEFAUT };
+  return {
+    ...CONTRAT_DEFAUT,
+    wave_numero: contrat.wave_numero || "",
+    om_numero: contrat.om_numero || "",
+    wave_statut: (contrat.wave_statut as CanalStatut) || "absent",
+    om_statut: (contrat.om_statut as CanalStatut) || "absent",
+    wave_verifie_at: contrat.wave_verifie_at || undefined,
+    om_verifie_at: contrat.om_verifie_at || undefined,
+    numeros_identiques_whatsapp: Number(contrat.numeros_identiques_whatsapp) === 1,
+    canal_reversement: (contrat.canal_reversement as CanalReversement) || "les_deux",
+    remboursement_autorise: Number(contrat.remboursement_autorise) === 1,
+    payout_mode: contrat.payout_mode === "auto" ? "auto" : "retrait",
+    payout_frais_politique: (contrat.payout_frais_politique as FraisPolitique) || "partage",
+    frais_payout_pct_gerant: Number(contrat.frais_payout_pct_gerant ?? 1),
+    frais_payout_pct_plateforme: Number(contrat.frais_payout_pct_plateforme ?? 1),
+    production_paiement: Number(contrat.paiement_production) === 1,
+    avenants: [],
+  };
+}
+
+/** Préfère le contrat serveur. Le cache navigateur ne sert que s’il n’y a encore aucune donnée terrain. */
+export function contratDepuisTerrain(terrain: any): ContratOverlay {
+  if (!terrain) return { ...CONTRAT_DEFAUT };
+  const hasServer = terrain.contrat_resume || terrain.wave_statut != null || terrain.payout_mode != null;
+  if (hasServer) {
+    return overlayFromBackend({
+      ...terrain,
+      wave_statut: terrain.wave_statut || terrain.contrat_resume?.wave_statut,
+      om_statut: terrain.om_statut || terrain.contrat_resume?.om_statut,
+      payout_mode: terrain.payout_mode || terrain.contrat_resume?.payout_mode,
+    });
+  }
+  return overlayFromBackend(getContratOverlay(Number(terrain.id)));
 }
 
 export function getContratOverlay(terrainId: number): ContratOverlay {

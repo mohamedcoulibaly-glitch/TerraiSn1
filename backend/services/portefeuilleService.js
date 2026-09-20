@@ -64,14 +64,6 @@ function encaisserSoldeSurPlace(db, reservation, gerantId, methode = 'especes') 
     [reservation.id, solde, methode, `SOLDE-${reservation.id}-${Date.now()}`],
   );
 
-  crediterPortefeuilleGerant(db, {
-    gerantId,
-    terrainId: reservation.terrain_id,
-    reservationId: reservation.id,
-    montantEncaisse: solde,
-    montantCommission: 0,
-  });
-
   return solde;
 }
 

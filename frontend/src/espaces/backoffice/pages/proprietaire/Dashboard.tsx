@@ -169,7 +169,7 @@ const OwnerDashboard = () => {
 
   const statCards = [
     {
-      label: "Revenus du mois",
+      label: "Versé au gérant",
       value: (stats?.totalRevenue || 0).toLocaleString(),
       suffix: "CFA",
       gold: true,
@@ -208,7 +208,7 @@ const OwnerDashboard = () => {
           Dashboard
         </h1>
         <p className="text-sm text-[var(--color-text-secondary)] mt-1">
-          Vue d&apos;ensemble de vos terrains
+          Vue d&apos;ensemble de tes terrains. L&apos;avance est versée au gérant.
         </p>
       </div>
 

@@ -491,7 +491,7 @@ export default function TarifsDynamiques() {
             />
           </label>
           <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-2)] px-3 py-2.5 flex flex-col justify-center">
-            <span className="text-xs text-[var(--color-text-muted)]">Avance demandée</span>
+            <span className="text-xs text-[var(--color-text-muted)]">Avance demandée (contrat superadmin)</span>
             <span className="text-sm font-semibold text-[var(--color-text-primary)] mt-0.5">
               {pctAvance} % du total
             </span>

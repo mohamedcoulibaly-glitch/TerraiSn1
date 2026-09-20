@@ -80,13 +80,60 @@ export const superAdminApi = {
     adminRequest("/admin/users", { method: "POST", body: JSON.stringify(data) }),
   revenus: (periode: string) => adminRequest(`/admin/revenus?periode=${periode}`),
   finances: () => adminRequest("/admin/finances"),
+  caisseDashboard: () => adminRequest("/admin/caisse/dashboard"),
+  caisseFenetre: () => adminRequest("/admin/caisse/fenetre"),
+  caissePayable: () => adminRequest("/admin/caisse/payable"),
+  caisseRetraits: (statut = "en_attente") =>
+    adminRequest(`/admin/caisse/retraits?statut=${encodeURIComponent(statut)}`),
+  caisseHistorique: () => adminRequest("/admin/caisse/historique?limit=20"),
+  marquerRetraitEnvoye: (id: number, ref_manuelle?: string, opts?: { mode_manuel?: boolean }) =>
+    adminRequest(`/admin/caisse/retraits/${id}/envoyer`, {
+      method: "POST",
+      body: JSON.stringify({ ref_manuelle, mode_manuel: Boolean(opts?.mode_manuel) }),
+    }),
+  rejeterRetrait: (id: number, motif?: string) =>
+    adminRequest(`/admin/caisse/retraits/${id}/rejeter`, {
+      method: "POST",
+      body: JSON.stringify({ motif }),
+    }),
+  verserDu: (id: number) =>
+    adminRequest(`/admin/caisse/dus/${id}/verser`, { method: "POST", body: JSON.stringify({}) }),
+  rapprochement: () => adminRequest("/admin/rapprochement"),
+  revenusPaiements: () => adminRequest("/admin/revenus-paiements"),
+  demandesNumero: () => adminRequest("/admin/demandes-numero"),
+  validerDemandeNumero: (id: number) =>
+    adminRequest(`/admin/demandes-numero/${id}/valider`, { method: "POST", body: JSON.stringify({}) }),
+  refuserDemandeNumero: (id: number, motif?: string) =>
+    adminRequest(`/admin/demandes-numero/${id}/refuser`, {
+      method: "POST",
+      body: JSON.stringify({ motif }),
+    }),
+  getContrat: (id: number) => adminRequest(`/admin/terrains/${id}/contrat`),
+  saveContrat: (id: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${id}/contrat`, { method: "PUT", body: JSON.stringify(data) }),
+  previewContrat: (id: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${id}/contrat/preview`, { method: "POST", body: JSON.stringify(data) }),
+  testCanal100: (id: number, canal: "wave" | "om") =>
+    adminRequest(`/admin/terrains/${id}/canaux/${canal}/test-100`, { method: "POST", body: JSON.stringify({}) }),
+  verifierCanal: (id: number, canal: "wave" | "om") =>
+    adminRequest(`/admin/terrains/${id}/canaux/${canal}/verifier`, { method: "POST", body: JSON.stringify({}) }),
   abonnements: () => adminRequest("/admin/abonnements"),
   payerAbonnement: (id: number) =>
     adminRequest(`/admin/abonnements/${id}/payer`, { method: "POST" }),
+  checkoutAbonnement: (id: number, data?: { canal?: "wave" | "orange_money" }) =>
+    adminRequest(`/admin/abonnements/${id}/checkout`, {
+      method: "POST",
+      body: JSON.stringify(data || {}),
+    }),
   payerAchatDefinitif: (terrainId: number, montant?: number) =>
     adminRequest(`/admin/terrains/${terrainId}/achat-definitif/payer`, {
       method: "POST",
       body: JSON.stringify({ montant }),
+    }),
+  checkoutAchatDefinitif: (terrainId: number, data?: { montant?: number; canal?: "wave" | "orange_money" }) =>
+    adminRequest(`/admin/terrains/${terrainId}/achat-definitif/checkout`, {
+      method: "POST",
+      body: JSON.stringify(data || {}),
     }),
   politiqueAnnulation: (terrainId: number, delai_remboursement_heures: number) =>
     adminRequest(`/admin/terrains/${terrainId}/politique-annulation`, {

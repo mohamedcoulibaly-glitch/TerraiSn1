@@ -13,6 +13,8 @@ const {
   marquerAchatDefinitifPaye,
   appliquerSuspensionsAbonnements,
   abonnementsAvecEtat,
+  creerCheckoutAbonnement,
+  creerCheckoutAchatDefinitif,
 } = require('../revenueModelService');
 const {
   listTerrainPhotos,
@@ -55,6 +57,9 @@ const {
   refuserProposition,
 } = require('../services/tarifService');
 const { normaliserDelaiHeures } = require('../services/annulationService');
+const { resumeListeTerrain } = require('../services/contratService');
+const { kpisCaisse } = require('../services/caisseService');
+const adminPaiementsRoutes = require('./adminPaiements');
 
 const router = express.Router();
 
@@ -86,6 +91,7 @@ router.get('/dashboard', async (req, res) => {
     terrainsActifs: queryOne(db, 'SELECT COUNT(*) AS total FROM terrains WHERE is_active = 1').total,
     reservationsAujourdhui: queryOne(db, 'SELECT COUNT(*) AS total FROM reservations WHERE date = ?', [today]).total,
     revenusMois: queryOne(db, "SELECT COALESCE(SUM(prix_total), 0) AS total FROM reservations WHERE statut = 'joue' AND substr(date, 1, 7) = ?", [month]).total,
+    caisse: kpisCaisse(db),
   });
 });
 
@@ -124,8 +130,9 @@ router.get('/profile', async (req, res) => {
 
 router.get('/terrains', async (req, res) => {
   const db = await getDb();
-  res.json(queryAll(db, `SELECT t.*, p.nom AS proprietaire_nom FROM terrains t
-    LEFT JOIN proprietaires p ON p.id = t.proprietaire_id ORDER BY t.created_at DESC`));
+  const rows = queryAll(db, `SELECT t.*, p.nom AS proprietaire_nom FROM terrains t
+    LEFT JOIN proprietaires p ON p.id = t.proprietaire_id ORDER BY t.created_at DESC`);
+  res.json(rows.map((row) => resumeListeTerrain(db, row)));
 });
 
 function parseCoord(value) {
@@ -223,9 +230,23 @@ router.patch('/terrains/:id/politique-annulation', async (req, res) => {
   const terrainId = Number(req.params.id);
   const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
-  const delai = normaliserDelaiHeures(req.body?.delai_remboursement_heures);
-  runSql(db, 'UPDATE terrains SET delai_remboursement_heures = ? WHERE id = ?', [delai, terrainId]);
-  syncApresModificationTerrain(terrainId, 'contrat_paiement', { delai_remboursement_heures: delai });
+  const autorise = req.body?.remboursement_autorise;
+  let refundOn;
+  if (autorise === undefined || autorise === null) {
+    refundOn = normaliserDelaiHeures(req.body?.delai_remboursement_heures) > 0;
+  } else {
+    refundOn = autorise === true || autorise === 1 || autorise === '1' || autorise === 'oui';
+  }
+  const delai = refundOn ? normaliserDelaiHeures(req.body?.delai_remboursement_heures) : 0;
+  runSql(db, 'UPDATE terrains SET remboursement_autorise = ?, delai_remboursement_heures = ? WHERE id = ?', [
+    refundOn ? 1 : 0,
+    delai,
+    terrainId,
+  ]);
+  syncApresModificationTerrain(terrainId, 'contrat_paiement', {
+    delai_remboursement_heures: delai,
+    remboursement_autorise: refundOn ? 1 : 0,
+  });
   res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
 });
 
@@ -519,8 +540,30 @@ router.post('/propositions-tarifs/:id/refuser', async (req, res) => {
 router.post('/abonnements/:id/payer', async (req, res) => {
   const db = await getDb();
   try {
+    // Marquage manuel (virement / cash) — hors passerelle
     const abonnement = transaction(db, () => marquerAbonnementPaye(db, Number(req.params.id)));
-    res.json({ abonnement, message: 'Abonnement marque comme paye' });
+    res.json({ abonnement, message: 'Abonnement marque comme paye', via: 'manuel' });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+/** Checkout dynamique passerelle (PayTech/PayDunya/simulation) pour une échéance. */
+router.post('/abonnements/:id/checkout', async (req, res) => {
+  const db = await getDb();
+  try {
+    const payment = await creerCheckoutAbonnement(db, Number(req.params.id), {
+      preferredChannel: req.body?.canal || req.body?.methode,
+    });
+    res.status(201).json({
+      message: 'Lien de paiement abonnement créé',
+      redirect_url: payment.redirectUrl,
+      lien_paiement: payment.redirectUrl,
+      reference_paytech: payment.reference,
+      abonnement_id: payment.abonnement_id,
+      montant: payment.montant,
+      provider: payment.provider,
+    });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
   }
@@ -530,7 +573,28 @@ router.post('/terrains/:id/achat-definitif/payer', async (req, res) => {
   const db = await getDb();
   try {
     const terrain = transaction(db, () => marquerAchatDefinitifPaye(db, Number(req.params.id), req.body?.montant));
-    res.json({ terrain, message: 'Achat definitif marque comme paye' });
+    res.json({ terrain, message: 'Achat definitif marque comme paye', via: 'manuel' });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.post('/terrains/:id/achat-definitif/checkout', async (req, res) => {
+  const db = await getDb();
+  try {
+    const payment = await creerCheckoutAchatDefinitif(db, Number(req.params.id), {
+      montant: req.body?.montant,
+      preferredChannel: req.body?.canal || req.body?.methode,
+    });
+    res.status(201).json({
+      message: 'Lien de paiement achat définitif créé',
+      redirect_url: payment.redirectUrl,
+      lien_paiement: payment.redirectUrl,
+      reference_paytech: payment.reference,
+      terrain_id: payment.terrain_id,
+      montant: payment.montant,
+      provider: payment.provider,
+    });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
   }
@@ -914,5 +978,7 @@ router.patch('/terrains/:id/mode-revenu', async (req, res) => {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
   }
 });
+
+router.use(adminPaiementsRoutes);
 
 module.exports = router;

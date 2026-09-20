@@ -272,11 +272,13 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
           <div className="space-y-4">
             <PctMontantPair
               label="Avance de réservation"
+              hint="Figé par le contrat superadmin. Ni toi ni le gérant ne pouvez le modifier."
               labelMontant="Montant avance"
               pct={form.pourcentage_avance}
               onPctChange={(value) => setForm({ ...form, pourcentage_avance: value })}
               base={Number(form.prix_entier) || 0}
               minPct={1}
+              disabled
             />
           </div>
 

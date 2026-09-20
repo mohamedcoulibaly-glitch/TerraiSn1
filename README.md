@@ -20,6 +20,12 @@ npm run dev            # → http://localhost:8080
 
 Comptes démo (mot de passe `password123`) : `abdou@email.com` (joueur), `diop@terrainsn.sn` (propriétaire), `sarr@terrainsn.sn` (gérant), `admin@terrainsn.sn` (admin).
 
+## Paiements
+
+- **Tests / sandbox** : PayDunya (`PAYMENT_GATEWAY=paydunya`, clés `PAYDUNYA_*` en mode test).
+- **Production** : PayTech (`PAYMENT_GATEWAY=paytech`, `PAYTECH_ENV=prod`).
+- Les webhooks ont besoin d’une URL HTTPS publique : `ngrok http 3001` (callback `/webhook/paydunya` en sandbox).
+
 ## PWA (build + check)
 
 ```bash
@@ -36,6 +42,35 @@ npm run preview        # tester le build localement
 2. Copier les 3 variables `VAPID_*` dans `backend/.env`
 3. Redémarrer le backend
 4. Joueur connecté → **Profil → Notifications → Activer**
+
+## CI/CD (GitHub Actions)
+
+Chaque push / PR lance **CI/CD** (`.github/workflows/ci.yml`) :
+
+| Job | Ce qui est vérifié |
+|-----|-------------------|
+| Backend | `npm test` + smoke `GET /health` |
+| Frontend | lint, Vitest, build, audit PWA |
+| Admin | `tsc` + build Vite |
+| Lighthouse | perf / a11y (n’échoue pas le pipeline s’il flotte) |
+| Docker | image API + smoke du conteneur |
+
+Sur **`main` / `master`** uniquement :
+
+- l’image API est poussée sur `ghcr.io/<org>/terrainsn-api`
+- le frontend est déployé sur Vercel **si** les secrets sont présents
+
+Secrets optionnels (Settings → Secrets and variables → Actions) :
+
+- `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — déploiement frontend
+- `LHCI_GITHUB_APP_TOKEN` — commentaires Lighthouse sur les PR
+- variable `VITE_API_URL` — URL de l’API embarquée dans le build (sinon `https://api.terrainsn.com/api`)
+
+Pour rendre la CI obligatoire : Settings → Branches → Branch protection → Require status checks → `Backend — tests + API`, `Frontend — lint, tests, build, PWA`, `Admin — typecheck + build`.
+
+```bash
+docker compose up --build   # API locale prod-like → http://localhost:3001/health
+```
 
 ## Structure
 

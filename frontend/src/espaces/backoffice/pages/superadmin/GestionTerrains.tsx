@@ -18,7 +18,7 @@ import Select2 from "@/components/Select2";
 import {
   fcfa,
   fraisLabel,
-  getContratOverlay,
+  contratDepuisTerrain,
   terrainStatutListe,
 } from "@/lib/saContrat";
 
@@ -131,9 +131,9 @@ export default function GestionTerrains() {
   const rows = useMemo(() => {
     return items
       .map((t) => {
-        const c = getContratOverlay(t.id);
+        const c = contratDepuisTerrain(t);
         const fin = (finances?.terrains || []).find((f: any) => Number(f.id) === Number(t.id)) || {};
-        const du = Math.max(0, Number(fin.avances || 0) - Number(fin.commissions || 0) - Number(fin.reverse || 0));
+        const du = Number(t.contrat_resume?.encore_du ?? Math.max(0, Number(fin.avances || 0) - Number(fin.commissions || 0) - Number(fin.reverse || 0)));
         const statut = terrainStatutListe(t, c);
         const remb = c.remboursement_autorise || Number(t.delai_remboursement_heures || 0) > 0;
         return { t, c, du, statut, remb };

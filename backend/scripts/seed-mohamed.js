@@ -145,22 +145,27 @@ async function printSummary() {
     ...queryAll(db, `SELECT 'gerant' AS role, email, telephone FROM employes WHERE email LIKE 'mohamed.%'`),
   ];
   const notifs = queryOne(db, 'SELECT COUNT(*) AS n FROM notifications')?.n;
-  const todayResa = queryOne(
-    db,
-    `SELECT COUNT(*) AS n FROM reservations WHERE date = date('now','localtime') AND terrain_id = 9`
-  )?.n;
+  const arena = queryOne(db, `SELECT id, nom FROM terrains WHERE nom = 'Arena Mohamed Parcelles'`);
+  const arenaResas = arena
+    ? queryOne(db, 'SELECT COUNT(*) AS n FROM reservations WHERE terrain_id = ?', [arena.id])?.n
+    : 0;
 
   console.log('\n═══════════════ RÉCAP MOHAMED ═══════════════');
   for (const a of accounts) {
-    console.log(`  ${a.role.padEnd(22)} ${a.email}`);
+    console.log(`  ${String(a.role).padEnd(22)} ${a.email}`);
   }
-  console.log(`  notifications DB      ${notifs}`);
-  console.log(`  résas aujourd'hui T9  ${todayResa}`);
+  console.log(`  mot de passe           ${DEMO_PASSWORD}`);
+  console.log(`  téléphone partagé      ${MOHAMED_PHONE_RAW} (login par EMAIL)`);
+  console.log(`  notifications DB       ${notifs}`);
+  console.log(`  Arena résas            ${arenaResas} (terrain id=${arena?.id ?? '?'})`);
   console.log('═════════════════════════════════════════════\n');
 }
 
 async function main() {
   console.log('🌱 seed-mohamed : seed officiel enrichi…');
+  if (typeof seed !== 'function') {
+    throw new Error('seed.js n’exporte pas seed() — vérifie module.exports');
+  }
   await seed();
   await printSummary();
 

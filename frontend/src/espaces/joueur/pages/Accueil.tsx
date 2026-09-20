@@ -131,13 +131,13 @@ const Accueil = () => {
       setError(null);
       const filters: Record<string, string | number> = {};
 
+      // Géoloc uniquement sur « Près de toi ». Sinon (GPS hors SN) la liste restait vide.
       const useGeo =
-        (!geo.denied && geo.lat != null && geo.lng != null) || quickFiltre === "pres";
-      if (useGeo && geo.lat != null && geo.lng != null) {
+        quickFiltre === "pres" && !geo.denied && geo.lat != null && geo.lng != null;
+      if (useGeo) {
         filters.lat = geo.lat;
         filters.lng = geo.lng;
-        filters.distance_max =
-          quickFiltre === "pres" ? 3 : appliedFiltres.distance_max || 10;
+        filters.distance_max = 3;
       }
 
       if (appliedFiltres.quartier.trim()) filters.quartier = appliedFiltres.quartier.trim();

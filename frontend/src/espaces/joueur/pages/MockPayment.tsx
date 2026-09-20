@@ -14,11 +14,20 @@ const MockPayment = () => {
   const montant = Number(params.get('montant') || 0);
   const total = Number(params.get('total') || montant);
   const reste = Number(params.get('reste') || 0);
+  const kind = params.get('kind') || 'reservation';
 
   const complete = async (action: 'success' | 'cancel') => {
     setProcessing(true);
     try {
-      const result = await paiementsApi.simulateComplete({ reservation_id: reservationId, ref_command: refCommand, action });
+      const body: Record<string, unknown> = {
+        reservation_id: kind === 'reservation' ? reservationId : undefined,
+        abonnement_id: kind === 'abonnement' ? reservationId : undefined,
+        terrain_id: kind === 'achat' ? reservationId : undefined,
+        ref_command: refCommand,
+        action,
+        montant,
+      };
+      const result = await paiementsApi.simulateComplete(body as any);
       window.location.assign(result.redirect_url);
     } catch {
       toast.error("Le paiement n'a pas pu être confirmé. Veuillez réessayer.");
@@ -30,6 +39,13 @@ const MockPayment = () => {
     return <div className="page-container flex items-center justify-center">Lien de test invalide</div>;
   }
 
+  const titre =
+    kind === 'abonnement'
+      ? 'Paiement abonnement simulé'
+      : kind === 'achat'
+        ? 'Paiement achat définitif simulé'
+        : 'Paiement PayTech simulé';
+
   return (
     <div className="page-container flex items-center justify-center p-5">
       <div className="glass-card w-full max-w-md p-6">
@@ -37,11 +53,13 @@ const MockPayment = () => {
           MODE SIMULATION — Ne pas utiliser en production
         </div>
         <CreditCard className="mx-auto mt-6 h-14 w-14 text-primary" />
-        <h1 className="mt-3 text-center font-display text-2xl font-bold">Paiement PayTech simulé</h1>
+        <h1 className="mt-3 text-center font-display text-2xl font-bold">{titre}</h1>
         <div className="my-6 rounded-xl bg-muted p-4">
           <p className="font-semibold">{terrain}</p>
           <p className="mt-1 text-2xl font-bold text-primary">{montant.toLocaleString()} FCFA</p>
-          <p className="text-xs text-muted-foreground">Avance sur {total.toLocaleString()} FCFA - reste {reste.toLocaleString()} FCFA</p>
+          {kind === 'reservation' ? (
+            <p className="text-xs text-muted-foreground">Avance sur {total.toLocaleString()} FCFA - reste {reste.toLocaleString()} FCFA</p>
+          ) : null}
           <p className="mt-2 text-xs text-muted-foreground">Référence : {refCommand}</p>
         </div>
         <div className="space-y-3">

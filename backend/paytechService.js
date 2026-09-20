@@ -1,7 +1,9 @@
 const crypto = require('crypto');
 const { getDb, queryOne, runSql } = require('./database');
+const { targetProvider, methodePaiement } = require('./lib/paymentGateway');
+const { normalizeCanal } = require('./lib/paymentChannels');
+const paymentService = require('./services/payment');
 
-const PAYTECH_URL = process.env.PAYTECH_API_URL || 'https://paytech.sn/api/payment/request-payment';
 const MOCK_SECRET = 'terrainsn-paytech-local-mock';
 const POURCENTAGE_AVANCE_DEFAUT = 8;
 
@@ -16,14 +18,6 @@ function estModeMock() {
 
 function secretSignature() {
   return estModeMock() ? MOCK_SECRET : process.env.PAYTECH_API_SECRET;
-}
-
-function assertConfigured() {
-  if (!process.env.PAYTECH_API_KEY || !process.env.PAYTECH_API_SECRET) {
-    const error = new Error('PayTech n\'est pas configuré');
-    error.statusCode = 503;
-    throw error;
-  }
 }
 
 function calculerMontantAvance(prixChoisi, pourcentageAvance) {
@@ -44,10 +38,48 @@ function montantLienPaiement(reservation = {}) {
 }
 
 /**
- * Crée un paiement PayTech (ou simulation) avec avance recalculée
- * depuis terrains.pourcentage_avance × prixChoisi.
+ * Enregistre un paiement en_attente dès la création du lien (cycle de vie traçable).
+ * Remplace l'éventuel pending précédent pour la même réservation.
  */
-async function creerPaiement({ reservationId, terrainId, prixChoisi }) {
+function enregistrerPaiementPending(db, { reservationId, montant, reference, canal, provider }) {
+  const methode =
+    provider === 'paydunya' || provider === 'paytech' || provider === 'simulation'
+      ? provider
+      : methodePaiement();
+  const canalNorm = normalizeCanal(canal);
+  // Annule les pending précédents (relance lien) pour garder une seule ligne active.
+  runSql(
+    db,
+    `UPDATE paiements SET statut = 'annule'
+     WHERE reservation_id = ? AND statut = 'en_attente'`,
+    [reservationId],
+  );
+  runSql(
+    db,
+    `INSERT INTO paiements
+      (reservation_id, montant, methode, statut, reference_externe, reference_paytech, montant_acompte, canal_paiement)
+     VALUES (?, ?, ?, 'en_attente', ?, ?, ?, ?)`,
+    [reservationId, montant, methode, reference, reference, montant, canalNorm],
+  );
+  if (canalNorm) {
+    runSql(db, 'UPDATE reservations SET canal_paiement = ? WHERE id = ?', [canalNorm, reservationId]);
+  }
+}
+
+/**
+ * Crée un paiement via PaymentService :
+ * - PAYMENT_MODE=simulation → page locale
+ * - PAYMENT_PROVIDER=paydunya → sandbox PayDunya
+ * - PAYMENT_PROVIDER=paytech → production PayTech
+ */
+async function creerPaiement({
+  reservationId,
+  terrainId,
+  prixChoisi,
+  joueurNom,
+  joueurTelephone,
+  preferredChannel,
+}) {
   const db = await getDb();
   const terrain = queryOne(
     db,
@@ -63,22 +95,24 @@ async function creerPaiement({ reservationId, terrainId, prixChoisi }) {
   const prix = Number(prixChoisi || 0);
   const montantAvance = calculerMontantAvance(prix, terrain.pourcentage_avance);
   const montantRestant = Math.max(0, prix - montantAvance);
+  const canal = normalizeCanal(preferredChannel);
 
-  // Synchroniser les colonnes réservation (sans renommer montant_acompte / acompte legacy)
   runSql(
     db,
     `UPDATE reservations SET
       montant_avance = ?,
       montant_restant = ?,
       acompte = ?,
-      reste_a_payer = ?
+      reste_a_payer = ?,
+      canal_paiement = COALESCE(?, canal_paiement)
      WHERE id = ?`,
-    [montantAvance, montantRestant, montantAvance, montantRestant, reservationId]
+    [montantAvance, montantRestant, montantAvance, montantRestant, canal, reservationId]
   );
 
   const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
   const refCommand = `TF-${reservationId}-${Date.now()}`;
 
+  let result;
   if (estModeMock() || paymentMode() === 'simulation') {
     const params = new URLSearchParams({
       id: String(reservationId),
@@ -87,57 +121,47 @@ async function creerPaiement({ reservationId, terrainId, prixChoisi }) {
       montant: String(montantAvance),
       total: String(prix),
       reste: String(montantRestant),
+      ...(canal ? { canal } : {}),
     });
-    return {
+    result = {
       success: true,
       redirectUrl: `${domain}/simulation/paiement?${params}`,
       redirect_url: `${domain}/simulation/paiement?${params}`,
       reference: refCommand,
       montantAvance,
       montantRestant,
+      provider: 'simulation',
+      canal_paiement: canal,
     };
+  } else {
+    result = await paymentService.createCheckout({
+      reservationId,
+      terrain,
+      montantAvance,
+      montantRestant,
+      prix,
+      refCommand,
+      joueurNom,
+      joueurTelephone,
+      preferredChannel: canal,
+      kind: 'reservation',
+    });
+    result.canal_paiement = canal;
   }
 
-  assertConfigured();
-  const response = await fetch(PAYTECH_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      API_KEY: process.env.PAYTECH_API_KEY,
-      API_SECRET: process.env.PAYTECH_API_SECRET,
-    },
-    body: JSON.stringify({
-      item_name: `Avance réservation — ${terrain.nom}`,
-      item_price: montantAvance,
-      currency: 'XOF',
-      ref_command: refCommand,
-      command_name: `Réservation TerrainSN #${reservationId}`,
-      env: process.env.NODE_ENV === 'production' ? 'prod' : (process.env.PAYTECH_ENV || 'test'),
-      ipn_url: `${domain}/webhook/paytech`,
-      success_url: `${domain}/reservation/succes?id=${reservationId}`,
-      cancel_url: `${domain}/reservation/annule`,
-      custom_field: JSON.stringify({ reservation_id: reservationId }),
-    }),
+  enregistrerPaiementPending(db, {
+    reservationId,
+    montant: montantAvance,
+    reference: result.reference || refCommand,
+    canal,
+    provider: result.provider,
   });
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || (!payload.redirect_url && !payload.redirectUrl)) {
-    throw new Error(payload.message || 'Impossible de créer le paiement PayTech');
-  }
-
-  const redirectUrl = payload.redirect_url || payload.redirectUrl;
-  return {
-    success: true,
-    redirectUrl,
-    redirect_url: redirectUrl,
-    reference: payload.ref_command || refCommand,
-    montantAvance,
-    montantRestant,
-  };
+  return result;
 }
 
 /** Compat : accepte l'objet réservation historique. */
-async function creerLienPaiement(reservation) {
+async function creerLienPaiement(reservation, options = {}) {
   const prixChoisi = Number(
     reservation.prix_total || reservation.montant || 0
   );
@@ -145,6 +169,9 @@ async function creerLienPaiement(reservation) {
     reservationId: reservation.id,
     terrainId: reservation.terrain_id,
     prixChoisi,
+    joueurNom: reservation.joueur_nom,
+    joueurTelephone: reservation.joueur_telephone,
+    preferredChannel: options.preferredChannel || reservation.canal_paiement || options.methode,
   });
 }
 
@@ -187,51 +214,47 @@ function decoderCustomField(raw) {
 }
 
 function verifierIpnPaytech(payload = {}, headers = {}) {
-  if (estModeMock()) {
-    const refCommand = payload.ref_command || payload.refCommand;
-    const headerHash = headers['x-paytech-signature'] || headers['x-paytech-hash'] || headers.hash;
-    if (verifierHash(refCommand, headerHash)) return true;
-  }
-
-  const apiKey = process.env.PAYTECH_API_KEY || '';
-  const apiSecret = process.env.PAYTECH_API_SECRET || '';
-  if (!apiKey || !apiSecret) return false;
-
-  const hmacCompute = payload.hmac_compute;
-  if (hmacCompute) {
-    const amount = payload.final_item_price ?? payload.item_price ?? payload.item_price_xof;
-    const refCommand = payload.ref_command || payload.refCommand;
-    if (amount == null || !refCommand) return false;
-    const message = `${amount}|${refCommand}|${apiKey}`;
-    const expectedHmac = crypto.createHmac('sha256', apiSecret).update(message).digest('hex');
-    return timingSafeEqualHex(expectedHmac, hmacCompute);
-  }
-
-  const expectedKey = crypto.createHash('sha256').update(apiKey).digest('hex');
-  const expectedSecret = crypto.createHash('sha256').update(apiSecret).digest('hex');
-  return (
-    timingSafeEqualHex(expectedKey, payload.api_key_sha256)
-    && timingSafeEqualHex(expectedSecret, payload.api_secret_sha256)
-  );
+  // Délègue à l'adaptateur PayTech (HMAC-SHA256 / SHA256 clés) — cible prod.
+  return paymentService.paytechAdapter.verifyWebhook(payload, headers);
 }
 
 async function rembourser(reference) {
   if (estModeMock()) {
     console.log(`[PAYTECH MOCK] Remboursement simulé : ${reference}`);
-    return;
+    return { success: true, mock: true, reference };
   }
-  assertConfigured();
-  const url = process.env.PAYTECH_REFUND_URL || 'https://paytech.sn/api/payment/refund-payment';
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      API_KEY: process.env.PAYTECH_API_KEY,
-      API_SECRET: process.env.PAYTECH_API_SECRET,
-    },
-    body: JSON.stringify({ ref_command: reference }),
+  return paymentService.getAdapter().refund(reference);
+}
+
+function payoutEnabled() {
+  if (estModeMock()) return true;
+  return paymentService.getAdapter().isPayoutEnabled();
+}
+
+/**
+ * Sortie d'argent vers le Wave / OM du gérant (compte TerrainSN uniquement).
+ * Mock : succès simulé. Prod PayTech : PAYTECH_PAYOUT_ENABLED=true.
+ * Sandbox PayDunya : PAYDUNYA_PAYOUT_ENABLED=true.
+ */
+async function ordonnerPayout({ numero, montant, canal, reservationId, motif = 'reversement_gerant' }) {
+  const amount = Math.round(Number(montant || 0));
+  if (!numero || amount <= 0) {
+    const error = new Error('Payout invalide : numéro ou montant manquant');
+    error.code = 'PAYOUT_INVALID';
+    throw error;
+  }
+  if (estModeMock()) {
+    const ref = `PO-MOCK-${reservationId || 'x'}-${Date.now()}`;
+    console.log(`[PAYTECH MOCK] Payout ${amount} FCFA via ${canal || 'wave'} vers ${numero} (${motif}) ref=${ref}`);
+    return { success: true, mock: true, ref_paytech: ref, reference: ref, canal, numero, montant: amount };
+  }
+  return paymentService.getAdapter().payout({
+    numero,
+    montant: amount,
+    canal,
+    reservationId,
+    motif,
   });
-  if (!response.ok) throw new Error('Le remboursement PayTech a échoué');
 }
 
 module.exports = {
@@ -244,6 +267,13 @@ module.exports = {
   decoderCustomField,
   signerReference,
   rembourser,
+  ordonnerPayout,
+  payoutEnabled,
   estModeMock,
   paymentMode,
+  /** Exposition pour healthcheck / bascule provider */
+  getPaymentAdapter: () => paymentService.getAdapter(),
+  describePayment: () => paymentService.describe(),
+  targetProvider,
+  methodePaiement,
 };

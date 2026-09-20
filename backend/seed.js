@@ -1,31 +1,41 @@
-const { getDb, runSql, saveDb } = require('./database');
+const { getDb, saveDb } = require('./database');
 const bcrypt = require('bcryptjs');
+const {
+  ensureMohamedAccounts,
+  DEMO_PASSWORD,
+  MOHAMED_PHONE_RAW,
+  MOHAMED_PHONE_STORE,
+} = require('./scripts/ensure-mohamed-accounts');
 
 async function seed() {
   console.log('🌱 Démarrage du seeding...');
   const db = await getDb();
 
   // Vider les tables dans l'ordre (FK)
-  const tables = ['audit_logs', 'notifications', 'avis', 'matchs', 'paiements', 'reservations', 'creneaux', 'blocages_creneaux', 'horaires', 'employes', 'terrains', 'proprietaires', 'users'];
+  const tables = ['audit_logs', 'notifications', 'avis', 'matchs', 'payouts', 'demandes_retrait', 'dus', 'contrat_avenants', 'demandes_changement_numero', 'tests_canal_100', 'paiements', 'reservations', 'creneaux', 'blocages_creneaux', 'horaires', 'employes', 'terrains', 'proprietaires', 'users'];
   for (const t of tables) {
     db.run(`DELETE FROM ${t}`);
   }
 
-  const hash = bcrypt.hashSync('password123', 10);
+  const hash = bcrypt.hashSync(DEMO_PASSWORD, 10);
 
   // --- USERS (joueurs + superadmin) ---
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Abdou Sow', 'abdou@email.com', hash, '+221 77 123 45 67', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Fatou Diallo', 'fatou@email.com', hash, '+221 77 234 56 78', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Moussa Ba', 'moussa@email.com', hash, '+221 77 345 67 89', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Awa Ndiaye', 'awa@email.com', hash, '+221 77 456 78 90', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Ibrahima Fall', 'ibrahima@email.com', hash, '+221 77 567 89 01', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Cheikh Mbaye', 'cheikh@email.com', hash, '+221 77 678 90 12', 'joueur']);
-  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active) VALUES (?, ?, ?, ?, ?, 1)', ['Super Admin', 'admin@terrainsn.sn', hash, '+221 70 000 00 00', 'superadmin']);
+  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, 1, 1)', ['Abdou Sow', 'abdou@email.com', hash, '+221 77 123 45 67', 'joueur']);
+  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, 1, 1)', ['Fatou Diallo', 'fatou@email.com', hash, '+221 77 234 56 78', 'joueur']);
+  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, 1, 1)', ['Moussa Ba', 'moussa@email.com', hash, '+221 77 345 67 89', 'joueur']);
+  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, 1, 1)', ['Awa Ndiaye', 'awa@email.com', hash, '+221 77 456 78 90', 'joueur']);
+  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, 1, 1)', ['Ibrahima Fall', 'ibrahima@email.com', hash, '+221 77 567 89 01', 'joueur']);
+  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, 1, 1)', ['Cheikh Mbaye', 'cheikh@email.com', hash, '+221 77 678 90 12', 'joueur']);
+  db.run('INSERT INTO users (nom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, 1, 1)', ['Super Admin', 'admin@terrainsn.sn', hash, '+221 70 000 00 00', 'superadmin']);
+  // Comptes Mohamed (email obligatoire : même téléphone multi-rôles)
+  db.run('INSERT INTO users (nom, prenom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, ?, 1, 1)', ['Mohamed Coulibaly', 'Mohamed', 'mohamed.joueur@gmail.com', hash, MOHAMED_PHONE_STORE, 'joueur']);
+  db.run('INSERT INTO users (nom, prenom, email, password_hash, telephone, role, is_active, telephone_verified) VALUES (?, ?, ?, ?, ?, ?, 1, 1)', ['Mohamed Admin', 'Mohamed', 'mohamed.admin@gmail.com', hash, MOHAMED_PHONE_STORE, 'superadmin']);
 
   // --- PROPRIETAIRES ---
   db.run("INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['M. Diop', 'diop@terrainsn.sn', hash, '+221 78 100 00 01', 'premium']);
   db.run("INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['Mme Fall', 'fall@terrainsn.sn', hash, '+221 78 200 00 02', 'free']);
   db.run("INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['M. Ndiaye', 'ndiaye@terrainsn.sn', hash, '+221 78 300 00 03', 'free']);
+  db.run("INSERT INTO proprietaires (nom, prenom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, ?, 'actif')", ['Mohamed Coulibaly', 'Mohamed', 'mohamed.proprietaire@gmail.com', hash, MOHAMED_PHONE_STORE, 'premium']);
 
   // --- TERRAINS ---
   const terrainsData = [
@@ -54,7 +64,8 @@ async function seed() {
     [1, 4, 'Amadou Niang', 'niang@terrainsn.sn', hash, '+221 77 333 44 55', '+221773334455', 0],
     [2, 3, 'Aminata Sy', 'aminata@terrainsn.sn', hash, '+221 77 444 55 66', '+221774445566', 1],
     [3, 6, 'Pape Gueye', 'gueye@terrainsn.sn', hash, '+221 77 555 66 77', '+221775556677', 1],
-    [1, 1, 'Mohamed Coulibaly', 'mohamed.gerant@gmail.com', hash, '+221 77 826 12 25', '+221778261225', 1],
+    // Gérant Mohamed — rattachement Arena finalisé par ensureMohamedAccounts
+    [4, 1, 'Mohamed Coulibaly', 'mohamed.gerant@gmail.com', hash, MOHAMED_PHONE_STORE, MOHAMED_PHONE_RAW, 1],
   ];
   for (const e of employesData) {
     db.run('INSERT INTO employes (proprietaire_id, terrain_id, nom, email, password_hash, telephone, whatsapp_number, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', e);
@@ -139,7 +150,24 @@ async function seed() {
   db.run("INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu) VALUES (?, ?, ?, 'whatsapp', ?, ?)", ['user', 5, 'confirmation', 'Votre réservation est en attente de validation.', 0]);
 
   saveDb();
+
+  // Arena Mohamed + contrat + résas TF-MOH-* (upsert sur les comptes déjà insérés)
+  await ensureMohamedAccounts({ db, silent: false });
+
   console.log('✅ Seeding terminé avec succès !');
+  console.log(`   Comptes Mohamed : email + mdp ${DEMO_PASSWORD} (ne pas se connecter au téléphone partagé ${MOHAMED_PHONE_RAW})`);
 }
 
-seed().catch(console.error);
+module.exports = {
+  seed,
+  DEMO_PASSWORD,
+  MOHAMED_PHONE_RAW,
+  MOHAMED_PHONE_STORE,
+};
+
+if (require.main === module) {
+  seed().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

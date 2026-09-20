@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { BarChart2, Download, FlaskConical, RefreshCw, ShoppingCart } from "lucide-react";
 import { toast } from "sonner";
 import { superAdminApi } from "@/services/superAdminApi";
@@ -26,10 +26,12 @@ const TABS = [
 export default function Abonnements() {
   useSaCrumbs([{ label: "Abonnements", to: "/backoffice/superadmin/abonnements" }]);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [terrains, setTerrains] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [defaults, setDefaults] = useState<Record<string, any>>({});
   const [history, setHistory] = useState<any[]>([]);
+  const [echeances, setEcheances] = useState<any[]>([]);
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("essai");
   const [filtre, setFiltre] = useState<"tous" | ModeRevenu>("tous");
   const [statutFiltre, setStatutFiltre] = useState<"tous" | "actif" | "expire" | "suspendu">("tous");
@@ -39,6 +41,7 @@ export default function Abonnements() {
   const [gotoContrat, setGotoContrat] = useState(true);
   const [form, setForm] = useState<Record<string, any>>({});
   const [saving, setSaving] = useState(false);
+  const [payingId, setPayingId] = useState<number | null>(null);
 
   const load = () =>
     Promise.all([
@@ -46,16 +49,29 @@ export default function Abonnements() {
       superAdminApi.users(),
       superAdminApi.modeRevenuDefaults(),
       superAdminApi.modeRevenuHistory(),
-    ]).then(([t, u, d, h]) => {
+      superAdminApi.abonnements(),
+    ]).then(([t, u, d, h, abo]) => {
       setTerrains(Array.isArray(t) ? t : []);
       setUsers(Array.isArray(u) ? u : []);
       setDefaults(d || {});
       setHistory(Array.isArray(h) ? h : []);
+      const list = Array.isArray(abo) ? abo : abo?.abonnements || [];
+      setEcheances(list);
     });
 
   useEffect(() => {
     load().catch(() => toast.error("Impossible de charger les abonnements"));
   }, []);
+
+  useEffect(() => {
+    const status = searchParams.get("paiement");
+    if (status === "ok") {
+      toast.success("Paiement confirmé — abonnement mis à jour");
+      load().catch(() => undefined);
+    } else if (status === "annule") {
+      toast.error("Paiement annulé ou échoué");
+    }
+  }, [searchParams]);
 
   const rows = useMemo(() => {
     return terrains.map((t) => {
@@ -65,6 +81,11 @@ export default function Abonnements() {
       return { t, mode, proprio, gerant };
     });
   }, [terrains, users]);
+
+  const pendingEcheances = useMemo(
+    () => echeances.filter((a) => a.statut !== "paye"),
+    [echeances],
+  );
 
   const counts = useMemo(() => ({
     essai: rows.filter((r) => r.mode === "essai").length,
@@ -123,6 +144,45 @@ export default function Abonnements() {
     }
   }
 
+  async function payerViaGateway(abonnementId: number) {
+    setPayingId(abonnementId);
+    try {
+      const result = await superAdminApi.checkoutAbonnement(abonnementId);
+      const url = result.redirect_url || result.lien_paiement;
+      if (!url) throw new Error("Lien de paiement indisponible");
+      window.location.assign(url);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Checkout impossible");
+      setPayingId(null);
+    }
+  }
+
+  async function marquerPayeManuel(abonnementId: number) {
+    setPayingId(abonnementId);
+    try {
+      await superAdminApi.payerAbonnement(abonnementId);
+      toast.success("Abonnement marqué payé (manuel)");
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Marquage impossible");
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function checkoutAchat(terrainId: number, montant?: number) {
+    setPayingId(terrainId);
+    try {
+      const result = await superAdminApi.checkoutAchatDefinitif(terrainId, { montant });
+      const url = result.redirect_url || result.lien_paiement;
+      if (!url) throw new Error("Lien de paiement indisponible");
+      window.location.assign(url);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Checkout impossible");
+      setPayingId(null);
+    }
+  }
+
   function exportCsv() {
     const lines = ["Date;Terrain;Ancien;Nouveau;Auteur"];
     history.forEach((h) => {
@@ -160,6 +220,51 @@ export default function Abonnements() {
           </button>
         ))}
       </div>
+
+      {pendingEcheances.length > 0 ? (
+        <SaCard>
+          <SaCardHeader>
+            <p className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>
+              Échéances à encaisser ({pendingEcheances.length})
+            </p>
+          </SaCardHeader>
+          <SaCardBody>
+            <div className="space-y-3">
+              {pendingEcheances.slice(0, 12).map((a) => (
+                <div
+                  key={a.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--sa-radius-md)] p-3"
+                  style={{ border: "1px solid var(--sa-border)" }}
+                >
+                  <div>
+                    <p className="font-semibold text-[14px]">{a.terrain_nom}</p>
+                    <p className="text-[12px]" style={{ color: "var(--sa-text-3)" }}>
+                      {fcfa(Number(a.montant || 0))} · échéance {String(a.date_echeance || "").slice(0, 10)} · {a.etat_operationnel || a.statut}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <SaButton
+                      size="sm"
+                      loading={payingId === a.id}
+                      onClick={() => void payerViaGateway(a.id)}
+                    >
+                      Payer via passerelle
+                    </SaButton>
+                    <SaButton
+                      size="sm"
+                      variant="secondary"
+                      loading={payingId === a.id}
+                      onClick={() => void marquerPayeManuel(a.id)}
+                    >
+                      Marquer payé
+                    </SaButton>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SaCardBody>
+        </SaCard>
+      ) : null}
 
       <SaCard>
         <SaCardHeader>
@@ -201,7 +306,7 @@ export default function Abonnements() {
             </div>
           ) : null}
           {tab === "achat" ? (
-            <p className="text-[13px]" style={{ color: "var(--sa-text-3)" }}>Ce mode désactive les commissions futures (logique de calcul : Mohamed). Le montant négocié est enregistré ici comme référence.</p>
+            <p className="text-[13px]" style={{ color: "var(--sa-text-3)" }}>Ce mode désactive les commissions futures. Utilisez « Payer achat (passerelle) » sur un terrain en mode achat pour encaisser le montant négocié.</p>
           ) : null}
           <p className="sa-input-hint mt-3">Ces valeurs sont appliquées à la création. Chaque terrain peut avoir ses propres valeurs.</p>
           <SaButton className="mt-3" loading={saving} onClick={() => void saveDefaults()}>Enregistrer les paramètres par défaut</SaButton>
@@ -256,6 +361,9 @@ export default function Abonnements() {
                       <SaDropdown items={[
                         { label: "Changer de mode", onClick: () => openChange(r) },
                         { label: "Configurer le contrat", onClick: () => navigate(`/backoffice/superadmin/terrains/${r.t.id}?tab=contrat`) },
+                        ...(r.mode === "achat" && !Number(r.t.achat_definitif_paye)
+                          ? [{ label: "Payer achat (passerelle)", onClick: () => void checkoutAchat(r.t.id, Number(r.t.achat_definitif_montant || 0)) }]
+                          : []),
                       ]} />
                     </td>
                   </tr>
@@ -320,7 +428,7 @@ export default function Abonnements() {
             {nextMode === "achat" ? (
               <label><span className="sa-input-label">Montant négocié</span><input className="sa-input" type="number" value={form.achat_definitif_montant || 0} onChange={(e) => setForm({ ...form, achat_definitif_montant: Number(e.target.value) })} /></label>
             ) : null}
-            <p className="text-[12px]" style={{ color: "var(--sa-text-muted)" }}>Ce changement s&apos;applique immédiatement. L&apos;ancien mode est archivé. Le calcul PayTech n&apos;est pas modifié ici.</p>
+            <p className="text-[12px]" style={{ color: "var(--sa-text-muted)" }}>Ce changement s&apos;applique immédiatement. L&apos;encaissement passe par la passerelle (checkout) ou un marquage manuel.</p>
             <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={gotoContrat} onChange={(e) => setGotoContrat(e.target.checked)} /> Aller au contrat pour ajuster la facturation</label>
           </div>
         ) : null}

@@ -7,6 +7,12 @@ const dbPath = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.re
 let db = null;
 let loadedMtime = 0;
 let opening = null;
+/** Seam tests d'intégration : force getDb() à échouer (panne BDD). */
+let forceFailForTests = false;
+
+function setDbForceFailForTests(enabled) {
+  forceFailForTests = Boolean(enabled);
+}
 
 function fileMtime() {
   try {
@@ -37,6 +43,13 @@ async function openDatabase() {
 }
 
 async function getDb() {
+  if (forceFailForTests) {
+    const error = new Error('Base de données temporairement inaccessible');
+    error.code = 'DB_UNAVAILABLE';
+    error.statusCode = 500;
+    throw error;
+  }
+
   const currentMtime = fileMtime();
   if (db && currentMtime === loadedMtime) return db;
 
@@ -275,6 +288,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'reservations', 'checkout_at', 'DATETIME');
   addColumnIfMissing(database, 'reservations', 'confirme_at', 'DATETIME');
   addColumnIfMissing(database, 'reservations', 'mode_paiement', "TEXT DEFAULT 'en_ligne'");
+  addColumnIfMissing(database, 'reservations', 'canal_paiement', 'TEXT');
   addColumnIfMissing(database, 'reservations', 'confirme_manuellement_par', 'INTEGER');
   addColumnIfMissing(database, 'reservations', 'confirme_manuellement_at', 'DATETIME');
   addColumnIfMissing(database, 'reservations', 'note_gerant', 'TEXT');
@@ -284,6 +298,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'paiements', 'montant_commission', 'INTEGER');
   addColumnIfMissing(database, 'paiements', 'montant_reverse', 'INTEGER');
   addColumnIfMissing(database, 'paiements', 'statut_reversement', "TEXT DEFAULT 'en_attente'");
+  addColumnIfMissing(database, 'paiements', 'canal_paiement', 'TEXT');
   addColumnIfMissing(database, 'terrains', 'prix_moitie', 'DECIMAL(10, 2)');
   addColumnIfMissing(database, 'terrains', 'prix_entier', 'DECIMAL(10, 2)');
   addColumnIfMissing(database, 'terrains', 'montant_acompte', 'DECIMAL(10, 2) DEFAULT 5000');
@@ -468,6 +483,8 @@ function initDb(database) {
   database.run('CREATE INDEX IF NOT EXISTS idx_reversements_gerant ON reversements(gerant_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_reversements_terrain ON reversements(terrain_id)');
 
+  initContratPaiementSchema(database);
+
   database.run(`CREATE TABLE IF NOT EXISTS abonnements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     terrain_id INTEGER NOT NULL,
@@ -478,8 +495,14 @@ function initDb(database) {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (terrain_id) REFERENCES terrains(id)
   )`);
+  addColumnIfMissing(database, 'abonnements', 'reference_paytech', 'TEXT');
+  addColumnIfMissing(database, 'abonnements', 'lien_paiement', 'TEXT');
+  addColumnIfMissing(database, 'abonnements', 'canal_paiement', 'TEXT');
+  addColumnIfMissing(database, 'terrains', 'achat_reference_paytech', 'TEXT');
+  addColumnIfMissing(database, 'terrains', 'achat_lien_paiement', 'TEXT');
   database.run('CREATE INDEX IF NOT EXISTS idx_abonnements_terrain ON abonnements(terrain_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_abonnements_echeance ON abonnements(date_echeance, statut)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_abonnements_reference_paytech ON abonnements(reference_paytech)');
 
   database.run(`CREATE TABLE IF NOT EXISTS terrain_photos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -688,6 +711,33 @@ function initDb(database) {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // 10a. File de rejeu WhatsApp (échecs réseau OpenWA — paiement reste valide)
+  database.run(`CREATE TABLE IF NOT EXISTS notification_retry_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telephone VARCHAR(32) NOT NULL,
+    message TEXT NOT NULL,
+    session_key VARCHAR(64) DEFAULT 'platform',
+    type VARCHAR(50) DEFAULT 'message',
+    destinataire_type VARCHAR(50),
+    destinataire_id INTEGER,
+    erreur TEXT,
+    http_status INTEGER,
+    idempotency_key VARCHAR(191),
+    statut VARCHAR(20) DEFAULT 'pending',
+    tentatives INTEGER DEFAULT 0,
+    max_tentatives INTEGER DEFAULT 5,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run(
+    `CREATE INDEX IF NOT EXISTS idx_notif_retry_pending
+     ON notification_retry_queue(statut, id)`,
+  );
+  database.run(
+    `CREATE INDEX IF NOT EXISTS idx_notif_retry_idem
+     ON notification_retry_queue(idempotency_key)`,
+  );
+
   // 10b. Web Push subscriptions
   database.run(`CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -786,6 +836,169 @@ function migrateJsonCommodites(database) {
   }
 }
 
+/**
+ * CDC Paiements v1.2 — contrat superadmin, ledger dû, payouts, file retraits.
+ * Aucune constante métier ici : le moteur lit ces colonnes.
+ */
+function initContratPaiementSchema(database) {
+  addColumnIfMissing(database, 'terrains', 'remboursement_autorise', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'payout_mode', "TEXT DEFAULT 'retrait'");
+  addColumnIfMissing(database, 'terrains', 'payout_frais_politique', "TEXT DEFAULT 'gerant'");
+  addColumnIfMissing(database, 'terrains', 'frais_payout_pct_gerant', 'REAL DEFAULT 1');
+  addColumnIfMissing(database, 'terrains', 'frais_payout_pct_plateforme', 'REAL DEFAULT 1');
+  addColumnIfMissing(database, 'terrains', 'wave_numero', 'TEXT');
+  addColumnIfMissing(database, 'terrains', 'wave_statut', "TEXT DEFAULT 'absent'");
+  addColumnIfMissing(database, 'terrains', 'wave_verifie_at', 'DATETIME');
+  addColumnIfMissing(database, 'terrains', 'om_numero', 'TEXT');
+  addColumnIfMissing(database, 'terrains', 'om_statut', "TEXT DEFAULT 'absent'");
+  addColumnIfMissing(database, 'terrains', 'om_verifie_at', 'DATETIME');
+  addColumnIfMissing(database, 'terrains', 'numeros_identiques_whatsapp', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'terrains', 'canal_reversement', "TEXT DEFAULT 'wave'");
+  addColumnIfMissing(database, 'terrains', 'gerant_id', 'INTEGER');
+  addColumnIfMissing(database, 'terrains', 'contrat_version', 'INTEGER DEFAULT 1');
+  addColumnIfMissing(database, 'terrains', 'contrat_signe_at', 'DATETIME');
+  addColumnIfMissing(database, 'terrains', 'paiement_production', 'INTEGER DEFAULT 0');
+
+  database.run(`UPDATE terrains
+    SET remboursement_autorise = 1
+    WHERE COALESCE(delai_remboursement_heures, 0) > 0
+      AND COALESCE(remboursement_autorise, 0) = 0
+      AND contrat_signe_at IS NULL`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS contrat_avenants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    contrat_version INTEGER NOT NULL,
+    avant TEXT,
+    apres TEXT,
+    auteur_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_contrat_avenants_terrain ON contrat_avenants(terrain_id, contrat_version)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS dus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id INTEGER NOT NULL UNIQUE,
+    terrain_id INTEGER NOT NULL,
+    gerant_id INTEGER,
+    avance INTEGER NOT NULL,
+    commission INTEGER NOT NULL,
+    base_gerant INTEGER NOT NULL,
+    frais_gerant INTEGER NOT NULL DEFAULT 0,
+    frais_plateforme INTEGER NOT NULL DEFAULT 0,
+    du_gerant INTEGER NOT NULL,
+    payout_mode TEXT NOT NULL,
+    payout_frais_politique TEXT,
+    wave_numero TEXT,
+    om_numero TEXT,
+    canal_reversement TEXT,
+    contrat_version INTEGER,
+    statut TEXT NOT NULL DEFAULT 'en_fenetre',
+    fenetre_expire_at DATETIME,
+    payable_at DATETIME,
+    tentatives INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    demande_retrait_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_dus_terrain_statut ON dus(terrain_id, statut)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_dus_gerant ON dus(gerant_id, statut)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_dus_fenetre ON dus(statut, fenetre_expire_at)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS payouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    du_id INTEGER NOT NULL,
+    reservation_id INTEGER NOT NULL,
+    terrain_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    montant_net INTEGER NOT NULL,
+    frais_gerant INTEGER NOT NULL DEFAULT 0,
+    frais_plateforme INTEGER NOT NULL DEFAULT 0,
+    canal TEXT,
+    numero TEXT,
+    statut TEXT NOT NULL DEFAULT 'en_cours',
+    tentatives INTEGER NOT NULL DEFAULT 1,
+    ref_paytech TEXT,
+    ref_manuelle TEXT,
+    demande_retrait_id INTEGER,
+    demande_par INTEGER,
+    traite_par INTEGER,
+    motif_rejet TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    envoye_at DATETIME,
+    FOREIGN KEY (du_id) REFERENCES dus(id),
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_payouts_du ON payouts(du_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_payouts_reservation ON payouts(reservation_id, statut)');
+  try {
+    database.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payouts_reservation_envoye
+      ON payouts(reservation_id) WHERE statut = 'envoye'`);
+  } catch (err) {
+    console.warn('Index idempotence payouts non créé:', err.message);
+  }
+
+  database.run(`CREATE TABLE IF NOT EXISTS demandes_retrait (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    gerant_id INTEGER NOT NULL,
+    montant INTEGER NOT NULL,
+    wave_numero TEXT,
+    om_numero TEXT,
+    whatsapp_number TEXT,
+    statut TEXT NOT NULL DEFAULT 'en_attente',
+    demande_par INTEGER,
+    traite_par INTEGER,
+    ref_manuelle TEXT,
+    motif_rejet TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    traite_at DATETIME,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_demandes_retrait_statut ON demandes_retrait(statut, created_at)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_demandes_retrait_terrain ON demandes_retrait(terrain_id, statut)');
+
+  addColumnIfMissing(database, 'payouts', 'montant_brut', 'INTEGER');
+  addColumnIfMissing(database, 'payouts', 'montant_dette_compensee', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'payouts', 'compensation_json', 'TEXT');
+  addColumnIfMissing(database, 'payouts', 'disburse_token', 'TEXT');
+  addColumnIfMissing(database, 'payouts', 'provider', 'TEXT');
+  addColumnIfMissing(database, 'demandes_retrait', 'montant_brut', 'INTEGER');
+  addColumnIfMissing(database, 'demandes_retrait', 'montant_dette_compensee', 'INTEGER DEFAULT 0');
+
+  database.run(`CREATE TABLE IF NOT EXISTS demandes_changement_numero (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    gerant_id INTEGER NOT NULL,
+    wave_numero TEXT,
+    om_numero TEXT,
+    numeros_identiques_whatsapp INTEGER DEFAULT 0,
+    statut TEXT NOT NULL DEFAULT 'en_attente',
+    motif TEXT,
+    traite_par INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    traite_at DATETIME,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_demandes_numero_statut ON demandes_changement_numero(statut)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS tests_canal_100 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    canal TEXT NOT NULL,
+    numero TEXT,
+    montant INTEGER NOT NULL DEFAULT 100,
+    statut TEXT NOT NULL DEFAULT 'envoye',
+    ref_paytech TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+}
+
 function addColumnIfMissing(database, table, column, definition) {
   const columns = queryAll(database, `PRAGMA table_info(${table})`);
   if (!columns.some((item) => item.name === column)) {
@@ -856,4 +1069,12 @@ function transaction(database, callback) {
   }
 }
 
-module.exports = { getDb, saveDb, queryAll, queryOne, runSql, transaction };
+module.exports = {
+  getDb,
+  saveDb,
+  queryAll,
+  queryOne,
+  runSql,
+  transaction,
+  setDbForceFailForTests,
+};

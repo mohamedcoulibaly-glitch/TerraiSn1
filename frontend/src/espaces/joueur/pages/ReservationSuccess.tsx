@@ -1,33 +1,81 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Check, Download } from "lucide-react";
+import { Check, Download, Loader2, XCircle } from "lucide-react";
 import { reservationsApi } from "@/lib/api";
 
 const API_URL = import.meta.env.VITE_API_URL || "/api";
+
+type PaymentPhase = "loading" | "pending" | "confirmed" | "cancelled" | "error";
 
 const ReservationSuccess = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [reservation, setReservation] = useState<any>(null);
   const [error, setError] = useState("");
-  const [showAnim, setShowAnim] = useState(true);
+  const [phase, setPhase] = useState<PaymentPhase>("loading");
+  const [showAnim, setShowAnim] = useState(false);
   const [qrFetched, setQrFetched] = useState<string | null>(null);
 
   useEffect(() => {
     const id = params.get("id") || localStorage.getItem("terrainsn_last_reservation_id");
-    if (!id) return setError("Réservation introuvable");
-    reservationsApi.get(id).then(setReservation).catch((err) => setError(err.message));
+    if (!id) {
+      setError("Réservation introuvable");
+      setPhase("error");
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 20;
+
+    const load = async () => {
+      try {
+        const data = await reservationsApi.get(id);
+        if (cancelled) return;
+        setReservation(data);
+        setError("");
+
+        if (data?.statut === "confirme") {
+          setPhase("confirmed");
+          setShowAnim(true);
+          return;
+        }
+        if (data?.statut === "annule") {
+          setPhase("cancelled");
+          return;
+        }
+        if (data?.statut === "en_attente" && attempts < maxAttempts) {
+          setPhase("pending");
+          attempts += 1;
+          setTimeout(load, 1500);
+          return;
+        }
+        // Timeout IPN : reste en attente, pas de faux "confirmé"
+        setPhase("pending");
+      } catch (err) {
+        if (!cancelled) {
+          setError((err as Error).message || "Réservation introuvable");
+          setPhase("error");
+        }
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, [params]);
 
   useEffect(() => {
+    if (!showAnim) return;
     const t = setTimeout(() => setShowAnim(false), 1500);
     return () => clearTimeout(t);
-  }, []);
+  }, [showAnim]);
 
   useEffect(() => {
     let objectUrl: string | null = null;
     const loadQr = async () => {
-      if (!reservation?.id || !reservation?.code_reservation) {
+      if (!reservation?.id || !reservation?.code_reservation || phase !== "confirmed") {
         setQrFetched(null);
         return;
       }
@@ -48,21 +96,67 @@ const ReservationSuccess = () => {
     return () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [reservation?.id, reservation?.code_reservation]);
+  }, [reservation?.id, reservation?.code_reservation, phase]);
 
-  if (error) {
+  if (phase === "error" || error) {
     return (
       <div className="page-container flex items-center justify-center">
-        <p className="text-sm text-[var(--color-text-secondary)]">{error}</p>
+        <p className="text-sm text-[var(--color-text-secondary)]">{error || "Erreur"}</p>
       </div>
     );
   }
 
-  if (!reservation) {
+  if (phase === "loading" || !reservation) {
     return (
       <div className="page-container flex items-center justify-center gap-2">
         <div className="skeleton w-10 h-10 rounded-full" />
         <p className="text-sm text-[var(--color-text-muted)]">Vérification du paiement...</p>
+      </div>
+    );
+  }
+
+  if (phase === "pending") {
+    return (
+      <div className="page-container flex items-center justify-center p-5 page-enter">
+        <div className="bg-[var(--surface)] max-w-md w-full rounded-[var(--radius-xl)] shadow-[var(--shadow-lg)] overflow-hidden border border-[var(--color-border)] p-6 text-center space-y-4">
+          <Loader2 className="w-12 h-12 mx-auto text-[var(--color-primary)] animate-spin" />
+          <h1 className="text-[18px] font-bold" style={{ fontFamily: "var(--font-display)" }}>
+            Paiement en cours…
+          </h1>
+          <p className="text-[13px] text-[var(--color-text-muted)]">
+            Nous attendons la confirmation de la passerelle. Cette page se met à jour automatiquement.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate("/reservations")}
+            className="w-full h-12 rounded-[var(--radius-md)] border border-[var(--color-border)] text-sm font-medium"
+          >
+            Voir mes réservations
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "cancelled") {
+    return (
+      <div className="page-container flex items-center justify-center p-5 page-enter">
+        <div className="bg-[var(--surface)] max-w-md w-full rounded-[var(--radius-xl)] border border-[var(--color-border)] p-6 text-center space-y-4">
+          <XCircle className="w-12 h-12 mx-auto text-[var(--color-danger,#c0392b)]" />
+          <h1 className="text-[18px] font-bold" style={{ fontFamily: "var(--font-display)" }}>
+            Paiement non confirmé
+          </h1>
+          <p className="text-[13px] text-[var(--color-text-muted)]">
+            La réservation a été annulée ou le paiement a échoué. Tu peux réessayer depuis Mes réservations.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate("/reservations")}
+            className="w-full h-12 rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium"
+          >
+            Mes réservations
+          </button>
+        </div>
       </div>
     );
   }

@@ -87,7 +87,10 @@ const OwnerReports = () => {
           Mes revenus
         </h1>
         <p className="text-sm text-[var(--color-text-secondary)] mt-1">
-          Avances encaissees :{" "}
+          Tu supervises le flux. L’argent de l’avance est versé au <strong>gérant</strong>, pas sur ton compte.
+        </p>
+        <p className="text-sm text-[var(--color-text-secondary)] mt-1">
+          Avances collectées :{" "}
           <span
             className="font-semibold text-[var(--color-accent)]"
             style={{ fontFamily: "var(--font-display)" }}
@@ -99,15 +102,15 @@ const OwnerReports = () => {
 
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <article className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 shadow-sm">
-          <p className="text-xs text-[var(--color-text-secondary)]">Acomptes recus ce mois</p>
+          <p className="text-xs text-[var(--color-text-secondary)]">Avances collectées (TerrainSN)</p>
           <p className="mt-2 text-xl font-semibold text-[var(--color-accent)]">
             {Number(revenus?.avances_encaissees || 0).toLocaleString()} CFA
           </p>
         </article>
         <article className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 shadow-sm">
-          <p className="text-xs text-[var(--color-text-secondary)]">Revenus matchs joues ce mois</p>
+          <p className="text-xs text-[var(--color-text-secondary)]">Versé au gérant</p>
           <p className="mt-2 text-xl font-semibold text-[var(--color-primary)]">
-            {Number(revenus?.montants_reverses || 0).toLocaleString()} CFA
+            {Number(revenus?.verse_au_gerant || 0).toLocaleString()} CFA
           </p>
         </article>
         <article className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 shadow-sm">
@@ -117,9 +120,9 @@ const OwnerReports = () => {
           </p>
         </article>
         <article className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 shadow-sm">
-          <p className="text-xs text-[var(--color-text-secondary)]">Matchs en attente</p>
+          <p className="text-xs text-[var(--color-text-secondary)]">Encore dû au gérant</p>
           <p className="mt-2 text-xl font-semibold text-[var(--color-text-primary)]">
-            {Number(stats?.pendingReservations || 0).toLocaleString()}
+            {Number(revenus?.encore_du || 0).toLocaleString()} CFA
           </p>
         </article>
       </div>
@@ -168,18 +171,20 @@ const OwnerReports = () => {
             <thead>
               <tr>
                 <th>Terrain</th>
-                <th>Reservations</th>
-                <th>Acomptes recus</th>
-                <th>Montant recu</th>
+                <th>Mode</th>
+                <th>Avances</th>
+                <th>Versé au gérant</th>
+                <th>Encore dû</th>
               </tr>
             </thead>
             <tbody>
               {(revenus?.terrains || []).map((t: any) => (
                 <tr key={t.id}>
                   <td className="font-medium">{t.nom}</td>
-                  <td>{Number(t.reservations || 0).toLocaleString()}</td>
+                  <td>{t.payout_mode === "auto" ? "Auto (frais)" : "Retrait 0 frais"}</td>
                   <td>{Number(t.avances_encaissees || 0).toLocaleString()} CFA</td>
-                  <td>{Number(t.montants_reverses || 0).toLocaleString()} CFA</td>
+                  <td>{Number(t.verse_au_gerant || 0).toLocaleString()} CFA</td>
+                  <td>{Number(t.encore_du || 0).toLocaleString()} CFA</td>
                 </tr>
               ))}
             </tbody>
@@ -190,7 +195,8 @@ const OwnerReports = () => {
             <article key={t.id} className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 shadow-sm">
               <p className="font-semibold text-sm" style={{ fontFamily: "var(--font-display)" }}>{t.nom}</p>
               <p className="text-xs text-[var(--color-text-muted)] mt-2">
-                Montant recu {Number(t.montants_reverses || 0).toLocaleString()} CFA
+                Versé au gérant {Number(t.verse_au_gerant || 0).toLocaleString()} CFA
+                {Number(t.encore_du) > 0 ? ` · encore dû ${Number(t.encore_du).toLocaleString()} CFA` : ""}
               </p>
             </article>
           ))}
@@ -206,7 +212,7 @@ const OwnerReports = () => {
                 <th>Terrain</th>
                 <th>Date</th>
                 <th>Statut</th>
-                <th>Montant recu</th>
+                <th>Montant avance</th>
               </tr>
             </thead>
             <tbody>

@@ -371,6 +371,122 @@ function confirmationsManuellesProprio(db, terrainIds, periode) {
   };
 }
 
+/** Dette commission encore ouverte pour un terrain (toutes périodes). */
+function detteOuverteTerrain(db, terrainId) {
+  const row = queryOne(
+    db,
+    `SELECT COALESCE(SUM(montant_commission), 0) AS total, COUNT(*) AS nb
+     FROM dettes_commissions
+     WHERE terrain_id = ? AND statut = 'en_attente'`,
+    [Number(terrainId)],
+  ) || {};
+  return {
+    total: Number(row.total || 0),
+    nb: Number(row.nb || 0),
+  };
+}
+
+/**
+ * Compense la dette ouverte sur un montant de payout (FIFO).
+ * Retourne le montant réellement à verser au gérant et le détail compensé.
+ */
+function preparerCompensationDette(db, { terrainId, montantDisponible }) {
+  const dispo = Math.max(0, Math.round(Number(montantDisponible || 0)));
+  const ouvertes = queryAll(
+    db,
+    `SELECT id, montant_commission, periode
+     FROM dettes_commissions
+     WHERE terrain_id = ? AND statut = 'en_attente'
+     ORDER BY created_at ASC, id ASC`,
+    [Number(terrainId)],
+  );
+  let reste = dispo;
+  let compense = 0;
+  const lignes = [];
+  for (const d of ouvertes) {
+    if (reste <= 0) break;
+    const due = Number(d.montant_commission || 0);
+    const prise = Math.min(due, reste);
+    if (prise <= 0) continue;
+    lignes.push({ dette_id: d.id, montant: prise, periode: d.periode, total_dette: due });
+    compense += prise;
+    reste -= prise;
+  }
+  return {
+    montant_brut: dispo,
+    montant_compense: compense,
+    montant_net: dispo - compense,
+    dette_ouverte_avant: ouvertes.reduce((s, d) => s + Number(d.montant_commission || 0), 0),
+    lignes,
+  };
+}
+
+/**
+ * Applique la compensation préparée : marque les dettes payées (totales) ou
+ * réduit via audit si partiel (on marque payée uniquement si montant couvert intégralement).
+ * Pour simplicité métier : une dette n'est soldée que si prise >= montant_commission.
+ */
+function appliquerCompensationDette(db, { terrainId, lignes, faitPar, roleFaitPar = 'systeme', payoutId = null, detail = '' }) {
+  if (!lignes?.length) return { soldées: 0, montant: 0 };
+  let soldées = 0;
+  let montant = 0;
+  for (const ligne of lignes) {
+    const dette = queryOne(db, 'SELECT * FROM dettes_commissions WHERE id = ? AND statut = ?', [
+      ligne.dette_id,
+      'en_attente',
+    ]);
+    if (!dette) continue;
+    const due = Number(dette.montant_commission || 0);
+    const prise = Math.min(due, Number(ligne.montant || 0));
+    if (prise < due) {
+      // Paiement partiel : on enregistre l'audit et on réduit le montant restant
+      db.run(
+        `UPDATE dettes_commissions SET montant_commission = montant_commission - ? WHERE id = ? AND statut = 'en_attente'`,
+        [prise, dette.id],
+      );
+      db.run(
+        `INSERT INTO audit_dette
+           (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
+         VALUES (?, ?, 'paiement_partiel', ?, ?, ?, ?)`,
+        [
+          dette.id,
+          Number(terrainId),
+          prise,
+          faitPar || null,
+          roleFaitPar,
+          `Compensation payout #${payoutId || '—'}. ${detail || ''}`.trim(),
+        ],
+      );
+    } else {
+      db.run(
+        `UPDATE dettes_commissions SET
+           statut = 'payee',
+           payee_at = CURRENT_TIMESTAMP,
+           remise_a_zero_par = ?,
+           remise_a_zero_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND statut = 'en_attente'`,
+        [faitPar || null, dette.id],
+      );
+      db.run(
+        `INSERT INTO audit_dette
+           (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
+         VALUES (?, ?, 'paiement_total', ?, ?, ?, ?)`,
+        [
+          dette.id,
+          Number(terrainId),
+          prise,
+          faitPar || null,
+          roleFaitPar,
+          `Compensation automatique via payout #${payoutId || '—'}. ${detail || ''}`.trim(),
+        ],
+      );
+      soldées += 1;
+    }
+    montant += prise;
+  }
+  return { soldées, montant };
+}
+
 module.exports = {
   periodeCivile,
   confirmerManuellement,
@@ -382,4 +498,7 @@ module.exports = {
   instructionsPaiementDette,
   setSetting,
   getSetting,
+  detteOuverteTerrain,
+  preparerCompensationDette,
+  appliquerCompensationDette,
 };

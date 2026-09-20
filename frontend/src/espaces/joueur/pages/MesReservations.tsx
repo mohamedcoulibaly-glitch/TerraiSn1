@@ -319,6 +319,24 @@ const Reservations = () => {
                           {canCancel && (
                             <button
                               type="button"
+                              onClick={async () => {
+                                try {
+                                  const pay = await reservationsApi.relancerPaiement(r.id);
+                                  const url = pay.redirect_url || pay.lien_paiement;
+                                  if (!url) throw new Error("Lien de paiement indisponible");
+                                  window.location.assign(url);
+                                } catch (err: any) {
+                                  toast.error(err?.message || "Impossible d'ouvrir le paiement");
+                                }
+                              }}
+                              className="text-[var(--color-primary)] text-[12px] font-semibold min-h-10"
+                            >
+                              Payer l'avance
+                            </button>
+                          )}
+                          {canCancel && (
+                            <button
+                              type="button"
                               onClick={() => setCancelId(r.id)}
                               className="text-[var(--color-danger)] text-[12px] font-medium min-h-10"
                             >

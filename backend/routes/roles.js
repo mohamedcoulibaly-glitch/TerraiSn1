@@ -1,5 +1,5 @@
 const express = require('express');
-const { getDb, queryAll, queryOne, runSql, transaction } = require('../database');
+const { getDb, queryAll, queryOne, runSql, transaction, saveDb } = require('../database');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const {
   ownerRevenueRowsSql,
@@ -11,6 +11,12 @@ const { grilleTarifs, sauvegarderGrille, calculerDevis } = require('../pricingSe
 const { normalizeHourString } = require('../reservationLockService');
 const whatsappClient = require('../whatsappClient');
 const { normalizeTelephoneStore } = require('../notificationService');
+const { chargerContrat, contratLectureGerant, contratLectureProprio } = require('../services/contratService');
+const { portefeuilleTerrain } = require('../services/ledgerService');
+const { demanderRetrait } = require('../services/retraitService');
+const { normaliserNumeroSn } = require('../services/calculsPaiement');
+const detteService = require('../services/detteCommissionService');
+const { historiquePayouts } = require('../services/payoutEngine');
 
 const router = express.Router();
 
@@ -22,38 +28,151 @@ router.get('/proprietaire/revenus', authMiddleware, requireRole('proprietaire'),
   res.json({
     periode: req.query.periode || 'mois',
     depuis: from,
+    beneficiaire: 'gerant',
     avances_encaissees: Number(totals.avances_encaissees || 0),
+    commissions_prelevees: Number(totals.commissions_prelevees || 0),
+    verse_au_gerant: Number(totals.verse_au_gerant || 0),
+    encore_du: Number(totals.encore_du || 0),
     montants_reverses: Number(totals.montants_reverses || 0),
     reservations: Number(totals.reservations || 0),
     terrains: rows.map((terrain) => ({
       id: terrain.id,
       nom: terrain.nom,
+      payout_mode: terrain.payout_mode || 'retrait',
+      pourcentage_avance: Number(terrain.pourcentage_avance || 0),
+      commission_pourcentage: Number(terrain.commission_pourcentage || 0),
       reservations: Number(terrain.reservations || 0),
       avances_encaissees: Number(terrain.avances_encaissees || 0),
+      commissions_prelevees: Number(terrain.commissions_prelevees || 0),
+      verse_au_gerant: Number(terrain.verse_au_gerant || 0),
+      encore_du: Number(terrain.encore_du || 0),
       montants_reverses: Number(terrain.montants_reverses || 0),
     })),
   });
 });
 
+router.get('/proprietaire/contrat/:terrainId', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  const db = await getDb();
+  const terrain = queryOne(
+    db,
+    'SELECT id FROM terrains WHERE id = ? AND proprietaire_id = ?',
+    [Number(req.params.terrainId), req.user.id],
+  );
+  if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+  const contrat = chargerContrat(db, terrain.id);
+  const wallet = portefeuilleTerrain(db, terrain.id);
+  res.json({
+    contrat: contratLectureProprio(contrat),
+    avances_gerant: {
+      total_verse: wallet.total_verse,
+      encore_du: wallet.total_encore_du,
+      formule: wallet.formule,
+      payout_mode: wallet.payout_mode,
+    },
+  });
+});
+
 router.get('/gerant/portefeuille', authMiddleware, requireRole('gerant'), async (req, res) => {
   const db = await getDb();
-  const wallet = queryOne(db, `SELECT
-    COALESCE(SUM(solde_disponible), 0) AS solde_disponible,
-    COALESCE(SUM(total_encaisse), 0) AS total_encaisse,
-    COALESCE(SUM(total_commission_prelevee), 0) AS total_commission_prelevee
-    FROM portefeuille_gerant
-    WHERE gerant_id = ?`, [req.user.id]) || {};
-  const historique = queryAll(db, `SELECT reservation_id, montant, created_at AS date, statut
-    FROM reversements
-    WHERE gerant_id = ?
-    ORDER BY created_at DESC
-    LIMIT 50`, [req.user.id]);
+  if (!req.user.terrain_id) return res.status(400).json({ error: 'Gérant sans terrain' });
+  const wallet = portefeuilleTerrain(db, req.user.terrain_id, req.user.id);
+  const dette = detteService.detteOuverteTerrain(db, req.user.terrain_id);
+  const payouts = historiquePayouts(db, { terrainId: req.user.terrain_id, limit: 50 });
+  const soldeBrut = Number(wallet.solde_disponible || 0);
+  const detteOuverte = Number(dette.total || 0);
+  const soldeNetRetrait = Math.max(0, soldeBrut - detteOuverte);
   res.json({
-    solde_disponible: Number(wallet.solde_disponible || 0),
-    total_encaisse: Number(wallet.total_encaisse || 0),
-    total_commission_prelevee: Number(wallet.total_commission_prelevee || 0),
-    historique_reversements: historique,
+    ...wallet,
+    dette_commission_ouverte: detteOuverte,
+    dette_nb: dette.nb,
+    solde_net_apres_dette: soldeNetRetrait,
+    bouton_retirer: Boolean(wallet.bouton_retirer) && (soldeBrut > 0 || detteOuverte > 0),
+    historique_payouts: payouts,
   });
+});
+
+router.get('/gerant/dettes', authMiddleware, requireRole('gerant'), async (req, res) => {
+  const db = await getDb();
+  if (!req.user.id) return res.status(400).json({ error: 'Gérant invalide' });
+  const periode = req.query.periode ? String(req.query.periode) : undefined;
+  res.json(detteService.resumeGerant(db, req.user.id, periode));
+});
+
+router.post('/gerant/reservations/:id/confirmer-manuellement', authMiddleware, requireRole('gerant'), async (req, res) => {
+  const db = await getDb();
+  try {
+    const result = transaction(db, () => detteService.confirmerManuellement(db, {
+      reservationId: Number(req.params.id),
+      gerantId: req.user.id,
+      note: req.body?.note,
+    }));
+    saveDb();
+    await logActivite({
+      gerant_id: req.user.id,
+      terrain_id: result.terrainId,
+      action: 'confirmation_manuelle',
+      reservation_id: Number(req.params.id),
+      details: { commission: result.commission },
+    }).catch(() => {});
+    res.status(201).json({
+      success: true,
+      code_reservation: result.code,
+      commission_en_dette: result.commission,
+      montant_avance: result.montantAvance,
+      message: `Réservation confirmée. Commission ${result.commission} FCFA enregistrée en dette.`,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.get('/gerant/contrat', authMiddleware, requireRole('gerant'), async (req, res) => {
+  const db = await getDb();
+  if (!req.user.terrain_id) return res.status(400).json({ error: 'Gérant sans terrain' });
+  const contrat = chargerContrat(db, req.user.terrain_id);
+  res.json(contratLectureGerant(contrat));
+});
+
+router.post('/gerant/portefeuille/retirer', authMiddleware, requireRole('gerant'), async (req, res) => {
+  const db = await getDb();
+  try {
+    if (!req.user.terrain_id) return res.status(400).json({ error: 'Gérant sans terrain' });
+    const result = await demanderRetrait(db, {
+      terrainId: req.user.terrain_id,
+      gerantId: req.user.id,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.post('/gerant/numeros/demande-changement', authMiddleware, requireRole('gerant'), async (req, res) => {
+  const db = await getDb();
+  if (!req.user.terrain_id) return res.status(400).json({ error: 'Gérant sans terrain' });
+  const pending = queryOne(
+    db,
+    "SELECT id FROM demandes_changement_numero WHERE terrain_id = ? AND gerant_id = ? AND statut = 'en_attente'",
+    [req.user.terrain_id, req.user.id],
+  );
+  if (pending) return res.status(409).json({ error: 'Une demande est déjà en attente de validation superadmin' });
+  const identiques = req.body?.numeros_identiques_whatsapp ? 1 : 0;
+  let wave = normaliserNumeroSn(req.body?.wave_numero);
+  let om = normaliserNumeroSn(req.body?.om_numero);
+  if (identiques) {
+    const gerant = queryOne(db, 'SELECT whatsapp_number, telephone FROM employes WHERE id = ?', [req.user.id]);
+    const source = normaliserNumeroSn(gerant?.whatsapp_number || gerant?.telephone || wave || om);
+    wave = source;
+    om = source;
+  }
+  const result = runSql(
+    db,
+    `INSERT INTO demandes_changement_numero
+      (terrain_id, gerant_id, wave_numero, om_numero, numeros_identiques_whatsapp, statut, motif)
+     VALUES (?, ?, ?, ?, ?, 'en_attente', ?)`,
+    [req.user.terrain_id, req.user.id, wave, om, identiques, String(req.body?.motif || '').slice(0, 300)],
+  );
+  res.status(201).json(queryOne(db, 'SELECT * FROM demandes_changement_numero WHERE id = ?', [result.lastInsertRowid]));
 });
 
 router.post('/gerant/creneaux', authMiddleware, requireRole('gerant'), async (req, res) => {

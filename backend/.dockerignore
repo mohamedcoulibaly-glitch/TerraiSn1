@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log*
+*.db
+*.db-*
+*.bak
+.env
+.env.*
+!.env.example
+uploads
+.git
+.gitignore
+*.md
+scripts/test-*.js
+scripts/*demo*
+scripts/seed-*.js
+.wwebjs_auth
+.wwebjs_cache

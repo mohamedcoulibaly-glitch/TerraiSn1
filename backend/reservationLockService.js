@@ -166,6 +166,41 @@ function confirmerCreneauxReservation(database, reservation) {
   return confirmed;
 }
 
+/**
+ * Annule les autres réservations en attente qui chevauchent le même créneau
+ * lorsqu'une réservation est confirmée (manuel ou payin).
+ * @returns {number[]} ids des réservations annulées
+ */
+function annulerReservationsConcurrentes(database, reservation) {
+  if (!reservation?.terrain_id || !reservation?.date) return [];
+  const losers = queryAll(
+    database,
+    `SELECT id, creneau_id, terrain_id, date, heure_debut, heure_fin FROM reservations
+     WHERE terrain_id = ? AND date = ? AND id != ?
+       AND statut = 'en_attente'
+       AND heure_debut < ? AND heure_fin > ?`,
+    [
+      reservation.terrain_id,
+      reservation.date,
+      reservation.id,
+      reservation.heure_fin,
+      reservation.heure_debut,
+    ],
+  );
+  const loserIds = [];
+  for (const loser of losers) {
+    database.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [loser.id]);
+    if (rowsModified(database) !== 1) continue;
+    libererCreneauxReservation(database, loser, ['en_attente_paiement']);
+    database.run(
+      `UPDATE paiements SET statut = 'annule' WHERE reservation_id = ? AND statut = 'en_attente'`,
+      [loser.id],
+    );
+    loserIds.push(loser.id);
+  }
+  return loserIds;
+}
+
 module.exports = {
   parseHour,
   formatHour,
@@ -175,5 +210,6 @@ module.exports = {
   lockCreneauxAtomique,
   libererCreneauxReservation,
   confirmerCreneauxReservation,
+  annulerReservationsConcurrentes,
   conflictError,
 };

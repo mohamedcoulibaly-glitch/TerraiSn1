@@ -12,6 +12,19 @@ let updateSW: ((reloadPage?: boolean) => Promise<void>) | undefined;
 export function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
 
+  // En dev, un SW (même ancien) met en cache les modules Vite et affiche une page blanche.
+  if (import.meta.env.DEV) {
+    navigator.serviceWorker.getRegistrations().then((regs) => {
+      regs.forEach((reg) => reg.unregister());
+    });
+    if ('caches' in window) {
+      caches.keys().then((keys) => {
+        keys.forEach((key) => caches.delete(key));
+      });
+    }
+    return;
+  }
+
   updateSW = registerSW({
     immediate: true,
     onRegisteredSW(_swUrl, registration) {

@@ -19,10 +19,19 @@ backend/*.db
 backend/*.db-*
 backend/*.bak
 .vercel
+.lighthouseci
+frontend/.lighthouseci
+frontend/dev-dist
 .wwebjs_auth
 .wwebjs_cache
 backend/.wwebjs_auth
 backend/.wwebjs_cache
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
 
 # Editor directories and files
 .vscode/*

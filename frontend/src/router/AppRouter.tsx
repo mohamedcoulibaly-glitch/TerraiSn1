@@ -2,7 +2,6 @@ import { lazy, Suspense, type LazyExoticComponent, type ComponentType } from "re
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import RoleGuard, { JoueurSpaceGuard, RequireAnyAuth, RequireJoueurAuth } from "@/auth/RoleGuard";
 import JoueurLayout from "@/espaces/joueur/layout/JoueurLayout";
-import BackofficeLayout from "@/espaces/backoffice/layout/BackofficeLayout";
 import { FieldGridSkeleton } from "@/components/skeletons/TerrainSkeletons";
 import { profileForUser } from "@/auth/roles";
 import { useAuth } from "@/hooks/use-auth";
@@ -40,6 +39,7 @@ const ProfilAide = lazy(() => import("@/espaces/joueur/pages/ProfilAide"));
 const ChangePassword = lazy(() => import("@/espaces/joueur/pages/ChangePassword"));
 const NotFound = lazy(() => import("@/espaces/joueur/pages/NotFound"));
 
+const BackofficeLayout = lazy(() => import("@/espaces/backoffice/layout/BackofficeLayout"));
 const SuperAdminDashboard = lazy(() => import("@/espaces/backoffice/pages/superadmin/Dashboard"));
 const GestionTerrains = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionTerrains"));
 const TerrainFicheAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/TerrainFiche"));
@@ -112,7 +112,9 @@ export default function AppRouter() {
         path="/backoffice"
         element={
           <RoleGuard roles={["super_admin", "gerant", "proprietaire"]}>
-            <BackofficeLayout />
+            <Suspense fallback={<PageLoader />}>
+              <BackofficeLayout />
+            </Suspense>
           </RoleGuard>
         }
       >

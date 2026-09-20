@@ -86,18 +86,27 @@ const Payment = () => {
         joueur_nom: name,
         joueur_telephone: toLocal9(phone),
         format_terrain: fieldFormat,
+        methode_paiement: selected,
       });
 
-      localStorage.setItem("terrainsn_last_reservation_id", String(reservation.id));
+      localStorage.setItem("terrainsn_last_reservation_id", String(reservation.id || reservation.reservation_id));
       hapticSuccess();
-      if (!reservation.redirect_url) throw new Error("Lien PayTech indisponible");
-      window.location.assign(reservation.redirect_url);
+      const payUrl = reservation.redirect_url || reservation.lien_paiement;
+      if (!payUrl) throw new Error("Lien de paiement indisponible");
+      window.location.assign(payUrl);
     } catch (err: unknown) {
-      const error = err as Error & { offline?: boolean };
+      const error = err as Error & { offline?: boolean; status?: number };
       if (error.offline) {
         hapticSuccess();
         await registerBackgroundSync();
         toast.success(error.message);
+        navigate("/reservations");
+        return;
+      }
+      // Créneau déjà bloqué (souvent une résa en_attente) → ouvrir Mes réservations pour payer
+      if (error.status === 409) {
+        hapticError();
+        toast.error(error.message || "Ce créneau est déjà réservé. Ouvre Mes réservations pour payer.");
         navigate("/reservations");
         return;
       }

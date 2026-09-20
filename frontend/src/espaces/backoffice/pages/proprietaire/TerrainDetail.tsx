@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { terrainsApi, reservationsApi, employesApi } from "@/lib/api";
+import { terrainsApi, reservationsApi, employesApi, proprietaireApi } from "@/lib/api";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +24,7 @@ const OwnerTerrainDetail = () => {
   const { id } = useParams<{ id: string }>();
   const [loading, setLoading] = useState(true);
   const [terrain, setTerrain] = useState<any>(null);
+  const [contrat, setContrat] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
   const [reservations, setReservations] = useState<any[]>([]);
   const [employes, setEmployes] = useState<any[]>([]);
@@ -40,17 +41,19 @@ const OwnerTerrainDetail = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [terrainData, reservationsData, employesData] = await Promise.all([
+      const [terrainData, reservationsData, employesData, contratData] = await Promise.all([
         terrainsApi.get(id!),
         reservationsApi.parTerrain(id!),
         employesApi.list(),
+        proprietaireApi.contrat(id!).catch(() => null),
       ]);
       setTerrain(terrainData);
+      setContrat(contratData);
       setReservations(reservationsData);
       const terrainEmployes = employesData.filter((e: any) => e.terrain_id == id);
       setEmployes(terrainEmployes);
       
-      const totalRevenue = reservationsData.reduce((sum: number, r: any) => sum + (r.montant || 0), 0);
+      const totalRevenue = Number(contratData?.avances_gerant?.total_verse || 0);
       const totalReservations = reservationsData.length;
       const acceptedReservations = reservationsData.filter((r: any) => ['acceptee', 'confirme', 'joue'].includes(r.statut)).length;
       const occupancyRate = totalReservations > 0 ? Math.round((acceptedReservations / totalReservations) * 100) : 0;
@@ -158,7 +161,7 @@ const OwnerTerrainDetail = () => {
                   </div>
                 </div>
                 <p className="font-display font-bold text-lg">{(stats.totalRevenue || 0).toLocaleString()}</p>
-                <p className="text-[10px] text-muted-foreground">Revenus (CFA)</p>
+                <p className="text-[10px] text-muted-foreground">Versé au gérant (CFA)</p>
               </div>
               <div className="stat-card">
                 <div className="flex items-center gap-2 mb-2">
@@ -204,6 +207,44 @@ const OwnerTerrainDetail = () => {
                   <Badge className={terrain.is_active ? "bg-accent" : "bg-muted"}>
                     {terrain.is_active ? "Disponible" : "Indisponible"}
                   </Badge>
+                </div>
+              </div>
+            </div>
+            <div className="glass-card p-4 mt-4">
+              <h3 className="font-display font-semibold text-sm mb-3">Contrat paiement (lecture)</h3>
+              <p className="text-xs text-muted-foreground mb-3">
+                Tu supervises. Le bénéficiaire est le gérant. Commission, mode et numéros sont figés en superadmin.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[10px] text-muted-foreground">Mode</p>
+                  <p className="text-sm font-medium">
+                    {contrat?.contrat?.payout_mode === "auto" ? "Auto (frais selon contrat)" : "Retrait sans frais"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground">Avance / commission</p>
+                  <p className="text-sm font-medium">
+                    {contrat?.contrat?.pourcentage_avance || 0}% / {contrat?.contrat?.commission_pourcentage || 0}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground">Remboursement</p>
+                  <p className="text-sm font-medium">{contrat?.contrat?.texte_annulation_joueur || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground">Wave / OM gérant</p>
+                  <p className="text-sm font-medium">
+                    {contrat?.contrat?.wave_numero_masque || "•••"} / {contrat?.contrat?.om_numero_masque || "•••"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground">Versé au gérant</p>
+                  <p className="text-sm font-medium">{Number(contrat?.avances_gerant?.total_verse || 0).toLocaleString()} CFA</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground">Encore dû</p>
+                  <p className="text-sm font-medium">{Number(contrat?.avances_gerant?.encore_du || 0).toLocaleString()} CFA</p>
                 </div>
               </div>
             </div>

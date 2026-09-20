@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { superAdminApi } from "@/services/superAdminApi";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
-import { fcfa, getContratOverlay } from "@/lib/saContrat";
+import { fcfa } from "@/lib/saContrat";
 import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
 import Select2 from "@/components/Select2";
 
@@ -13,29 +13,46 @@ export default function Rapprochement() {
   const navigate = useNavigate();
   const [periode, setPeriode] = useState<Periode>("mois");
   const [terrainId, setTerrainId] = useState("tous");
-  const [finances, setFinances] = useState<any>();
+  const [ledger, setLedger] = useState<any>();
   const [terrains, setTerrains] = useState<any[]>([]);
   const [sortKey, setSortKey] = useState<string>("du");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
-    superAdminApi.finances().then(setFinances).catch(console.error);
+    superAdminApi.rapprochement().then(setLedger).catch(console.error);
     superAdminApi.terrains().then((t) => setTerrains(Array.isArray(t) ? t : [])).catch(console.error);
   }, [periode]);
 
+  const tot = {
+    recu: Number(ledger?.recu || 0),
+    rembourse: Number(ledger?.rembourse || 0),
+    commission: Number(ledger?.commission || 0) + Number(ledger?.commission_en_fenetre || 0),
+    fraisDev: Number(ledger?.frais_payout_plateforme_absorbes || 0),
+    envoye: Number(ledger?.envoye || 0),
+    du: Number(ledger?.encore_du || 0),
+  };
+  const gauche = Number(ledger?.gauche ?? tot.recu - tot.rembourse);
+  const droite = Number(ledger?.droite ?? tot.commission + tot.fraisDev + tot.envoye + tot.du);
+  const ecart = gauche - droite;
+  const equilibre = Boolean(ledger?.equilibre ?? Math.abs(ecart) < 1);
+
   const rows = useMemo(() => {
-    const list = (finances?.terrains || []).filter((t: any) => terrainId === "tous" || String(t.id) === terrainId);
-    return list.map((t: any) => {
-      const c = getContratOverlay(t.id);
-      const recu = Number(t.avances || t.acomptes || 0);
-      const rembourse = 0;
-      const commission = Number(t.commissions || 0);
-      const fraisDev = 0;
-      const envoye = Number(t.reverse || 0);
-      const du = Math.max(0, recu - rembourse - commission - fraisDev - envoye);
-      return { ...t, recu, rembourse, commission, fraisDev, envoye, du, c };
-    });
-  }, [finances, terrainId]);
+    return (terrains || [])
+      .filter((t: any) => terrainId === "tous" || String(t.id) === terrainId)
+      .map((t: any) => {
+        const c = t.contrat_resume || {};
+        return {
+          ...t,
+          recu: 0,
+          rembourse: 0,
+          commission: 0,
+          fraisDev: 0,
+          envoye: 0,
+          du: Number(c.encore_du || 0),
+          c,
+        };
+      });
+  }, [terrains, terrainId]);
 
   const sorted = [...rows].sort((a, b) => {
     const va = Number(a[sortKey] || 0);
@@ -43,40 +60,14 @@ export default function Rapprochement() {
     return sortDir === "asc" ? va - vb : vb - va;
   });
 
-  const tot = rows.reduce(
-    (acc, r) => ({
-      recu: acc.recu + r.recu,
-      rembourse: acc.rembourse + r.rembourse,
-      commission: acc.commission + r.commission,
-      fraisDev: acc.fraisDev + r.fraisDev,
-      envoye: acc.envoye + r.envoye,
-      du: acc.du + r.du,
-    }),
-    { recu: 0, rembourse: 0, commission: 0, fraisDev: 0, envoye: 0, du: 0 },
-  );
-
-  const gauche = tot.recu - tot.rembourse;
-  const droite = tot.commission + tot.fraisDev + tot.envoye + tot.du;
-  const ecart = gauche - droite;
-  const equilibre = Math.abs(ecart) < 1;
-
-  const ventilation = useMemo(() => {
-    let fenetre = 0, auto = 0, retrait = 0, bloque = 0, echec = 0;
-    for (const r of rows) {
-      const sansNum = r.c.wave_statut === "absent" && r.c.om_statut === "absent";
-      if (sansNum) bloque += r.du;
-      else if (r.c.remboursement_autorise) fenetre += r.du;
-      else if (r.c.payout_mode === "auto") auto += r.du;
-      else retrait += r.du;
-    }
-    return [
-      { label: "En fenêtre de remboursement", value: fenetre, tone: "warning" as const },
-      { label: "Payable mode auto", value: auto, tone: "info" as const },
-      { label: "Payable mode retrait", value: retrait, tone: "info" as const },
-      { label: "Bloqué sans numéro", value: bloque, tone: "danger" as const },
-      { label: "En échec auto", value: echec, tone: "danger" as const },
-    ];
-  }, [rows]);
+  const vent = ledger?.encore_du_ventile || {};
+  const ventilation = [
+    { label: "En fenêtre de remboursement", value: Number(vent.en_fenetre || 0), tone: "warning" as const },
+    { label: "Payable mode auto", value: Number(vent.payable_auto || 0), tone: "info" as const },
+    { label: "Payable mode retrait", value: Number(vent.payable_retrait || 0), tone: "info" as const },
+    { label: "Bloqué sans numéro", value: Number(vent.bloque_sans_numero || 0), tone: "danger" as const },
+    { label: "En échec auto", value: Number(vent.echec || 0), tone: "danger" as const },
+  ];
 
   function exportCsv() {
     const header = "Terrain;Reçu;Remboursé;Commission;Frais dév;Envoyé;Dû";
@@ -146,7 +137,7 @@ export default function Rapprochement() {
           )}
         </div>
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <Terme value={tot.recu} label="Reçu PayTech" />
+          <Terme value={tot.recu} label="Reçu en ligne" />
           <span className="text-2xl font-light" style={{ color: "var(--sa-muted)" }}>−</span>
           <Terme value={tot.rembourse} label="Remboursé joueurs" />
           <span className="text-2xl font-light" style={{ color: "var(--sa-muted)" }}>=</span>

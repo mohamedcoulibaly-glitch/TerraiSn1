@@ -89,10 +89,27 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
     return WHATSAPP_INFRA_MESSAGE;
   }
   if (isAuth) {
-    return 'Identifiants incorrects ou session expirée.';
+    const isLogin = path.includes('login') || path.includes('register') || path.includes('otp') || path.includes('password');
+    if (status === 401) {
+      return isLogin ? 'Identifiants incorrects.' : 'Session expirée. Reconnectez-vous.';
+    }
+    if (status === 403 && raw && !isTechnicalMessage(raw)) return raw;
+    if (status === 400 && raw && !isTechnicalMessage(raw)) return raw;
+    if (status >= 500 || status === 404) {
+      return 'Le serveur ne répond pas. Vérifiez que l’API est démarrée.';
+    }
+    if (raw && !isTechnicalMessage(raw)) return raw;
+    return isLogin ? 'Impossible de se connecter. Réessayez.' : 'Session expirée. Reconnectez-vous.';
   }
   if (isReservation) {
+    if (status === 401) return 'Session expirée. Reconnectez-vous pour réserver.';
+    if (status === 403 && raw && !isTechnicalMessage(raw)) return raw;
     if (status === 409 && raw && !isTechnicalMessage(raw)) return raw;
+    if (status === 400 && raw && !isTechnicalMessage(raw)) return raw;
+    if (raw && !isTechnicalMessage(raw)) return raw;
+    if (/ngrok|tunnel|https|url de redirection|success_url|successRedirectUrl/i.test(raw)) {
+      return 'Lien de paiement indisponible. Vérifiez que ngrok est ouvert, puis réessayez.';
+    }
     return 'Impossible de finaliser la réservation. Veuillez réessayer.';
   }
 
@@ -114,6 +131,7 @@ async function refreshAccessToken(): Promise<string | null> {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) {
         removeToken();
@@ -156,7 +174,13 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
-  if (token) {
+  const isPublicAuth =
+    endpoint === '/auth/login' ||
+    endpoint === '/auth/register' ||
+    endpoint === '/auth/refresh' ||
+    endpoint === '/auth/verify-otp' ||
+    endpoint === '/auth/resend-otp';
+  if (token && !isPublicAuth) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
@@ -168,11 +192,8 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
       headers,
       credentials: 'include',
     });
-  } catch (err) {
-    if (options.method === 'GET' || !options.method) {
-      throw new Error('Connexion au serveur impossible. Vérifiez votre connexion.');
-    }
-    throw err;
+  } catch {
+    throw new Error('Connexion au serveur impossible. Vérifiez que l’API tourne sur le port 3001.');
   }
 
   if (res.status === 401) {
@@ -434,7 +455,17 @@ export const terrainsApi = {
 // RESERVATIONS
 // ============================================================
 export const reservationsApi = {
-  async create(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: 'moitie' | 'entier' }) {
+  async create(data: {
+    terrain_id: number;
+    date: string;
+    heure_debut: string;
+    heure_fin: string;
+    joueur_nom: string;
+    joueur_telephone: string;
+    format_terrain?: 'moitie' | 'entier';
+    methode_paiement?: 'wave' | 'orange_money';
+    canal_paiement?: 'wave' | 'orange_money';
+  }) {
     try {
       return await request('/reservations', { method: 'POST', body: JSON.stringify(data) });
     } catch (err) {
@@ -494,6 +525,10 @@ export const reservationsApi = {
     return await request(`/reservations/${id}/renvoyer-lien`, { method: 'POST' });
   },
 
+  async relancerPaiement(id: number | string) {
+    return await request(`/reservations/${id}/relancer-paiement`, { method: 'POST' });
+  },
+
   async renvoyerConfirmationWhatsApp(id: number | string) {
     return await request(`/reservations/${id}/renvoyer-confirmation`, { method: 'POST' });
   },
@@ -535,7 +570,14 @@ export const paiementsApi = {
     return await request('/paytech/mock/complete', { method: 'POST', body: JSON.stringify(data) });
   },
 
-  async simulateComplete(data: { reservation_id: number; ref_command: string; action: 'success' | 'cancel' | 'failed' }) {
+  async simulateComplete(data: {
+    reservation_id?: number;
+    abonnement_id?: number;
+    terrain_id?: number;
+    ref_command: string;
+    action: 'success' | 'cancel' | 'failed';
+    montant?: number;
+  }) {
     return await request('/webhook/paytech/simulate', { method: 'POST', body: JSON.stringify(data) });
   },
 };
@@ -568,6 +610,10 @@ export const proprietaireApi = {
     const sp = new URLSearchParams({ periode });
     if (terrainId != null && terrainId !== '' && terrainId !== 'all') sp.set('terrain_id', String(terrainId));
     return await request(`/proprietaire/finances?${sp.toString()}`);
+  },
+
+  async contrat(terrainId: number | string) {
+    return await request(`/proprietaire/contrat/${terrainId}`);
   },
 
   async santeTerrain(terrainId: number | string) {
@@ -742,6 +788,26 @@ export const gerantApi = {
     return await request(`/gerant/reservations/${id}/confirmer-manuellement`, {
       method: 'POST',
       body: JSON.stringify({ note }),
+    });
+  },
+
+  async contrat() {
+    return await request('/gerant/contrat');
+  },
+
+  async retirer() {
+    return await request('/gerant/portefeuille/retirer', { method: 'POST', body: JSON.stringify({}) });
+  },
+
+  async demandeChangementNumero(data: {
+    wave_numero?: string;
+    om_numero?: string;
+    numeros_identiques_whatsapp?: boolean;
+    motif?: string;
+  }) {
+    return await request('/gerant/numeros/demande-changement', {
+      method: 'POST',
+      body: JSON.stringify(data),
     });
   },
 

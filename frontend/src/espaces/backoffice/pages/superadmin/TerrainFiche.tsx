@@ -14,8 +14,9 @@ import LocalisationTerrain from "@/espaces/backoffice/components/superadmin/Loca
 import TerrainCommoditesEditor, { type CommoditeToggle } from "@/espaces/backoffice/components/superadmin/TerrainCommoditesEditor";
 import AuditTables, { type AuditCommoditeRow, type AuditPhotoRow } from "@/espaces/backoffice/components/superadmin/AuditTables";
 import {
+  contratDepuisTerrain,
   gerantDuTerrain,
-  getContratOverlay,
+  overlayFromBackend,
   terrainStatutListe,
   type ContratOverlay,
 } from "@/lib/saContrat";
@@ -46,7 +47,7 @@ export default function TerrainFiche() {
   const { user } = useAuth();
   const [terrain, setTerrain] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
-  const [contrat, setContrat] = useState<ContratOverlay>(getContratOverlay(terrainId));
+  const [contrat, setContrat] = useState<ContratOverlay>(contratDepuisTerrain({ id: terrainId }));
   const [toggling, setToggling] = useState(false);
   const [photos, setPhotos] = useState<TerrainPhoto[]>([]);
   const [adresseTheorique, setAdresseTheorique] = useState("");
@@ -73,12 +74,17 @@ export default function TerrainFiche() {
       superAdminApi.users(),
       superAdminApi.terrainPhotos(terrainId).catch(() => []),
       superAdminApi.terrainCommodites(terrainId).catch(() => []),
-    ]).then(([t, u, p, commodites]) => {
+      superAdminApi.getContrat(terrainId).catch(() => null),
+    ]).then(([t, u, p, commodites, contratApi]) => {
       const list = Array.isArray(t) ? t : [];
       const found = list.find((x: any) => Number(x.id) === terrainId) || null;
       setTerrain(found);
       setUsers(Array.isArray(u) ? u : []);
-      setContrat(getContratOverlay(terrainId));
+      setContrat(
+        (contratApi as any)?.contrat
+          ? overlayFromBackend((contratApi as any).contrat)
+          : contratDepuisTerrain(found || { id: terrainId }),
+      );
       setPhotos(Array.isArray(p) ? p : []);
       const commoditesList = Array.isArray(commodites) ? commodites : [];
       setCatalogCommodites(commoditesList);

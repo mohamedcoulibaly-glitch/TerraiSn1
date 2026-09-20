@@ -304,7 +304,7 @@ export default function LoginPage() {
     "relative z-[2] w-full min-w-[2rem] h-full bg-transparent outline-none text-sm text-[var(--color-text-primary)] placeholder:transparent";
 
   return (
-    <div className="min-h-screen relative flex flex-col justify-end sm:justify-center sm:items-center sm:px-4">
+    <div className="joueur-app min-h-screen relative flex flex-col justify-end sm:justify-center sm:items-center sm:px-4 text-[var(--color-text-primary)]">
       <img
         src={fieldImageForId(2)}
         alt=""
@@ -313,7 +313,7 @@ export default function LoginPage() {
         aria-hidden
       />
       <div className="absolute inset-0 bg-[var(--color-primary-dark)]/80" aria-hidden />
-      <div className="relative z-[1] w-full max-w-[420px] bg-white rounded-t-[var(--radius-xl)] sm:rounded-[var(--radius-xl)] px-5 pt-8 pb-10 min-h-[65dvh] sm:min-h-0 shadow-[var(--shadow-lg)]">
+      <div className="relative z-[1] w-full max-w-[420px] bg-[var(--surface)] text-[var(--color-text-primary)] rounded-t-[var(--radius-xl)] sm:rounded-[var(--radius-xl)] px-5 pt-8 pb-10 min-h-[65dvh] sm:min-h-0 shadow-[var(--shadow-lg)]">
         <div className="text-center mb-8">
           <Link
             to="/"

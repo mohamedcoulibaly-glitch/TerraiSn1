@@ -23,7 +23,7 @@ import {
   digitsSn,
   formatTelAffichage,
   fraisLabel,
-  saveContratOverlay,
+  overlayFromBackend,
   statutCanalDepuisNumero,
   texteAnnulationJoueur,
   texteImpactReversement,
@@ -108,7 +108,7 @@ function CheckRow({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-export default function ContratPaiementTab({ terrain, contrat, gerant, onChange, auteur }: Props) {
+export default function ContratPaiementTab({ terrain, contrat, gerant, onChange }: Props) {
   const [avance, setAvance] = useState(String(terrain.pourcentage_avance ?? 8));
   const [commission, setCommission] = useState(String(terrain.commission_pourcentage ?? 10));
   const [saving, setSaving] = useState<string | null>(null);
@@ -150,8 +150,27 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
 
   const gerantPrenomNom = gerant?.nom || "Non assigné";
 
-  async function persist(patch: Partial<ContratOverlay>, bloc: string, avant: string, apres: string) {
-    const next = saveContratOverlay(terrain.id, patch, { par: auteur, bloc, avant, apres });
+  async function persist(patch: Record<string, unknown> = {}) {
+    const payload = {
+      pourcentage_avance: pctAvance,
+      commission_pourcentage: pctCommission,
+      remboursement_autorise: remb && Number(delai) > 0 ? 1 : 0,
+      delai_remboursement_heures: remb ? Number(delai) || 0 : 0,
+      payout_mode: mode,
+      payout_frais_politique: politique,
+      frais_payout_pct_gerant: Number(pctG) || 0,
+      frais_payout_pct_plateforme: Number(pctP) || 0,
+      wave_numero: formatTelAffichage(wave),
+      om_numero: formatTelAffichage(om),
+      numeros_identiques_whatsapp: sameWhatsapp ? 1 : 0,
+      canal_reversement: canal,
+      wave_statut: contrat.wave_statut,
+      om_statut: contrat.om_statut,
+      paiement_production: contrat.production_paiement ? 1 : 0,
+      ...patch,
+    };
+    const data = await superAdminApi.saveContrat(terrain.id, payload);
+    const next = overlayFromBackend((data as any)?.contrat || data);
     onChange(next);
     return next;
   }
@@ -159,12 +178,10 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
   async function saveCommercial() {
     setSaving("commercial");
     try {
-      await superAdminApi.updateTarifs(terrain.id, {
+      await persist({
         pourcentage_avance: pctAvance,
         commission_pourcentage: pctCommission,
-        modele_revenus: terrain.modele_revenus || "commission",
       });
-      await persist({}, "Commercial", `${terrain.pourcentage_avance}% / ${terrain.commission_pourcentage}%`, `${pctAvance}% / ${pctCommission}%`);
       toast.success("Bloc commercial enregistré");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
@@ -187,20 +204,17 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
     try {
       const w = formatTelAffichage(wave);
       const o = formatTelAffichage(om);
-      await persist(
-        {
-          wave_numero: w,
-          om_numero: o,
-          numeros_identiques_whatsapp: sameWhatsapp,
-          canal_reversement: canal,
-          wave_statut: statutCanalDepuisNumero(w, contrat.wave_statut),
-          om_statut: statutCanalDepuisNumero(o, contrat.om_statut),
-        },
-        "Numéros gérant",
-        `${contrat.wave_numero || "—"} / ${contrat.om_numero || "—"}`,
-        `${w || "—"} / ${o || "—"}`,
-      );
+      await persist({
+        wave_numero: w,
+        om_numero: o,
+        numeros_identiques_whatsapp: sameWhatsapp ? 1 : 0,
+        canal_reversement: canal,
+        wave_statut: statutCanalDepuisNumero(w, contrat.wave_statut),
+        om_statut: statutCanalDepuisNumero(o, contrat.om_statut),
+      });
       toast.success("Numéros enregistrés");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
     } finally {
       setSaving(null);
     }
@@ -211,39 +225,40 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
     if (!digitsSn(numero)) return;
     setSaving(`test-${op}`);
     try {
-      const patch =
-        op === "wave"
-          ? { wave_numero: formatTelAffichage(wave), wave_statut: "test_envoye" as CanalStatut }
-          : { om_numero: formatTelAffichage(om), om_statut: "test_envoye" as CanalStatut };
-      await persist(patch, `Test 100 FCFA ${op.toUpperCase()}`, contrat[op === "wave" ? "wave_statut" : "om_statut"], "test_envoye");
-      toast.success("Test 100 FCFA marqué comme envoyé (hors moteur PayTech pour l’instant)");
+      await superAdminApi.saveContrat(terrain.id, {
+        wave_numero: formatTelAffichage(wave),
+        om_numero: formatTelAffichage(om),
+      });
+      await superAdminApi.testCanal100(terrain.id, op);
+      const data = await superAdminApi.getContrat(terrain.id);
+      onChange(overlayFromBackend((data as any)?.contrat || data));
+      toast.success("Test 100 FCFA envoyé vers le numéro du gérant");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Test impossible");
     } finally {
       setSaving(null);
     }
   }
 
   async function marquerVerifie(op: "wave" | "om") {
-    const now = new Date().toISOString();
-    const patch =
-      op === "wave"
-        ? { wave_statut: "verifie" as CanalStatut, wave_verifie_at: now }
-        : { om_statut: "verifie" as CanalStatut, om_verifie_at: now };
-    await persist(patch, `Vérif ${op.toUpperCase()}`, "test_envoye", "verifie");
-    setConfirmVerif(null);
-    toast.success("Canal marqué comme vérifié");
+    try {
+      const data = await superAdminApi.verifierCanal(terrain.id, op);
+      onChange(overlayFromBackend((data as any)?.contrat || data));
+      setConfirmVerif(null);
+      toast.success("Canal marqué comme vérifié");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Vérification impossible");
+    }
   }
 
   async function savePolitique() {
     setSaving("politique");
     try {
       const heures = remb ? Number(delai) || 0 : 0;
-      await superAdminApi.politiqueAnnulation(terrain.id, heures);
-      await persist(
-        { remboursement_autorise: remb && heures > 0 },
-        "Politique annulation",
-        contrat.remboursement_autorise ? `${terrain.delai_remboursement_heures} h` : "Non",
-        remb ? `${heures} h` : "Non",
-      );
+      await persist({
+        remboursement_autorise: remb && heures > 0 ? 1 : 0,
+        delai_remboursement_heures: heures,
+      });
       toast.success("Politique d’annulation enregistrée");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
@@ -255,27 +270,28 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
   async function saveMode() {
     setSaving("mode");
     try {
-      await persist(
-        {
-          payout_mode: mode,
-          payout_frais_politique: politique,
-          frais_payout_pct_gerant: Number(pctG) || 0,
-          frais_payout_pct_plateforme: Number(pctP) || 0,
-        },
-        "Mode reversement",
-        `${contrat.payout_mode} · ${fraisLabel(contrat)}`,
-        `${mode} · ${politique}`,
-      );
+      await persist({
+        payout_mode: mode,
+        payout_frais_politique: politique,
+        frais_payout_pct_gerant: Number(pctG) || 0,
+        frais_payout_pct_plateforme: Number(pctP) || 0,
+      });
       toast.success("Mode et frais enregistrés");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
     } finally {
       setSaving(null);
     }
   }
 
   async function activerProduction() {
-    await persist({ production_paiement: true }, "Production paiement", "inactive", "active");
-    setConfirmProd(false);
-    toast.success("Production paiement activée (flag local — moteur à brancher)");
+    try {
+      await persist({ paiement_production: 1 });
+      setConfirmProd(false);
+      toast.success("Production paiement activée pour ce terrain");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Activation impossible");
+    }
   }
 
   const twoNumbers = Boolean(digitsSn(wave) && digitsSn(om));

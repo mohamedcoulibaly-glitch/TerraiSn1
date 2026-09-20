@@ -3,8 +3,11 @@ const paytechService = require('../paytechService');
 const notificationService = require('../notificationService');
 const logger = require('../logger');
 const { libererCreneauxReservation, rowsModified } = require('../reservationLockService');
+const { chargerContrat } = require('./contratService');
+const { duExistant, marquerAnnuleRembourse } = require('./ledgerService');
+const { texteAnnulationJoueur } = require('./calculsPaiement');
 
-const DEFAULT_DELAI_HEURES = 24;
+const DEFAULT_DELAI_HEURES = 0;
 
 function normaliserDelaiHeures(value) {
   const n = Number(value);
@@ -28,20 +31,31 @@ function confirmationMs(reservation, fallbackAt) {
 }
 
 function evaluerRemboursement({ terrain, reservation, confirmeAt = null, now = Date.now() }) {
-  const delaiHeures = normaliserDelaiHeures(terrain?.delai_remboursement_heures);
+  const autoriseCol = terrain?.remboursement_autorise;
+  const delaiLu = normaliserDelaiHeures(terrain?.delai_remboursement_heures);
+  const autorise = autoriseCol == null ? delaiLu > 0 : Number(autoriseCol) === 1;
+  const delaiHeures = autorise ? delaiLu : 0;
   const confirmee = ['confirme', 'acceptee'].includes(String(reservation?.statut || ''));
+  const texte = texteAnnulationJoueur({
+    remboursement_autorise: autorise && delaiHeures > 0 ? 1 : 0,
+    delai_remboursement_heures: delaiHeures,
+  });
   if (!confirmee) {
     return {
       eligible: false,
       delai_heures: delaiHeures,
+      remboursement_autorise: autorise ? 1 : 0,
+      texte_joueur: texte,
       raison: 'pas_confirmee',
       message: 'Pas de paiement confirmé à rembourser.',
     };
   }
-  if (delaiHeures <= 0) {
+  if (!autorise || delaiHeures <= 0) {
     return {
       eligible: false,
       delai_heures: 0,
+      remboursement_autorise: 0,
+      texte_joueur: texte,
       raison: 'politique_sans_remboursement',
       message: "Ce terrain n'offre pas de remboursement en cas d'annulation.",
     };
@@ -52,6 +66,8 @@ function evaluerRemboursement({ terrain, reservation, confirmeAt = null, now = D
   return {
     eligible,
     delai_heures: delaiHeures,
+    remboursement_autorise: 1,
+    texte_joueur: texte,
     confirme_at: confirmedAt ? new Date(confirmedAt).toISOString() : null,
     limite_at: confirmedAt ? new Date(limite).toISOString() : null,
     raison: eligible ? 'dans_delai' : 'hors_delai',
@@ -70,23 +86,28 @@ function referencePaiementPaytech(reservation, payment) {
   );
 }
 
-async function executerAnnulation(db, reservation, { traitePar = null } = {}) {
-  const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [reservation.terrain_id]) || {};
+async function executerAnnulation(db, reservation, { traitePar = null, now = Date.now() } = {}) {
+  const contrat = chargerContrat(db, reservation.terrain_id) || {};
   const payment = queryOne(
     db,
     `SELECT * FROM paiements
-      WHERE reservation_id = ? AND statut = 'paye'
+      WHERE reservation_id = ? AND statut = 'paye' AND methode IN ('paytech', 'paydunya')
       ORDER BY id DESC LIMIT 1`,
     [reservation.id],
   );
   const politique = evaluerRemboursement({
-    terrain,
+    terrain: contrat,
     reservation,
     confirmeAt: reservation.confirme_at || payment?.created_at,
+    now,
   });
+  const du = duExistant(db, reservation.id);
+  if (du?.statut === 'verse') {
+    politique.eligible = false;
+    if (politique.raison === 'dans_delai') politique.raison = 'deja_verse';
+  }
   const ref = referencePaiementPaytech(reservation, payment);
-  const methode = String(payment?.methode || '').toLowerCase();
-  const shouldRefund = Boolean(politique.eligible && payment && ref && methode === 'paytech');
+  const shouldRefund = Boolean(politique.eligible && payment && ref);
 
   transaction(db, () => {
     if (traitePar) {
@@ -110,6 +131,9 @@ async function executerAnnulation(db, reservation, { traitePar = null } = {}) {
     } else {
       libererCreneauxReservation(db, reservation, ['reserve', 'en_attente_paiement']);
     }
+    if (shouldRefund) {
+      marquerAnnuleRembourse(db, reservation.id, now);
+    }
   });
 
   let rembourse = false;
@@ -119,10 +143,11 @@ async function executerAnnulation(db, reservation, { traitePar = null } = {}) {
       runSql(
         db,
         `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
-         VALUES (?, ?, 'paytech', 'rembourse', ?, ?)`,
+         VALUES (?, ?, ?, 'rembourse', ?, ?)`,
         [
           reservation.id,
           Number(reservation.montant_avance || reservation.acompte || payment.montant || 0),
+          payment.methode || 'paytech',
           ref,
           `${ref}-REFUND`,
         ],
@@ -134,7 +159,7 @@ async function executerAnnulation(db, reservation, { traitePar = null } = {}) {
   }
 
   await notificationService
-    .envoyerAnnulation(reservation.id, { rembourse })
+    .envoyerAnnulation(reservation.id, { rembourse, politique })
     .catch((error) => logger.error('annulationService.js', 'Notification annulation', error));
 
   return { rembourse, politique };

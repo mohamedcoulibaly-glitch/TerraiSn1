@@ -3,6 +3,7 @@ const path = require('path');
 const QRCode = require('qrcode');
 const client = require('./whatsappClient');
 const { getDb, queryOne, runSql } = require('./database');
+const { masquerNumero } = require('./services/calculsPaiement');
 const { UPLOAD_ROOT } = require('./terrainPhotoService');
 const { serializeQrPayload } = require('./services/qrPayload');
 const { calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
@@ -49,30 +50,81 @@ function formaterMontant(montant) {
   return Number(montant || 0).toLocaleString('fr-SN') + ' FCFA';
 }
 
-async function envoyerMessage(telephone, message, sessionKey = 'platform') {
-  if (!telephone) return;
+async function envoyerMessage(telephone, message, sessionKey = 'platform', meta = {}) {
   const key = sessionKey || 'platform';
+  try {
+    const db = await getDb();
+    runSql(
+      db,
+      `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu)
+       VALUES (?, ?, ?, 'whatsapp', ?)`,
+      [meta.destinataire_type || 'unknown', meta.destinataire_id || 0, meta.type || 'message', String(message || '')],
+    );
+  } catch {
+    // persistance best-effort
+  }
+  if (!telephone) return { ok: true, skipped: true };
   if (String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true') {
     console.log(`[WHATSAPP MOCK][${key}] Message vers ${telephone} : ${message}`);
-    return;
+    return { ok: true, mocked: true };
   }
-  await client.sendMessageForSession(key, formatNumero(telephone), message);
+  try {
+    await client.sendMessageForSession(key, formatNumero(telephone), message);
+    return { ok: true };
+  } catch (error) {
+    // Paiement / flux métier restent valides : la notif part en file de rejeu.
+    try {
+      const retryQueue = require('./services/notificationRetryQueue');
+      await retryQueue.enfiler({
+        telephone,
+        message: String(message || ''),
+        session_key: key,
+        type: meta.type || 'message',
+        destinataire_type: meta.destinataire_type,
+        destinataire_id: meta.destinataire_id,
+        erreur: error.message || String(error),
+        http_status: error.statusCode || error.status || 500,
+        idempotency_key: meta.idempotency_key || null,
+      });
+    } catch {
+      // file best-effort
+    }
+    return { ok: false, queued: true, error };
+  }
 }
 
 /** Alias CDC */
 const envoyerWhatsApp = envoyerMessage;
 
 async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = 'platform') {
-  if (!telephone || !mediaUrl) return;
+  if (!telephone || !mediaUrl) return { ok: true, skipped: true };
   const key = sessionKey || 'platform';
   if (String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true') {
     console.log(`[WHATSAPP MOCK][${key}] Image vers ${telephone} : ${mediaUrl} (${caption || ''})`);
-    return;
+    return { ok: true, mocked: true };
   }
-  await client.sendImageForSession(key, formatNumero(telephone), {
-    url: mediaUrl,
-    caption: caption || '',
-  });
+  try {
+    await client.sendImageForSession(key, formatNumero(telephone), {
+      url: mediaUrl,
+      caption: caption || '',
+    });
+    return { ok: true };
+  } catch (error) {
+    try {
+      const retryQueue = require('./services/notificationRetryQueue');
+      await retryQueue.enfiler({
+        telephone,
+        message: `[IMAGE] ${caption || ''} ${mediaUrl}`.trim(),
+        session_key: key,
+        type: 'image',
+        erreur: error.message || String(error),
+        http_status: error.statusCode || error.status || 500,
+      });
+    } catch {
+      // best-effort
+    }
+    return { ok: false, queued: true, error };
+  }
 }
 
 function sessionKeyFromReservation(reservation = {}) {
@@ -214,7 +266,7 @@ async function envoyerConfirmation(reservationId) {
     `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
     `🏷️ Code : *${data.code_reservation}*\n\n` +
     (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
-    `💰 Avance payée : ${formaterMontant(data.montant_avance || data.acompte)}\n` +
+    `💰 Avance payée : ${formaterMontant(data.montant_avance || data.acompte)} (hors frais opérateur)\n` +
     `💵 À régler sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}\n\n` +
     `📌 Viens *30 minutes avant* avec ce QR code, ` +
     `c'est lui qui ouvre les portes 😄\n` +
@@ -230,11 +282,27 @@ async function envoyerConfirmation(reservationId) {
     const caption = `QR Code — ${data.code_reservation}`;
 
     if (fs.existsSync(absolutePath) && String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
-      await client.sendImageForSession(waKey, formatNumero(tel), {
-        filePath: absolutePath,
-        mimetype: 'image/png',
-        caption,
-      });
+      try {
+        await client.sendImageForSession(waKey, formatNumero(tel), {
+          filePath: absolutePath,
+          mimetype: 'image/png',
+          caption,
+        });
+      } catch (error) {
+        try {
+          const retryQueue = require('./services/notificationRetryQueue');
+          await retryQueue.enfiler({
+            telephone: tel,
+            message: `[IMAGE_QR] ${caption} ${data.qr_code_url}`,
+            session_key: waKey,
+            type: 'image_qr',
+            erreur: error.message || String(error),
+            http_status: error.statusCode || error.status || 500,
+          });
+        } catch {
+          // best-effort
+        }
+      }
     } else {
       const imageUrl = data.qr_code_url.startsWith('http')
         ? data.qr_code_url
@@ -246,8 +314,12 @@ async function envoyerConfirmation(reservationId) {
   if (data.gerant_whatsapp || data.gerant_telephone) {
     await envoyerWhatsApp(
       data.gerant_whatsapp || data.gerant_telephone,
-      `Paiement reçu. Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}.`,
-      waKey
+      `Avance reçue chez TerrainSN — pas encore un virement vers toi.\n` +
+        `Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}.\n` +
+        `Reste sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}.\n` +
+        `Ton dû s'accumule selon le contrat du terrain (auto / retrait).`,
+      waKey,
+      { destinataire_type: 'gerant', destinataire_id: data.gerant_id, type: 'avance_payee_gerant' },
     );
   }
 }
@@ -294,8 +366,8 @@ async function envoyerReversement({
   const avance = montant_avance ?? montant_acompte;
   await envoyerWhatsApp(
     telephone,
-    `💰 Virement reçu${nom ? ` ${nom}` : ''} !\n\n` +
-      `Réservation *${code}* confirmée.\n` +
+    `Dû gérant mis à jour${nom ? ` ${nom}` : ''}.\n\n` +
+      `Réservation *${code}* confirmée (avance chez TerrainSN, pas encore un virement).\n` +
       (avance != null ? `Avance joueur : ${formaterMontant(avance)}\n` : '') +
       `Commission plateforme : ${formaterMontant(commission)}\n` +
       `*Crédité sur ton compte : ${formaterMontant(reverse)}*\n\n` +
@@ -304,6 +376,107 @@ async function envoyerReversement({
 }
 
 const envoyerReversementGerant = envoyerReversement;
+
+async function envoyerDuAccumuleGerant({ contrat, du, reservationId }) {
+  if (!contrat?.gerant_whatsapp) return;
+  const mode = contrat.payout_mode === 'auto' ? 'auto' : 'retrait';
+  await envoyerWhatsApp(
+    contrat.gerant_whatsapp,
+    `Avance joueur confirmée (résa #${reservationId}).\n` +
+      `Dû ${mode} : ${formaterMontant(du.du_gerant)} (avance ${formaterMontant(du.avance)} − commission ${formaterMontant(du.commission)}` +
+      (Number(du.frais_gerant) ? ` − frais ${formaterMontant(du.frais_gerant)}` : '') +
+      `).\n` +
+      (du.statut === 'en_fenetre'
+        ? `Encore en fenêtre de remboursement — pas de virement pour l'instant.`
+        : `Dû payable selon le contrat.`),
+    undefined,
+    { destinataire_type: 'gerant', destinataire_id: contrat.gerant_id, type: 'du_accumule' },
+  );
+}
+
+async function envoyerPayoutAutoEnCours({ contrat, du }) {
+  if (!contrat?.gerant_whatsapp) return;
+  await envoyerWhatsApp(
+    contrat.gerant_whatsapp,
+    `Reversement en cours vers ton Wave/OM (${formaterMontant(du.du_gerant)}).`,
+    undefined,
+    { destinataire_type: 'gerant', destinataire_id: contrat.gerant_id, type: 'payout_auto_en_cours' },
+  );
+}
+
+async function envoyerPayoutAutoOk({ contrat, du, dest }) {
+  if (!contrat?.gerant_whatsapp) return;
+  const suffixe = masquerNumero(dest?.numero || contrat.wave_numero || contrat.om_numero);
+  await envoyerWhatsApp(
+    contrat.gerant_whatsapp,
+    `${formaterMontant(du.du_gerant)} envoyés sur ${suffixe}.`,
+    undefined,
+    { destinataire_type: 'gerant', destinataire_id: contrat.gerant_id, type: 'payout_auto_ok' },
+  );
+}
+
+async function envoyerPayoutManuelOk({ contrat, montant, numero }) {
+  if (!contrat?.gerant_whatsapp) return;
+  await envoyerWhatsApp(
+    contrat.gerant_whatsapp,
+    `${formaterMontant(montant)} envoyés manuellement sur ${masquerNumero(numero)}.`,
+    undefined,
+    { destinataire_type: 'gerant', destinataire_id: contrat.gerant_id, type: 'payout_manuel_ok' },
+  );
+}
+
+async function envoyerEchecPayout({ contrat, du, raison }) {
+  const msg =
+    `Échec du reversement auto (${formaterMontant(du?.du_gerant)}). Dû inchangé. ` +
+    `Corriger le numéro Wave/OM si besoin. ${raison || ''}`.trim();
+  if (contrat?.gerant_whatsapp) {
+    await envoyerWhatsApp(contrat.gerant_whatsapp, msg, undefined, {
+      destinataire_type: 'gerant',
+      destinataire_id: contrat.gerant_id,
+      type: 'payout_echec',
+    });
+  }
+  await envoyerWhatsApp(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV, msg, undefined, {
+    destinataire_type: 'superadmin',
+    destinataire_id: 0,
+    type: 'payout_echec_admin',
+  });
+}
+
+async function envoyerAlerteNumeroManquant(contrat) {
+  const msg = `Terrain ${contrat?.terrain_nom || contrat?.terrain_id} : 1er dû sans Wave/OM gérant vérifié. Configurer en superadmin.`;
+  await envoyerWhatsApp(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV, msg, undefined, {
+    destinataire_type: 'superadmin',
+    destinataire_id: 0,
+    type: 'numero_manquant',
+  });
+}
+
+async function envoyerTest100({ telephone, canal, montant = 100 }) {
+  if (!telephone) return;
+  await envoyerWhatsApp(
+    telephone,
+    `Mini-virement test ${montant} FCFA via ${canal === 'om' ? 'Orange Money' : 'Wave'}. Confirme-nous la réception.`,
+    undefined,
+    { destinataire_type: 'gerant', type: 'test_100' },
+  );
+}
+
+async function envoyerAnnulation(reservationId, { rembourse = false, politique } = {}) {
+  const data = await details(reservationId);
+  if (!data) return;
+  const prenom = prenomJoueur(data);
+  const tel = telephoneJoueur(data);
+  const texte = politique?.texte_joueur || (rembourse
+    ? 'Ton avance sera remboursée (hors frais opérateur).'
+    : 'Annulation sans remboursement de l’avance.');
+  await envoyerWhatsApp(
+    tel,
+    `Réservation annulée ${prenom}.\n${texte}`,
+    sessionKeyFromReservation(data),
+    { destinataire_type: 'joueur', destinataire_id: data.joueur_id, type: 'annulation' },
+  );
+}
 
 async function envoyerAlerteSilencieuse({ telephone, prenom, gerant_prenom, terrain_nom }) {
   await envoyerWhatsApp(
@@ -318,6 +491,7 @@ async function envoyerAlerteSilencieuse({ telephone, prenom, gerant_prenom, terr
 module.exports = {
   formatNumero,
   normalizeTelephoneStore,
+  digitsPhone,
   formaterDate,
   formaterHeure,
   formaterMontant,
@@ -331,6 +505,14 @@ module.exports = {
   envoyerRemboursement,
   envoyerReversement,
   envoyerReversementGerant,
+  envoyerDuAccumuleGerant,
+  envoyerPayoutAutoEnCours,
+  envoyerPayoutAutoOk,
+  envoyerPayoutManuelOk,
+  envoyerEchecPayout,
+  envoyerAlerteNumeroManquant,
+  envoyerTest100,
+  envoyerAnnulation,
   envoyerAlerteSilencieuse,
   sessionKeyFromReservation,
 };
