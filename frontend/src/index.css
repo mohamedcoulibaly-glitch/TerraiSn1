@@ -1,5 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-
+/* Polices chargées via <link> dans index.html (preload) */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -248,9 +247,24 @@
 }
 
 @layer base {
+  /* Feel natif iOS/Android — anti-effets web parasites */
   * {
     @apply border-border;
     min-width: 0;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea,
+  select,
+  [contenteditable="true"],
+  .allow-select {
+    user-select: text;
+    -webkit-user-select: text;
+    -webkit-touch-callout: default;
   }
 
   html {
@@ -269,6 +283,7 @@
     min-height: 100dvh;
     overflow-x: hidden;
     overscroll-behavior-x: none;
+    overscroll-behavior-y: none; /* Désactive le pull-to-refresh natif */
     background-color: var(--bg);
     color: var(--text-primary);
     transition: background-color 0.2s ease, color 0.2s ease;
@@ -306,16 +321,15 @@
                 border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
   }
 
-  /* Micro-interactions globales */
+  /* Micro-interactions globales — GPU only (transform + opacity) */
   button, .btn, .card-interactive {
-    transition: transform 0.15s ease, opacity 0.15s ease,
-                box-shadow 0.15s ease, background-color 0.15s ease,
-                color 0.15s ease, border-color 0.15s ease;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+    will-change: transform, opacity;
   }
 
   button:active:not(:disabled),
   .btn:active:not(:disabled) {
-    transform: scale(0.97);
+    transform: translate3d(0, 0, 0) scale(0.97);
   }
 }
 
@@ -340,11 +354,12 @@
     border-radius: var(--radius-lg);
     overflow: hidden;
     box-shadow: var(--shadow-sm);
-    transition: box-shadow 0.15s ease, transform 0.15s ease;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+    will-change: transform, opacity;
   }
 
   .field-card:hover {
-    box-shadow: var(--shadow-md);
+    transform: translate3d(0, -2px, 0);
   }
 
   /* Safe area iOS — bottom nav thématisée */
@@ -355,10 +370,15 @@
     right: 0;
     z-index: 50;
     height: auto;
+    padding-bottom: env(safe-area-inset-bottom);
     background: var(--nav-bg);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-top: 1px solid var(--nav-border);
+  }
+
+  .app-header-safe {
+    padding-top: env(safe-area-inset-top);
   }
 
   .joueur-app .bottom-nav {
@@ -576,10 +596,42 @@
     50%       { opacity: 0.6; transform: scale(1.4); }
   }
 
-  /* Transitions de page */
+  /* Transitions de page — GPU (translate3d + opacity) */
   @keyframes fadeSlideUp {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; transform: translate3d(0, 8px, 0); }
+    to   { opacity: 1; transform: translate3d(0, 0, 0); }
+  }
+
+  @keyframes nativeModalIn {
+    from { opacity: 0; transform: translate3d(0, 12px, 0); }
+    to   { opacity: 1; transform: translate3d(0, 0, 0); }
+  }
+
+  @keyframes nativeSheetUp {
+    from { opacity: 0.55; transform: translate3d(0, 100%, 0); }
+    to   { opacity: 1; transform: translate3d(0, 0, 0); }
+  }
+
+  @keyframes nativeTabFade {
+    from { opacity: 0; transform: translate3d(0, 4px, 0); }
+    to   { opacity: 1; transform: translate3d(0, 0, 0); }
+  }
+
+  .gpu-transition {
+    transition: transform 0.2s ease, opacity 0.2s ease;
+    will-change: transform, opacity;
+  }
+
+  .native-modal-enter {
+    animation: nativeModalIn 0.22s ease forwards;
+  }
+
+  .native-sheet-enter {
+    animation: nativeSheetUp 0.28s ease-out forwards;
+  }
+
+  .native-tab-enter {
+    animation: nativeTabFade 0.18s ease forwards;
   }
 }
 
@@ -717,13 +769,16 @@
   --g-gold-glow:       rgba(217,119,6,0.10);
 
   --g-danger:          #DC2626;
+  --g-danger-bg:       rgba(220,38,38,0.10);
   --g-warning:         #D97706;
   --g-warning-bg:      rgba(217,119,6,0.10);
+  --g-success:         #059669;
+  --g-success-bg:      rgba(5,150,105,0.10);
   --g-info:            #2563EB;
 
   /* Statuts matchs (sémantiques, distincts du primaire) */
-  --g-libre:           #059669;
-  --g-libre-bg:        rgba(5,150,105,0.10);
+  --g-libre:           #1E40AF;
+  --g-libre-bg:        rgba(30,64,175,0.10);
   --g-reserve:         #2563EB;
   --g-reserve-bg:      rgba(37,99,235,0.10);
   --g-en-cours:        #F97316;
@@ -1217,6 +1272,63 @@
 .leaflet-container {
   width: 100%;
   height: 100%;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  z-index: 0 !important;
+}
+
+/* Contenir les panes Leaflet (z-index élevés) dans la carte, pas au-dessus de la galerie */
+.map-terrain-shell,
+.localisation-map-shell {
+  isolation: isolate;
+  z-index: 0;
+  position: relative;
+}
+.map-terrain-shell .leaflet-pane,
+.localisation-map-shell .leaflet-pane,
+.map-terrain-shell .leaflet-top,
+.map-terrain-shell .leaflet-bottom,
+.localisation-map-shell .leaflet-top,
+.localisation-map-shell .leaflet-bottom {
+  z-index: auto;
+}
+
+.map-terrain-pin {
+  width: 40px;
+  height: 48px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  filter: drop-shadow(0 2px 4px rgba(10, 22, 40, 0.28));
+}
+.map-terrain-pin span {
+  width: 22px;
+  height: 22px;
+  margin-top: 4px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--pin, #059669);
+  border: 2.5px solid #fff;
+  box-sizing: border-box;
+}
+
+.leaflet-tooltip.map-terrain-tooltip {
+  background: #0d1b2a;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 4px 14px rgba(10, 22, 40, 0.28);
+}
+.leaflet-tooltip.map-terrain-tooltip::before {
+  border-top-color: #0d1b2a;
+}
+
+/* Galerie photos fullscreen — au-dessus de toute carte Leaflet */
+.fiche-terrain-gallery {
+  z-index: 10050 !important;
 }
 
 .sa-switch {
@@ -1347,8 +1459,8 @@
   to { opacity: 1; }
 }
 @keyframes p-fade-slide-down {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translate3d(0, -8px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 .p-fade-in { animation: p-fade-in 0.35s ease-out; }
 .p-fade-slide-down { animation: p-fade-slide-down 0.35s ease-out; }
@@ -1386,12 +1498,12 @@
 .card-press:active { transform: scale(0.98); }
 
 @keyframes g-sheet-up {
-  from { transform: translateY(100%); opacity: 0.55; }
-  to { transform: translateY(0); opacity: 1; }
+  from { transform: translate3d(0, 100%, 0); opacity: 0.55; }
+  to { transform: translate3d(0, 0, 0); opacity: 1; }
 }
 @keyframes g-confirm-in {
-  from { transform: translateY(12px) scale(0.98); opacity: 0; }
-  to { transform: translateY(0) scale(1); opacity: 1; }
+  from { transform: translate3d(0, 12px, 0) scale(0.98); opacity: 0; }
+  to { transform: translate3d(0, 0, 0) scale(1); opacity: 1; }
 }
 .g-confirm-sheet {
   animation: g-sheet-up 0.28s ease-out;
@@ -2006,4 +2118,13 @@
 .select2-option:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+.select2-separator {
+  padding: 6px 10px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-align: center;
+  color: var(--sa-muted, var(--color-text-muted, #7A8FA6));
+  pointer-events: none;
+  user-select: none;
 }

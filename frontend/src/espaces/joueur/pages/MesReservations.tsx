@@ -1,10 +1,17 @@
-import { Calendar, Clock, ArrowLeft, ExternalLink, Star, MessageSquare } from "lucide-react";
+import { ArrowLeft, MessageSquare, Star } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { reservationsApi, avisApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import SkeletonMesReservations from "@/components/skeletons/SkeletonMesReservations";
+import SilentSyncDot from "@/components/SilentSyncDot";
+import PaymentLockGauge from "@/components/PaymentLockGauge";
+import ReservationDatesBlock from "@/components/ReservationDatesBlock";
+import { useSilentRefresh } from "@/hooks/useSilentRefresh";
+import { useMesReservations, joueurKeys } from "@/hooks/useJoueurData";
+import { writeSwrCache } from "@/lib/swrCache";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 const statusConfig: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
-    label: "En attente",
+    label: "Paiement en cours",
     border: "border-l-[var(--color-warning)]",
     badge: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
   },
@@ -32,8 +39,13 @@ const statusConfig: Record<string, { label: string; border: string; badge: strin
     border: "border-l-[var(--color-primary)]",
     badge: "bg-[var(--color-primary)] text-white",
   },
+  match_joue: {
+    label: "Jouée",
+    border: "border-l-[var(--color-primary)]",
+    badge: "bg-[var(--color-primary)] text-white",
+  },
   acceptee: {
-    label: "Acceptée",
+    label: "Confirmée",
     border: "border-l-[var(--color-success)]",
     badge: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
@@ -106,59 +118,117 @@ function startOfToday(): Date {
 
 const Reservations = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<(typeof filterTabs)[number]["id"]>("Toutes");
-  const [reservations, setReservations] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const {
+    reservations,
+    isInitialLoading,
+    isRefetching,
+    error: queryError,
+    refetch,
+  } = useMesReservations();
+  const loading = isInitialLoading;
+  const loadError = queryError
+    ? (queryError as Error)?.message || "Impossible de charger vos réservations."
+    : null;
   const [cancelId, setCancelId] = useState<number | null>(null);
+  const [cancelPolitique, setCancelPolitique] = useState<{
+    titre?: string;
+    message?: string;
+    type_annulation?: string;
+    eligible?: boolean;
+    delai_heures?: number;
+  } | null>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [reviewReservation, setReviewReservation] = useState<any>(null);
   const [reviewNote, setReviewNote] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
   const [submittingReview, setSubmittingReview] = useState(false);
 
-  useEffect(() => {
-    loadReservations();
-  }, []);
+  const patchReservationsCache = useCallback(
+    (updater: (list: any[]) => any[]) => {
+      const key = joueurKeys.mesReservations();
+      queryClient.setQueryData(key, (prev: any[] | undefined) => {
+        const base = Array.isArray(prev) ? prev : [];
+        const next = updater(base);
+        writeSwrCache(key, next);
+        return next;
+      });
+    },
+    [queryClient],
+  );
 
-  const loadReservations = async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const data = await reservationsApi.mes();
-      setReservations(Array.isArray(data) ? data : []);
-    } catch (err: any) {
-      setReservations([]);
-      setLoadError(err?.message || "Impossible de charger vos réservations.");
-      toast.error(err?.message || "Impossible de charger vos réservations.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  useSilentRefresh({
+    onRefresh: () => refetch(),
+  });
 
   const today = startOfToday();
   const filtered = reservations.filter((r) => {
+    // Tentatives de paiement expirées : retirées de l'historique
+    if (r.statut === "expire") return false;
+    if (
+      r.statut === "en_attente" &&
+      r.verrou_expire_at != null &&
+      Number(r.verrou_expire_at) > 0 &&
+      Number(r.verrou_expire_at) < Date.now()
+    ) {
+      return false;
+    }
     const day = reservationDay(r.date);
     const isPastDay = day < today;
-    const isClosed = ["joue", "annule", "annulee", "refusee"].includes(r.statut);
+    const isClosed = ["joue", "match_joue", "annule", "annulee", "refusee"].includes(r.statut);
     if (activeTab === "Acceptées") {
-      // À venir : date >= aujourd'hui et pas clôturée
       return !isPastDay && !isClosed;
     }
     if (activeTab === "Passées") {
-      // Historique : date passée ou statut terminal
-      return isPastDay || isClosed;
+      return (isPastDay || isClosed) && r.statut !== "en_attente";
     }
+    // Toutes : historique + paiements en cours (jauge visible)
     return true;
   });
 
-  const handleCancel = async (id: number) => {
+  const openCancel = async (reservation: any) => {
+    setCancelId(reservation.id);
+    setCancelPolitique(reservation.politique_remboursement || null);
+    setCancelLoading(true);
     try {
-      await reservationsApi.annuler(id);
-      setReservations((prev) => prev.map((r) => (r.id === id ? { ...r, statut: "annule" } : r)));
-      setCancelId(null);
-      toast.success("Réservation annulée avec succès");
+      const data = (await reservationsApi.politiqueAnnulation(reservation.id)) as {
+        politique_remboursement?: typeof cancelPolitique;
+      };
+      if (data?.politique_remboursement) setCancelPolitique(data.politique_remboursement);
+    } catch {
+      /* garde la politique déjà connue sur la carte */
+    } finally {
+      setCancelLoading(false);
+    }
+  };
+
+  const closeCancel = () => {
+    setCancelId(null);
+    setCancelPolitique(null);
+  };
+
+  const handleCancel = async (id: number) => {
+    setCancelling(true);
+    try {
+      const result = (await reservationsApi.annuler(id)) as {
+        rembourse?: boolean;
+        politique?: { titre?: string; type_annulation?: string };
+      };
+      patchReservationsCache((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, statut: "annule" } : r)),
+      );
+      closeCancel();
+      toast.success(
+        result?.rembourse || result?.politique?.type_annulation === "avec_remboursement"
+          ? "Réservation annulée — remboursement en cours (WhatsApp envoyé)"
+          : "Réservation annulée sans remboursement — créneau libéré (WhatsApp envoyé)",
+      );
     } catch (err: any) {
       toast.error(err.message || "Erreur lors de l'annulation");
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -197,8 +267,21 @@ const Reservations = () => {
     setReviewComment("");
   };
 
+  const onLockExpired = useCallback(
+    (id: number) => {
+      patchReservationsCache((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, statut: "expire", _liberating: true } : r)),
+      );
+      window.setTimeout(() => {
+        patchReservationsCache((prev) => prev.filter((r) => r.id !== id));
+      }, 900);
+    },
+    [patchReservationsCache],
+  );
+
   return (
     <div className="page-container">
+      <SilentSyncDot active={isRefetching && reservations.length > 0} label="Synchronisation réservations" />
       <div className="flex items-center gap-3 responsive-padding py-4">
         <button
           type="button"
@@ -239,7 +322,7 @@ const Reservations = () => {
         ) : loadError ? (
           <div className="text-center py-14 col-span-full space-y-3">
             <p className="text-[var(--color-text-secondary)] text-sm">{loadError}</p>
-            <Button type="button" variant="outline" onClick={loadReservations}>
+            <Button type="button" variant="outline" onClick={() => void refetch()}>
               Réessayer
             </Button>
           </div>
@@ -270,11 +353,14 @@ const Reservations = () => {
             ) : (
               filtered.map((r) => {
                 const status = statusConfig[r.statut] || statusConfig.en_attente;
-                const canCancel = r.statut === "en_attente";
+                const canCancel = ["en_attente", "confirme", "acceptee"].includes(r.statut);
+                const isPendingEphemere = r.statut === "en_attente";
                 return (
                   <div
                     key={r.id}
-                    className={`relative bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] border-l-4 ${status.border} shadow-[var(--shadow-sm)] overflow-hidden`}
+                    className={`relative bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] border-l-4 ${status.border} shadow-[var(--shadow-sm)] overflow-hidden transition-all duration-700 ${
+                      r._liberating ? "opacity-0 scale-95 -translate-y-1" : isPendingEphemere ? "opacity-95" : ""
+                    }`}
                   >
                     <div className="p-4">
                       <div className="flex items-start justify-between gap-2">
@@ -290,6 +376,23 @@ const Reservations = () => {
                           {status.label}
                         </span>
                       </div>
+                      {isPendingEphemere ? (
+                        <PaymentLockGauge
+                          className="mt-3"
+                          expiresAt={Number(r.verrou_expire_at)}
+                          startedAt={r.created_at}
+                          durationMin={15}
+                          onExpired={() => onLockExpired(r.id)}
+                        />
+                      ) : null}
+                      {["annule", "annulee"].includes(r.statut) ? (
+                        <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+                          Annulée · créneau libéré
+                          {r.politique_remboursement?.type_annulation === "avec_remboursement"
+                            ? " · remboursement selon politique terrain"
+                            : ""}
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="relative mx-4 border-t border-dashed border-[var(--color-border)]">
@@ -298,9 +401,12 @@ const Reservations = () => {
                     </div>
 
                     <div className="p-4 space-y-3">
-                      <p className="text-[15px] font-semibold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
-                        {r.date} · {r.heure_debut}–{r.heure_fin}
-                      </p>
+                      <ReservationDatesBlock
+                        createdAt={r.created_at}
+                        date={r.date}
+                        heureDebut={r.heure_debut}
+                        heureFin={r.heure_fin}
+                      />
                       {r.code_reservation && (
                         <p className="text-[12px] text-[var(--color-text-muted)]">Code {r.code_reservation}</p>
                       )}
@@ -319,25 +425,7 @@ const Reservations = () => {
                           {canCancel && (
                             <button
                               type="button"
-                              onClick={async () => {
-                                try {
-                                  const pay = await reservationsApi.relancerPaiement(r.id);
-                                  const url = pay.redirect_url || pay.lien_paiement;
-                                  if (!url) throw new Error("Lien de paiement indisponible");
-                                  window.location.assign(url);
-                                } catch (err: any) {
-                                  toast.error(err?.message || "Impossible d'ouvrir le paiement");
-                                }
-                              }}
-                              className="text-[var(--color-primary)] text-[12px] font-semibold min-h-10"
-                            >
-                              Payer l'avance
-                            </button>
-                          )}
-                          {canCancel && (
-                            <button
-                              type="button"
-                              onClick={() => setCancelId(r.id)}
+                              onClick={() => void openCancel(r)}
                               className="text-[var(--color-danger)] text-[12px] font-medium min-h-10"
                             >
                               Annuler
@@ -385,20 +473,45 @@ const Reservations = () => {
         )}
       </div>
 
-      <Dialog open={!!cancelId} onOpenChange={() => setCancelId(null)}>
+      <Dialog open={!!cancelId} onOpenChange={(open) => !open && closeCancel()}>
         <DialogContent className="max-w-sm mx-4">
           <DialogHeader>
-            <DialogTitle>Annuler la réservation</DialogTitle>
-            <DialogDescription>
-              Êtes-vous sûr de vouloir annuler cette réservation ? Cette action est irréversible.
+            <DialogTitle>
+              {cancelPolitique?.titre || "Annuler la réservation"}
+            </DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 text-sm text-[var(--color-text-secondary)]">
+                {cancelLoading ? (
+                  <p>Vérification de la politique du terrain…</p>
+                ) : (
+                  <>
+                    <p className="font-medium text-[var(--color-text-primary)]">
+                      {cancelPolitique?.type_annulation === "avec_remboursement"
+                        ? "Avec remboursement"
+                        : "Sans remboursement"}
+                      {cancelPolitique?.delai_heures != null && cancelPolitique.delai_heures > 0
+                        ? ` · délai terrain ${cancelPolitique.delai_heures} h`
+                        : ""}
+                    </p>
+                    <p>
+                      {cancelPolitique?.message ||
+                        "Cette action est irréversible. Le créneau sera libéré et une notification WhatsApp sera envoyée."}
+                    </p>
+                  </>
+                )}
+              </div>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex gap-2">
-            <Button variant="outline" onClick={() => setCancelId(null)}>
+            <Button variant="outline" onClick={closeCancel} disabled={cancelling}>
               Non, garder
             </Button>
-            <Button variant="destructive" onClick={() => cancelId && handleCancel(cancelId)}>
-              Oui, annuler
+            <Button
+              variant="destructive"
+              disabled={!cancelId || cancelling || cancelLoading}
+              onClick={() => cancelId && void handleCancel(cancelId)}
+            >
+              {cancelling ? "Annulation…" : "Oui, annuler"}
             </Button>
           </DialogFooter>
         </DialogContent>

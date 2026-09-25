@@ -221,9 +221,13 @@ export default function LocalisationTerrain({
         attributionControl: true,
       }).setView(has ? [lat, lng] : DAKAR, has ? 16 : 12);
 
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+        maxZoom: 20,
+        maxNativeZoom: 20,
+        detectRetina: true,
+        subdomains: "abcd",
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
       }).addTo(map);
 
       map.on("click", (e: LeafletMouseEvent) => {
@@ -465,7 +469,7 @@ export default function LocalisationTerrain({
       </div>
 
       <div
-        className="relative mt-4 overflow-hidden h-[240px] md:h-[320px]"
+        className="localisation-map-shell relative mt-4 overflow-hidden h-[240px] md:h-[320px] isolate"
         style={{
           borderRadius: 10,
           background: "var(--sa-surface-2)",

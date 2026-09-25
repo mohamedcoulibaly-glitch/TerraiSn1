@@ -44,7 +44,7 @@ type Props = {
   open: boolean;
   onClose: () => void;
   reservations: ManualReservation[];
-  /** Depuis la fiche détail : pré-sélectionne cette résa */
+  /** Depuis la fiche détail : pré-sélectionne cette réservation */
   preselectedId?: number | null;
   onSuccess?: (reservation?: {
     id?: number;
@@ -195,6 +195,12 @@ export default function ValidationManuelleModal({
           state: "expired",
           title: "⌛ Fenêtre dépassée",
           text: `Ce match était prévu à ${formatTime(error.match_time)}. Le délai de validation est dépassé.`,
+        });
+      } else if (error.code === "QR_SCAN_PRIORITY") {
+        setResult({
+          state: "invalid",
+          title: "⏳ Un créneau à la fois",
+          text: error.message || "Valide d'abord le créneau prioritaire.",
         });
       } else if (error.code === "QR_ALREADY_SCANNED" || error.status === 403) {
         setResult({

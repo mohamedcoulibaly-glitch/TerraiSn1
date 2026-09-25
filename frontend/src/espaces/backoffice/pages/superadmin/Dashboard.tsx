@@ -28,12 +28,11 @@ import Select2 from "@/components/Select2";
 import {
   fcfa,
   gerantDuTerrain,
-  contratDepuisTerrain,
+  getContratOverlay,
   getDemandesRetrait,
   getIncidentsAuto,
   relativeDepuis,
   upsertDemandeRetrait,
-  upsertIncidentAuto,
   type DemandeRetrait,
 } from "@/lib/saContrat";
 
@@ -44,7 +43,6 @@ export default function Dashboard() {
   useSaCrumbs([{ label: "Tableau de bord" }]);
   const [showAllAlerts, setShowAllAlerts] = useState(false);
 
-  const [caisse, setCaisse] = useState<any>();
   const [finances, setFinances] = useState<any>();
   const [terrains, setTerrains] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
@@ -58,20 +56,11 @@ export default function Dashboard() {
   const [motifLibre, setMotifLibre] = useState("");
 
   const reloadOps = () => {
-    superAdminApi.caisseRetraits("en_attente").then((rows) => {
-      const list = Array.isArray(rows) ? rows : [];
-      setDemandes(list.map((d: any) => ({
-        ...d,
-        montant_net: d.montant,
-        demande_at: d.created_at,
-        gerant_whatsapp: d.gerant_whatsapp || d.whatsapp_number,
-      })));
-    }).catch(() => setDemandes(getDemandesRetrait().filter((d) => d.statut === "en_attente")));
+    setDemandes(getDemandesRetrait().filter((d) => d.statut === "en_attente"));
     setIncidents(getIncidentsAuto());
   };
 
   useEffect(() => {
-    superAdminApi.caisseDashboard().then(setCaisse).catch(console.error);
     superAdminApi.finances().then(setFinances).catch(console.error);
     Promise.all([superAdminApi.terrains(), superAdminApi.users()]).then(([t, u]) => {
       setTerrains(Array.isArray(t) ? t : []);
@@ -83,30 +72,29 @@ export default function Dashboard() {
 
   const rows = useMemo(() => {
     return terrains.map((t) => {
-      const c = contratDepuisTerrain(t);
+      const c = getContratOverlay(t.id);
       const gerant = gerantDuTerrain(users, t.id);
       const fin = (finances?.terrains || []).find((f: any) => Number(f.id) === Number(t.id)) || {};
-      const du = Number(
-        t.contrat_resume?.encore_du ??
-          Math.max(0, Number(fin.avances || 0) - Number(fin.commissions || 0) - Number(fin.reverse || 0)),
-      );
-      return { t, c, gerant, du };
+      const avances = Number(fin.avances || fin.acomptes || 0);
+      const commissions = Number(fin.commissions || 0);
+      const reverse = Number(fin.reverse || 0);
+      const du = Math.max(0, avances - commissions - reverse);
+      return { t, c, gerant, du, avances, commissions };
     });
   }, [terrains, users, finances]);
 
-  const sansNumeroRows = rows.filter((r) => r.c.wave_statut === "absent" && r.c.om_statut === "absent");
-  const sansNumero = Number((caisse?.alertes?.terrains_sans_wave_om || []).length || sansNumeroRows.length);
-  const testsEnAttente = Number(caisse?.alertes?.tests_100_en_attente?.length || 0);
-  const retraitsOld = Number(caisse?.alertes?.retraits_plus_1h || 0);
-  const autoEchecs = Number(caisse?.auto_payouts_echecs || incidents.filter((i) => i.statut === "echec").length);
-  const fenetreExpiree = Number(caisse?.alertes?.fenetres_expirees_a_reverser || 0);
+  const sansNumero = rows.filter((r) => r.c.wave_statut === "absent" && r.c.om_statut === "absent");
+  const testsEnAttente = rows.filter((r) => r.c.wave_statut === "test_envoye" || r.c.om_statut === "test_envoye").length;
+  const retraitsOld = demandes.filter((d) => Date.now() - new Date(d.demande_at).getTime() > 3600000).length;
+  const autoEchecs = incidents.filter((i) => i.statut === "echec");
+  const fenetreExpiree = rows.filter((r) => r.du > 0 && !r.c.remboursement_autorise).length;
 
   const alertes = [
-    sansNumero ? { msg: `${sansNumero} terrain(s) sans numéro Wave/OM configuré`, to: "/backoffice/superadmin/terrains", label: "Configurer" } : null,
+    sansNumero.length ? { msg: `${sansNumero.length} terrain(s) sans numéro Wave/OM configuré`, to: "/backoffice/superadmin/terrains", label: "Configurer" } : null,
     testsEnAttente ? { msg: `${testsEnAttente} test 100 FCFA en attente de vérification`, to: "/backoffice/superadmin/terrains", label: "Vérifier" } : null,
     retraitsOld ? { msg: `${retraitsOld} demande(s) de retrait depuis plus d'1 heure`, to: "/backoffice/superadmin/caisse", label: "Traiter" } : null,
-    autoEchecs ? { msg: `${autoEchecs} payout auto en échec`, to: "/backoffice/superadmin/caisse", label: "Relancer" } : null,
-    fenetreExpiree ? { msg: `${fenetreExpiree} dû(s) — fenêtre de remboursement expirée, prêt à reverser`, to: "/backoffice/superadmin/caisse", label: "Voir" } : null,
+    autoEchecs.length ? { msg: `${autoEchecs.length} payout auto en échec`, to: "/backoffice/superadmin/caisse", label: "Relancer" } : null,
+    fenetreExpiree ? { msg: `${fenetreExpiree} terrain(s) — fenêtre de remboursement expirée, dû payable`, to: "/backoffice/superadmin/caisse", label: "Voir" } : null,
     Number(essaiKpis?.expires) ? { msg: `${essaiKpis?.expires} essai(s) expiré(s)`, to: "/backoffice/superadmin/terrains", label: "Traiter" } : null,
     Number(essaiKpis?.proches) ? { msg: `${essaiKpis?.proches} terrain(s) dont l'essai expire bientôt`, to: "/backoffice/superadmin/terrains", label: "Voir" } : null,
   ].filter(Boolean) as { msg: string; to: string; label: string }[];
@@ -115,13 +103,10 @@ export default function Dashboard() {
     setAlertCount(alertes.length);
   }, [alertes.length, setAlertCount]);
 
-  const encaisse = Number(caisse?.encaisse_paytech ?? finances?.total_avances ?? 0);
-  const commission = Number(caisse?.commission_acquise ?? finances?.total_commissions ?? 0);
+  const encaisse = Number(finances?.total_avances || 0);
+  const commission = Number(finances?.total_commissions || 0);
   const reverse = Number(finances?.total_reverse || 0);
-  const duTotal = Number(caisse?.du_payable ?? Math.max(0, encaisse - commission - reverse));
-  const duEnFenetre = Number(caisse?.du_en_fenetre ?? 0);
-  const bloque = Number(caisse?.bloque_sans_numero ?? 0);
-  const autoActifs = rows.filter((r) => r.c.payout_mode === "auto" && r.c.production_paiement);
+  const duTotal = Math.max(0, encaisse - commission - reverse);
   const modeCounts = {
     essai: rows.filter((r) => resolveModeRevenu(r.t) === "essai").length,
     commission: rows.filter((r) => resolveModeRevenu(r.t) === "commission").length,
@@ -130,27 +115,31 @@ export default function Dashboard() {
   };
   const visibleAlertes = showAllAlerts ? alertes : alertes.slice(0, 3);
 
-  async function marquerEnvoye() {
+  function marquerEnvoye() {
     if (!refModal) return;
-    try {
-      await superAdminApi.marquerRetraitEnvoye(Number(refModal.id), refInput);
-      setRefModal(null);
-      setRefInput("");
-      reloadOps();
-    } catch (err) {
-      console.error(err);
-    }
+    upsertDemandeRetrait({
+      ...refModal,
+      statut: "envoye",
+      ref_manuelle: refInput,
+      traite_par: "Super Admin",
+      traite_at: new Date().toISOString(),
+    });
+    setRefModal(null);
+    setRefInput("");
+    reloadOps();
   }
 
-  async function rejeter() {
+  function rejeter() {
     if (!rejectModal) return;
-    try {
-      await superAdminApi.rejeterRetrait(Number(rejectModal.id), motif === "Autre" ? motifLibre : motif);
-      setRejectModal(null);
-      reloadOps();
-    } catch (err) {
-      console.error(err);
-    }
+    upsertDemandeRetrait({
+      ...rejectModal,
+      statut: "rejete",
+      motif_rejet: motif === "Autre" ? motifLibre : motif,
+      traite_par: "Super Admin",
+      traite_at: new Date().toISOString(),
+    });
+    setRejectModal(null);
+    reloadOps();
   }
 
   return (
@@ -182,10 +171,10 @@ export default function Dashboard() {
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
         <SaKpi icon={DollarSign} iconColor="var(--sa-success-text)" iconBg="var(--sa-success-subtle)" value={fcfa(encaisse)} label="Encaissé ce mois" />
         <SaKpi icon={Percent} iconColor="var(--sa-primary-text)" iconBg="var(--sa-primary-subtle)" value={fcfa(commission)} label="Commission acquise" />
-        <SaKpi icon={Clock} iconColor="var(--sa-warning-text)" iconBg="var(--sa-warning-subtle)" value={fcfa(duTotal)} label={`Dû payable${duEnFenetre ? ` · fenêtre ${fcfa(duEnFenetre)}` : ""}`} />
-        <SaKpi icon={Inbox} iconColor="var(--sa-danger-text)" iconBg="var(--sa-danger-subtle)" value={String(demandes.length)} label="Retraits en attente" />
         <SaKpi icon={MapPin} iconColor="var(--sa-info-text)" iconBg="var(--sa-info-subtle)" value={String(terrains.filter((t) => t.is_active).length)} label="Terrains actifs" />
-        <SaKpi icon={FlaskConical} iconColor="var(--sa-mode-essai-text)" iconBg="var(--sa-mode-essai-bg)" value={bloque > 0 ? fcfa(bloque) : String(essaiKpis?.actifs || 0)} label={bloque > 0 ? "Bloqué sans Wave/OM" : "Terrains en essai"} />
+        <SaKpi icon={Clock} iconColor="var(--sa-warning-text)" iconBg="var(--sa-warning-subtle)" value={fcfa(duTotal)} label="Dû payable" />
+        <SaKpi icon={Inbox} iconColor="var(--sa-danger-text)" iconBg="var(--sa-danger-subtle)" value={String(demandes.length)} label="Retraits en attente" />
+        <SaKpi icon={FlaskConical} iconColor="var(--sa-mode-essai-text)" iconBg="var(--sa-mode-essai-bg)" value={String(essaiKpis?.actifs || 0)} label="Terrains en essai" />
       </section>
 
       <div className="grid grid-cols-1 min-[1100px]:grid-cols-[minmax(0,1fr)_minmax(280px,340px)] gap-5 items-start">
@@ -280,50 +269,6 @@ export default function Dashboard() {
               </div>
             </SaCard>
           ) : null}
-
-          {autoActifs.length > 0 || autoEchecs > 0 ? (
-            <SaCard>
-              <SaCardHeader>
-                <p className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Payouts automatiques</p>
-              </SaCardHeader>
-              <div className="overflow-x-auto">
-                <table className="sa-table">
-                  <thead>
-                    <tr>
-                      <th>Terrain</th>
-                      <th>Dernier payout</th>
-                      <th>Statut</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(incidents.length ? incidents : autoActifs.map((r) => ({ terrain_id: r.t.id, terrain_nom: r.t.nom, statut: "en_attente" as const }))).map((i) => (
-                      <tr key={i.terrain_id}>
-                        <td>{i.terrain_nom}</td>
-                        <td>{i.dernier_at ? new Date(i.dernier_at).toLocaleString("fr-FR") : "—"}</td>
-                        <td>{i.statut === "echec" ? "Échec" : i.statut === "ok" ? "OK" : "En attente"}</td>
-                        <td>
-                          {i.statut === "echec" ? (
-                            <button
-                              type="button"
-                              className="text-[12px] font-semibold"
-                              style={{ color: "var(--sa-danger)" }}
-                              onClick={() => {
-                                upsertIncidentAuto({ ...i, statut: "en_attente", message: "Relance demandée" });
-                                reloadOps();
-                              }}
-                            >
-                              Relancer
-                            </button>
-                          ) : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </SaCard>
-          ) : null}
         </div>
 
         <div className="min-w-0 space-y-4">
@@ -376,8 +321,8 @@ export default function Dashboard() {
             <SaCardBody className="space-y-3">
               {[
                 ...demandes.slice(0, 4).map((d) => ({ id: `d-${d.id}`, text: `Retrait ${d.gerant_nom} · ${fcfa(d.montant_net)}`, time: relativeDepuis(d.demande_at).label })),
-                ...incidents.filter((i) => i.statut === "echec").slice(0, 2).map((i) => ({ id: `i-${i.terrain_id}`, text: `Payout auto en échec · ${i.terrain_nom}`, time: "à traiter" })),
-                ...sansNumeroRows.slice(0, 2).map((r) => ({ id: `s-${r.t.id}`, text: `${r.t.nom} sans Wave/OM`, time: "contrat" })),
+                ...autoEchecs.slice(0, 2).map((i) => ({ id: `i-${i.terrain_id}`, text: `Payout auto en échec · ${i.terrain_nom}`, time: "à traiter" })),
+                ...sansNumero.slice(0, 2).map((r) => ({ id: `s-${r.t.id}`, text: `${r.t.nom} sans Wave/OM`, time: "contrat" })),
               ].slice(0, 8).map((a) => (
                 <div key={a.id} className="flex items-start gap-2">
                   <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "var(--sa-primary)" }} />
@@ -387,7 +332,7 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
-              {demandes.length + incidents.filter((i) => i.statut === "echec").length + sansNumeroRows.length === 0 ? (
+              {demandes.length + autoEchecs.length + sansNumero.length === 0 ? (
                 <p className="text-[13px]" style={{ color: "var(--sa-text-muted)" }}>Aucune activité récente.</p>
               ) : null}
             </SaCardBody>

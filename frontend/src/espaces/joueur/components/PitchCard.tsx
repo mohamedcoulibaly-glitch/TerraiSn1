@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight, Heart, MapPin, Star } from "lucide-react";
-import { resolveTerrainPhoto, fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
+import { resolvePhotoPrincipale, fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
 import { Badge, type BadgeTone } from "@/espaces/joueur/components/Badge";
 import { formatTerrainType } from "@/lib/commodites";
 import { cn, formatFcfaPerHour } from "@/lib/utils";
@@ -28,23 +28,8 @@ export type PitchCardProps = {
 type DispoTone = Exclude<BadgeTone, "neutral">;
 
 function resolvePhotos(pitch: any): string[] {
-  const raw = pitch?.photos;
-  let list: string[] = [];
-  if (Array.isArray(raw)) list = raw.map(String).filter(Boolean);
-  else if (typeof raw === "string" && raw.trim()) {
-    if (raw.startsWith("[")) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) list = parsed.map(String).filter(Boolean);
-      } catch {
-        /* ignore */
-      }
-    } else if (raw.startsWith("http") || raw.startsWith("/")) {
-      list = [raw];
-    }
-  }
-  if (list.length === 0) list = [resolveTerrainPhoto(pitch)];
-  return list;
+  const principale = resolvePhotoPrincipale(pitch);
+  return principale ? [principale] : [fieldImageForId(pitch?.id)];
 }
 
 export function favKey(id: number | string) {
@@ -143,7 +128,7 @@ function MetaRow({
   const parts = [quartier, formatLabel].filter(Boolean);
   return (
     <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[13px] leading-snug text-neutral-400 sm:text-sm">
-      <MapPin className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden />
+      <MapPin className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" aria-hidden />
       <span className="min-w-0 line-clamp-1">{parts.join(" · ")}</span>
       {note > 0 && (
         <span className="inline-flex shrink-0 items-center gap-0.5 text-[13px] text-neutral-400">
@@ -167,7 +152,7 @@ function PriceRow({ prix, isComplet, pitchName }: { prix: number; isComplet: boo
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors duration-200",
           isComplet
             ? "bg-neutral-200 text-neutral-400 dark:bg-neutral-700"
-            : "bg-emerald-500 text-white group-hover:bg-emerald-600"
+            : "bg-[var(--primary)] text-white group-hover:bg-[var(--primary-dark)]"
         )}
         aria-hidden
       >
@@ -189,7 +174,7 @@ export function PitchCard({
   const navigate = useNavigate();
   const status = dispoInfo(data);
   const go = () => navigate(`/terrain/${data.id}`);
-  const quartier = data.quartier || data.adresse || data.ville || "";
+  const quartier = data.adresse_theorique || data.quartier || data.adresse || data.ville || "";
   const photos = resolvePhotos(data);
   const photo = photos[0] || fieldImageForId(data.id);
   const prix = Number(data.prix_heure ?? data.prix_terrain_entier ?? 0);

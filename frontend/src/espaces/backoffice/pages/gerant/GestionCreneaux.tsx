@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { ChevronLeft, ChevronRight, User, XCircle, Phone, Calendar } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,11 +14,12 @@ import {
 } from "@/components/ui/dialog";
 import { hoursRangeFromHoraires, labelHeureSenegal, formatHour } from "@/lib/scheduleSn";
 import { localYmd } from "@/lib/localDate";
+import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
 
 const statusConfig: Record<string, { label: string; className: string }> = {
   en_attente: {
     label: "En attente de paiement",
-    className: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
+    className: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
   },
   confirme: {
     label: "Réservé ✓",
@@ -54,6 +55,7 @@ const ManagerCalendar = () => {
   const [reservations, setReservations] = useState<any[]>([]);
   const [blocages, setBlocages] = useState<any[]>([]);
   const [horaires, setHoraires] = useState<any[]>([]);
+  const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
   const [selectedReservation, setSelectedReservation] = useState<any>(null);
   const [selectedBlocage, setSelectedBlocage] = useState<any>(null);
   const [processing, setProcessing] = useState(false);
@@ -77,6 +79,9 @@ const ManagerCalendar = () => {
       setReservations(data.reservations || []);
       setBlocages(data.blocages || []);
       setHoraires(data.horaires || []);
+      setFeatures(
+        data?.features && typeof data.features === "object" ? (data.features as Record<string, boolean>) : {},
+      );
     } catch (err: any) {
       toast.error(err.message || "Erreur lors du chargement");
     } finally {
@@ -133,7 +138,7 @@ const ManagerCalendar = () => {
         r.date === dateStr &&
         time >= r.heure_debut &&
         time < r.heure_fin &&
-        ["en_attente", "confirme", "acceptee", "joue", "match_joue"].includes(r.statut)
+        ["confirme", "acceptee", "joue", "match_joue"].includes(r.statut)
     );
     if (reservation) return { status: "reserved" as const, data: reservation };
 
@@ -273,7 +278,7 @@ const ManagerCalendar = () => {
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-[var(--color-text-secondary)]">
         <span className="inline-flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-[color-mix(in_srgb,var(--color-success)_40%,white)]" />{" "}
+          <span className="w-2.5 h-2.5 rounded-full bg-[color-mix(in_srgb,var(--color-primary)_40%,white)]" />{" "}
           Libre
         </span>
         <span className="inline-flex items-center gap-1.5">
@@ -296,7 +301,7 @@ const ManagerCalendar = () => {
               key={time}
               className={`bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-3 flex items-center gap-3 ${
                 status === "free"
-                  ? "border-l-4 border-l-[var(--color-success)]"
+                  ? "border-l-4 border-l-[var(--color-primary)]"
                   : status === "reserved"
                     ? "border-l-4 border-l-[var(--color-warning)]"
                     : "border-l-4 border-l-[var(--color-danger)]"
@@ -310,7 +315,7 @@ const ManagerCalendar = () => {
               </p>
               <div className="flex-1 min-w-0">
                 {status === "free" && (
-                  <span className="inline-flex text-[11px] font-medium px-2.5 py-1 rounded-full bg-[color-mix(in_srgb,var(--color-success)_12%,white)] text-[var(--color-success)]">
+                  <span className="inline-flex text-[11px] font-medium px-2.5 py-1 rounded-full bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] text-[var(--color-primary)]">
                     Libre
                   </span>
                 )}
@@ -400,16 +405,25 @@ const ManagerCalendar = () => {
               </div>
 
               {selectedReservation.statut === "en_attente" && (
-                <DialogFooter className="flex gap-2 sm:gap-0">
+                <div className="space-y-3 pt-2">
+                  <EnAttentePaiementActions
+                    reservationId={selectedReservation.id}
+                    montantAvance={selectedReservation.montant_avance}
+                    features={features}
+                    variant="compact"
+                    onDone={() => {
+                      setSelectedReservation(null);
+                      void loadData();
+                    }}
+                  />
                   <button
                     type="button"
-                    className="flex-1 min-h-[48px] rounded-[var(--radius-md)] border border-[var(--color-danger)]/30 text-[var(--color-danger)] text-sm font-medium"
-                    onClick={() => handleTraiterReservation(selectedReservation.id, "refusee")}
-                    disabled={processing}
+                    className="w-full min-h-[44px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium"
+                    onClick={() => handleOpenFiche(selectedReservation.id)}
                   >
-                    Refuser
+                    Ouvrir la fiche complète
                   </button>
-                </DialogFooter>
+                </div>
               )}
               {selectedReservation.statut === "confirme" && (
                 <DialogFooter>

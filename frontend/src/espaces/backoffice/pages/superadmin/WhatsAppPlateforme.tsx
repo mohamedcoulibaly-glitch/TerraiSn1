@@ -119,6 +119,42 @@ export default function WhatsAppPlateformePage() {
         </button>
       </section>
 
+      <section className="rounded-xl p-5 space-y-2" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
+        <h2 className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Alertes développeur</h2>
+        <p className="text-[12px]" style={{ color: "var(--sa-muted)" }}>
+          E-mail + WhatsApp (session plateforme) vers les devs en cas de bug ou panne OpenWA.
+          Le WhatsApp d’alerte utilise le numéro connecté ci-dessus.
+        </p>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = (await superAdminApi.bugAlertsTest()) as {
+                ok?: boolean;
+                email?: { ok?: boolean };
+                whatsapp?: { ok?: boolean; reason?: string };
+              };
+              if (r.email?.ok) toast.success("E-mail d’alerte envoyé ✓");
+              else toast.error("E-mail d’alerte échoué");
+              if (r.whatsapp?.ok) toast.success("WhatsApp d’alerte envoyé ✓");
+              else if (r.whatsapp?.reason === "platform_whatsapp_disconnected") {
+                toast.message("WhatsApp alerte : connecte d’abord la session plateforme");
+              } else toast.message("WhatsApp alerte non envoyé");
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Échec test alerte");
+            } finally {
+              setBusy(false);
+            }
+          }}
+          className="min-h-[44px] px-4 rounded-lg text-[13px] font-semibold"
+          style={{ border: "1px solid var(--sa-border)", color: "var(--sa-text)" }}
+        >
+          Tester les alertes développeur
+        </button>
+      </section>
+
       {modal && qr ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
           <button type="button" className="absolute inset-0" style={{ background: "rgba(10,22,40,0.5)" }} onClick={() => setModal(false)} />

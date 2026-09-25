@@ -1,21 +1,37 @@
-import * as LucideIcons from "lucide-react";
-import type { LucideProps } from "lucide-react";
+import { icons, CircleCheck } from "lucide-react";
+import type { LucideProps, LucideIcon } from "lucide-react";
 
 const SKIP = new Set(["createLucideIcon", "createElement", "Icon", "default", "icons"]);
-const ALIASES: Record<string, string> = { ParkingSquare: "SquareParking" };
+const ALIASES: Record<string, string> = {
+  ParkingSquare: "SquareParking",
+  // Alias Lucide récents
+  CheckCircle2: "CircleCheck",
+  HelpCircle: "CircleHelp",
+  AlertCircle: "CircleAlert",
+};
 
-export function lucideIcon(name?: string) {
-  if (!name || SKIP.has(name)) return LucideIcons.Star;
-  const resolved = ALIASES[name] || name;
-  const Icon = (LucideIcons as Record<string, unknown>)[resolved];
-  if (typeof Icon === "function") return Icon as React.ComponentType<LucideProps>;
-  return LucideIcons.Star;
+function resolveName(name?: string): string | undefined {
+  if (!name || SKIP.has(name)) return undefined;
+  return ALIASES[name] || name;
+}
+
+/** Résout un nom Lucide via le dictionnaire `icons` (fiable avec Vite / ESM). */
+export function lucideIcon(name?: string): LucideIcon {
+  const resolved = resolveName(name);
+  if (resolved && icons[resolved as keyof typeof icons]) {
+    return icons[resolved as keyof typeof icons];
+  }
+  // Essayer le nom brut si l’alias n’a rien donné
+  if (name && icons[name as keyof typeof icons]) {
+    return icons[name as keyof typeof icons];
+  }
+  return CircleCheck;
 }
 
 export function isLucideName(name: string) {
-  if (!name || SKIP.has(name)) return false;
-  const resolved = ALIASES[name] || name;
-  return typeof (LucideIcons as Record<string, unknown>)[resolved] === "function";
+  const resolved = resolveName(name);
+  if (resolved && icons[resolved as keyof typeof icons]) return true;
+  return Boolean(name && icons[name as keyof typeof icons]);
 }
 
 export function LucideByName({ name, ...props }: { name?: string } & LucideProps) {

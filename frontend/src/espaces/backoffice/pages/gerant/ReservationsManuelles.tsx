@@ -1,5 +1,4 @@
 ﻿import { useEffect, useState } from "react";
-import { Clock, MessageCircle } from "lucide-react";
 import { gerantApi, reservationsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
@@ -9,6 +8,11 @@ import Select2 from "@/components/Select2";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import { confirmWhatsappAction, WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
 import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
+import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
+import ReservationDatesBlock from "@/components/ReservationDatesBlock";
+import PaymentLockGauge from "@/components/PaymentLockGauge";
+import SilentSyncDot from "@/components/SilentSyncDot";
+import { useGerantDashboard, useGerantLiveInvalidate } from "@/hooks/useGerantLiveData";
 
 const statusMeta: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
@@ -56,10 +60,14 @@ const statusMeta: Record<string, { label: string; border: string; badge: string 
 export default function ReservationsManuelles() {
   const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const [dashboard, setDashboard] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const enabled =
+    isAuthenticated &&
+    (user?.role === "employe" || user?.role === "gerant" || user?.accountType === "employe");
+
+  const { dashboard, isInitialLoading, isRefetching, refetch } = useGerantDashboard(Boolean(enabled));
+  const { silentRefetch } = useGerantLiveInvalidate();
+
   const [manualLoading, setManualLoading] = useState(false);
-  const [resendId, setResendId] = useState<number | null>(null);
   const { down: waDown } = useWhatsappInfra(true);
   const [dateFilter, setDateFilter] = useState<"today" | "week" | "all">("today");
   const [phoneFieldError, setPhoneFieldError] = useState<string | null>(null);
@@ -80,15 +88,10 @@ export default function ReservationsManuelles() {
   });
 
   useEffect(() => {
-    if (
-      !isAuthenticated ||
-      (user?.role !== "employe" && user?.role !== "gerant" && user?.accountType !== "employe")
-    ) {
+    if (!enabled) {
       navigate("/backoffice/login");
-      return;
     }
-    load();
-  }, [isAuthenticated]);
+  }, [enabled, navigate]);
 
   useEffect(() => {
     if (!manual.date || !manual.heure_debut || !manual.heure_fin) {
@@ -127,15 +130,9 @@ export default function ReservationsManuelles() {
     };
   }, [manual.date, manual.heure_debut, manual.heure_fin, manual.format_terrain]);
 
-  const load = async () => {
-    try {
-      const data = await gerantApi.dashboard();
-      setDashboard(data);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
+  const load = () => {
+    void refetch();
+    void silentRefetch();
   };
 
   const filterReservations = (reservations: any[]) => {
@@ -157,22 +154,6 @@ export default function ReservationsManuelles() {
 
   const handleOpenFiche = (id: number) => {
     navigate(`/backoffice/gerant/reservations/${id}`);
-  };
-
-  const handleResendWhatsApp = async (id: number) => {
-    if (waDown) {
-      toast.error(WHATSAPP_INFRA_MESSAGE);
-      if (!confirmWhatsappAction(true)) return;
-    }
-    setResendId(id);
-    try {
-      await reservationsApi.renvoyerLienWhatsApp(id);
-      toast.success("Lien de paiement renvoyé par WhatsApp");
-    } catch (err: any) {
-      toast.error(err.message || "Impossible d'envoyer le WhatsApp");
-    } finally {
-      setResendId(null);
-    }
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -223,6 +204,9 @@ export default function ReservationsManuelles() {
       });
       setDevis(null);
       await load();
+      if (result?.reservation_id) {
+        navigate(`/backoffice/gerant/reservations/${result.reservation_id}`);
+      }
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -230,7 +214,7 @@ export default function ReservationsManuelles() {
     }
   };
 
-  if (loading) {
+  if (isInitialLoading) {
     return (
       <div className="text-[var(--color-text-secondary)] animate-pulse text-sm py-10 text-center">
         Chargement...
@@ -243,6 +227,7 @@ export default function ReservationsManuelles() {
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
+      <SilentSyncDot active={isRefetching} label="Synchronisation réservations" />
       <div>
         <h1
           className="text-xl font-semibold text-[var(--color-text-primary)]"
@@ -299,36 +284,49 @@ export default function ReservationsManuelles() {
                   >
                     {r.joueur_nom}
                   </p>
-                  <p className="text-xs text-[var(--color-text-muted)] mt-1 flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {r.date} · {r.heure_debut}–{r.heure_fin}
-                  </p>
+                  <div className="mt-1.5">
+                    <ReservationDatesBlock
+                      compact
+                      createdAt={r.created_at}
+                      date={r.date}
+                      heureDebut={r.heure_debut}
+                      heureFin={r.heure_fin}
+                    />
+                  </div>
                 </button>
                 <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${meta.badge}`}>
                   {meta.label}
                 </span>
               </div>
-              <p className="text-xs text-[var(--color-text-secondary)] mt-2">
-                {(r.montant || 0).toLocaleString()} CFA ·{" "}
-                {r.format_terrain === "moitie" ? "Moitié" : "Entier"}
-                {r.code_reservation ? (
-                  <span className="block mt-1 font-semibold text-[var(--color-primary)]">
-                    Code : {r.code_reservation}
-                  </span>
-                ) : null}
-              </p>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {r.statut === "en_attente" && (
-                  <button
-                    type="button"
-                    onClick={() => handleResendWhatsApp(r.id)}
-                    disabled={resendId === r.id}
-                    className="min-h-[44px] px-4 rounded-[var(--radius-sm)] bg-[#25D366] text-white text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60"
-                  >
-                    <MessageCircle className="w-3.5 h-3.5" />
-                    {resendId === r.id ? "Envoi..." : "Renvoyer WhatsApp"}
-                  </button>
-                )}
+              {r.statut === "en_attente" ? (
+                <PaymentLockGauge
+                  className="mt-2"
+                  expiresAt={Number(r.verrou_expire_at)}
+                  startedAt={r.created_at}
+                      onExpired={() => void load()}
+                    />
+                  ) : null}
+                  <p className="text-xs text-[var(--color-text-secondary)] mt-2">
+                    {(r.montant || 0).toLocaleString()} CFA ·{" "}
+                    {r.format_terrain === "moitie" ? "Moitié" : "Entier"}
+                    {r.code_reservation ? (
+                      <span className="block mt-1 font-semibold text-[var(--color-primary)]">
+                        Code : {r.code_reservation}
+                      </span>
+                    ) : null}
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {r.statut === "en_attente" && (
+                      <div className="w-full">
+                        <EnAttentePaiementActions
+                          reservationId={r.id}
+                          montantAvance={r.montant_avance ?? r.acompte}
+                          features={dashboard?.features || null}
+                          variant="compact"
+                          onDone={() => void load()}
+                        />
+                      </div>
+                    )}
                 {r.statut === "confirme" && (
                   <button
                     type="button"
@@ -356,8 +354,8 @@ export default function ReservationsManuelles() {
             <tr>
               <th>Joueur</th>
               <th>Code</th>
-              <th>Date</th>
-              <th>Heure</th>
+              <th>Jour du match</th>
+              <th>Réservé le</th>
               <th>Montant</th>
               <th>Statut</th>
               <th>Actions</th>
@@ -380,9 +378,33 @@ export default function ReservationsManuelles() {
                   <td className="font-semibold text-[var(--color-primary)] text-xs">
                     {r.code_reservation || "—"}
                   </td>
-                  <td>{r.date}</td>
-                  <td>
-                    {r.heure_debut}–{r.heure_fin}
+                  <td className="text-xs">
+                    <ReservationDatesBlock
+                      compact
+                      createdAt={null}
+                      date={r.date}
+                      heureDebut={r.heure_debut}
+                      heureFin={r.heure_fin}
+                    />
+                  </td>
+                  <td className="text-xs text-[var(--color-text-muted)]">
+                    {r.created_at
+                      ? new Date(String(r.created_at).includes("T") ? r.created_at : String(r.created_at).replace(" ", "T")).toLocaleString("fr-FR", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "—"}
+                    {r.statut === "en_attente" ? (
+                      <PaymentLockGauge
+                        className="mt-2 max-w-[140px]"
+                        expiresAt={Number(r.verrou_expire_at)}
+                        startedAt={r.created_at}
+                        onExpired={() => void load()}
+                      />
+                    ) : null}
                   </td>
                   <td className="font-semibold text-[var(--color-primary)]">
                     {(r.montant || 0).toLocaleString()} CFA
@@ -392,16 +414,15 @@ export default function ReservationsManuelles() {
                       {meta.label}
                     </span>
                   </td>
-                  <td className="space-x-2">
+                  <td className="space-y-2 min-w-[220px]">
                     {r.statut === "en_attente" && (
-                      <button
-                        type="button"
-                        onClick={() => handleResendWhatsApp(r.id)}
-                        disabled={resendId === r.id}
-                        className="text-xs font-medium text-[#128C7E] hover:underline disabled:opacity-60"
-                      >
-                        {resendId === r.id ? "Envoi..." : "Renvoyer WhatsApp"}
-                      </button>
+                      <EnAttentePaiementActions
+                        reservationId={r.id}
+                        montantAvance={r.montant_avance ?? r.acompte}
+                        features={dashboard?.features || null}
+                        variant="compact"
+                        onDone={() => void load()}
+                      />
                     )}
                     {r.statut === "confirme" ? (
                       <button
@@ -543,7 +564,10 @@ export default function ReservationsManuelles() {
                   </div>
                   <div>
                     <p className="text-[10px] text-[var(--color-text-muted)]">
-                      Avance ({devis?.pourcentage_avance || 12.5}%)
+                      Avance
+                      {devis?.pourcentage_avance != null
+                        ? ` (${devis.pourcentage_avance}%)`
+                        : ""}
                     </p>
                     <p className="font-semibold text-[var(--color-primary)]">
                       {Number(devis?.montant_avance || 0).toLocaleString("fr-FR")} CFA
@@ -557,9 +581,17 @@ export default function ReservationsManuelles() {
                   </div>
                 </div>
               )}
-              <p className="text-[11px] text-[var(--color-text-muted)] mt-2">
-                Même prix que le joueur verra · créneau déjà pris → refus automatique
-              </p>
+              {devis?.montant_commission != null && Number(devis.montant_commission) > 0 ? (
+                <p className="text-[11px] text-[var(--color-text-muted)] mt-2">
+                  Commission plateforme ({devis.commission_pourcentage ?? "—"}% de l&apos;avance) :{" "}
+                  {Number(devis.montant_commission).toLocaleString("fr-FR")} CFA — distincte de
+                  l&apos;avance joueur
+                </p>
+              ) : (
+                <p className="text-[11px] text-[var(--color-text-muted)] mt-2">
+                  Même prix que le joueur verra · créneau déjà pris → refus automatique
+                </p>
+              )}
             </div>
           )}
 

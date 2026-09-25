@@ -10,8 +10,6 @@ export type ConfirmationModalProps = {
   labelConfirmer?: string;
   labelAnnuler?: string;
   variante?: SaConfirmationVariante;
-  confirming?: boolean;
-  disabledConfirm?: boolean;
   onConfirmer: () => void;
   onAnnuler: () => void;
   children?: React.ReactNode;
@@ -31,8 +29,6 @@ export function ConfirmationModal({
   labelConfirmer = "Confirmer",
   labelAnnuler = "Annuler",
   variante = "danger",
-  confirming = false,
-  disabledConfirm = false,
   onConfirmer,
   onAnnuler,
   children,
@@ -40,7 +36,7 @@ export function ConfirmationModal({
   useEffect(() => {
     if (!ouvert) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !confirming) onAnnuler();
+      if (e.key === "Escape") onAnnuler();
     };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -49,13 +45,13 @@ export function ConfirmationModal({
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [ouvert, onAnnuler, confirming]);
+  }, [ouvert, onAnnuler]);
 
   if (!ouvert) return null;
 
   return createPortal(
     <div className="superadmin-app fixed inset-0 z-[80] flex items-end md:items-center justify-center px-0 md:px-4">
-      <button type="button" className="absolute inset-0" style={{ background: "rgba(10,22,40,0.45)" }} aria-label={labelAnnuler} onClick={() => !confirming && onAnnuler()} />
+      <button type="button" className="absolute inset-0" style={{ background: "rgba(10,22,40,0.45)" }} aria-label={labelAnnuler} onClick={onAnnuler} />
       <div
         role="dialog"
         aria-modal="true"
@@ -77,21 +73,19 @@ export function ConfirmationModal({
         <div className="mt-5 grid grid-cols-2 gap-2">
           <button
             type="button"
-            disabled={confirming}
             onClick={onAnnuler}
-            className="min-h-[48px] rounded-xl text-sm font-semibold disabled:opacity-50"
+            className="min-h-[48px] rounded-xl text-sm font-semibold"
             style={{ background: "transparent", color: "var(--sa-text-2)", border: "1.5px solid var(--sa-border)" }}
           >
             {labelAnnuler}
           </button>
           <button
             type="button"
-            disabled={confirming || disabledConfirm}
             onClick={onConfirmer}
-            className="min-h-[48px] rounded-xl text-sm font-semibold text-white disabled:opacity-60"
+            className="min-h-[48px] rounded-xl text-sm font-semibold text-white"
             style={{ background: CONFIRM_BG[variante] }}
           >
-            {confirming ? "Traitement…" : labelConfirmer}
+            {labelConfirmer}
           </button>
         </div>
       </div>

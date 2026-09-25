@@ -1,14 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, CheckCircle2, Link2, MessageCircle, Phone, QrCode, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Link2, MessageCircle, Phone } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { gerantApi, reservationsApi } from "@/lib/api";
 import ScannerModal from "@/espaces/backoffice/components/ScannerModal";
 import ValidationManuelleModal from "@/espaces/backoffice/components/ValidationManuelleModal";
 import LierJoueurModal from "@/espaces/backoffice/modules/crm/ui/LierJoueurModal";
+import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
 import { toast } from "sonner";
-import { estDansLaFenetreCheckIn } from "@/lib/checkInFenetre";
+import { estDansLaFenetreCheckIn, calculerFenetreCheckIn } from "@/lib/checkInFenetre";
+import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
+import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
+import { WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
 
-const API_URL = import.meta.env.VITE_API_URL || "/api";
+type PolitiqueRemboursement = {
+  eligible?: boolean;
+  delai_heures?: number;
+  message?: string;
+  titre?: string;
+  type_annulation?: "avec_remboursement" | "sans_remboursement" | string;
+  raison?: string;
+};
 
 type GerantReservation = {
   id: number;
@@ -31,7 +42,13 @@ type GerantReservation = {
   fenetre_debut?: string | null;
   fenetre_fin?: string | null;
   dans_fenetre_checkin?: boolean;
+  scannable_now?: boolean;
+  scan_bloque_par_priorite?: boolean;
+  priorite_scan_id?: number | null;
+  priorite_heure?: string | null;
+  priorite_joueur?: string | null;
   operational_stage?: string;
+  politique_remboursement?: PolitiqueRemboursement;
 };
 
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
@@ -48,10 +65,18 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
     className: "bg-[var(--color-primary)] text-white",
   },
   en_attente: {
-    label: "En attente de paiement",
-    className: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
+    label: "Paiement en cours",
+    className: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
+  },
+  acceptee: {
+    label: "Réservé ✓",
+    className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   annule: {
+    label: "Annulée",
+    className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
+  },
+  annulee: {
     label: "Annulée",
     className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
   },
@@ -67,18 +92,18 @@ function formatLongDate(value?: string) {
   });
 }
 
-function formatDateTime(value?: string | null) {
-  if (!value) return "-";
+function formatEntreeValidee(value?: string | null) {
+  if (!value) return "✅ Entrée validée";
   const raw = String(value).trim();
   const date = new Date(raw.includes("T") ? raw : raw.replace(" ", "T"));
-  if (Number.isNaN(date.getTime())) return raw;
-  return date.toLocaleString("fr-FR", {
+  if (Number.isNaN(date.getTime())) return "✅ Entrée validée";
+  const jour = date.toLocaleDateString("fr-FR", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
   });
+  const heure = date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  return `✅ Entrée validée le ${jour} à ${heure}`;
 }
 
 function formatFcfa(value?: number) {
@@ -106,12 +131,14 @@ export default function DetailReservation() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [lierOpen, setLierOpen] = useState(false);
-  const [resending, setResending] = useState(false);
   const [sendingQr, setSendingQr] = useState(false);
   const [encaissing, setEncaissing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmEncaisser, setConfirmEncaisser] = useState(false);
   const [methode, setMethode] = useState<"especes" | "wave" | "orange_money">("especes");
+  const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
+  const { down: waDown } = useWhatsappInfra(true);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -133,30 +160,21 @@ export default function DetailReservation() {
   }, [load]);
 
   useEffect(() => {
-    let objectUrl: string | null = null;
-    const loadQr = async () => {
-      if (!reservation?.id || !reservation?.code_reservation) {
-        setQrUrl(null);
-        return;
-      }
-      try {
-        const token = localStorage.getItem("terrainsn_token");
-        const res = await fetch(`${API_URL}/reservations/${reservation.id}/qr.png`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!res.ok) throw new Error("QR indisponible");
-        const blob = await res.blob();
-        objectUrl = URL.createObjectURL(blob);
-        setQrUrl(objectUrl);
-      } catch {
-        setQrUrl(null);
-      }
-    };
-    loadQr();
+    let mounted = true;
+    gerantApi
+      .dashboard()
+      .then((dash) => {
+        if (!mounted) return;
+        const f = (dash as { features?: Record<string, boolean> })?.features;
+        setFeatures(f && typeof f === "object" ? f : {});
+      })
+      .catch(() => {
+        if (mounted) setFeatures({});
+      });
     return () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      mounted = false;
     };
-  }, [reservation?.id, reservation?.code_reservation]);
+  }, []);
 
   if (loading) return <DetailSkeleton />;
 
@@ -179,8 +197,8 @@ export default function DetailReservation() {
     label: reservation.statut,
     className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
   };
-  const alreadyScanned =
-    Boolean(reservation.qr_code_scanne_at) || ["match_joue", "joue"].includes(reservation.statut);
+  const dejaScanne = Boolean(reservation.qr_code_scanne_at);
+  const hideScanner = dejaScanne || ["match_joue", "joue"].includes(reservation.statut);
   const reste = Number(reservation.montant_restant || 0);
 
   const dansFenetre = estDansLaFenetreCheckIn({
@@ -190,18 +208,46 @@ export default function DetailReservation() {
     fenetre_retard: reservation.fenetre_retard,
   });
 
+  const { heureDebutMs, heureFinMs, retardMin } = calculerFenetreCheckIn({
+    date: reservation.date,
+    heure_debut: reservation.heure_debut,
+    heure_fin: reservation.heure_fin,
+    fenetre_retard: reservation.fenetre_retard,
+  });
+  const nowMs = Date.now();
+  const enRetardLive =
+    !dejaScanne &&
+    ["confirme", "acceptee"].includes(reservation.statut) &&
+    nowMs >= heureDebutMs &&
+    nowMs <= heureFinMs + retardMin * 60 * 1000;
+  const badgeAffiche = enRetardLive
+    ? {
+        label: "En retard ⏰",
+        className: "bg-[color-mix(in_srgb,var(--color-warning)_14%,white)] text-[var(--color-warning)]",
+      }
+    : badge;
+
+  const canValidateEntree =
+    ["confirme", "acceptee"].includes(reservation.statut) &&
+    !reservation.qr_code_scanne_at &&
+    dansFenetre;
   const canScan =
-    reservation.statut === "confirme" && !reservation.qr_code_scanne_at && dansFenetre;
+    canValidateEntree &&
+    (typeof reservation.scannable_now === "boolean" ? reservation.scannable_now : true);
+  const bloqueParPriorite = canValidateEntree && !canScan;
   const canResendPaymentLink = reservation.statut === "en_attente";
   const canResendQr =
     Boolean(reservation.code_reservation) &&
     ["confirme", "acceptee"].includes(reservation.statut) &&
-    !alreadyScanned;
+    !hideScanner;
   const horsFenetreConfirmée =
-    reservation.statut === "confirme" && !reservation.qr_code_scanne_at && !dansFenetre;
+    ["confirme", "acceptee"].includes(reservation.statut) && !reservation.qr_code_scanne_at && !dansFenetre;
   const canEncaisser =
-    reste > 0 && ["confirme", "acceptee", "match_joue", "joue"].includes(reservation.statut);
-  const canAnnuler = ["en_attente", "confirme", "acceptee"].includes(reservation.statut);
+    reste > 0 &&
+    ["confirme", "acceptee", "match_joue", "joue"].includes(reservation.statut) &&
+    (dejaScanne || dansFenetre);
+  /** Annulation hors flux « en_attente » (déjà gérée par EnAttentePaiementActions) */
+  const canAnnulerConfirmee = ["confirme", "acceptee"].includes(reservation.statut);
 
   const fenetreLabel = (() => {
     const debut = reservation.fenetre_debut ? new Date(reservation.fenetre_debut) : null;
@@ -219,25 +265,17 @@ export default function DetailReservation() {
     return "1h avant le début → 2h après la fin (+ tolérance retard)";
   })();
 
-  const handleResendPaymentLink = async () => {
-    setResending(true);
-    try {
-      await reservationsApi.renvoyerLienWhatsApp(reservation.id);
-      toast.success("Lien de paiement renvoyé par WhatsApp");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Envoi WhatsApp impossible");
-    } finally {
-      setResending(false);
-    }
-  };
-
   const handleResendQr = async () => {
+    if (waDown) {
+      toast.error(WHATSAPP_INFRA_MESSAGE);
+      return;
+    }
     setSendingQr(true);
     try {
       await reservationsApi.renvoyerConfirmationWhatsApp(reservation.id);
       toast.success("Confirmation + QR envoyés au joueur sur WhatsApp");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Envoi WhatsApp impossible");
+      toast.error(err instanceof Error ? err.message : WHATSAPP_INFRA_MESSAGE);
     } finally {
       setSendingQr(false);
     }
@@ -248,6 +286,7 @@ export default function DetailReservation() {
     try {
       await gerantApi.encaisserRestant(reservation.id, methode);
       toast.success(`Reste encaissé (${methode.replace("_", " ")})`);
+      setConfirmEncaisser(false);
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Encaissement impossible");
@@ -257,11 +296,19 @@ export default function DetailReservation() {
   };
 
   const handleAnnuler = async () => {
-    if (!window.confirm("Annuler cette réservation ? Le créneau sera libéré côté joueur.")) return;
+    if (!reservation) return;
     setCancelling(true);
     try {
-      await reservationsApi.annulerGerant(reservation.id);
-      toast.success("Réservation annulée — créneau libéré");
+      const result = (await reservationsApi.annulerGerant(reservation.id)) as {
+        rembourse?: boolean;
+        politique?: PolitiqueRemboursement;
+      };
+      toast.success(
+        result?.rembourse || result?.politique?.type_annulation === "avec_remboursement"
+          ? "Réservation annulée — remboursement lancé (WhatsApp envoyé)"
+          : "Réservation annulée sans remboursement — créneau libéré (WhatsApp envoyé)",
+      );
+      setConfirmCancel(false);
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Annulation impossible");
@@ -270,8 +317,25 @@ export default function DetailReservation() {
     }
   };
 
+  const openCancelConfirm = async () => {
+    setConfirmCancel(true);
+    if (!reservation) return;
+    try {
+      const data = (await reservationsApi.politiqueAnnulation(reservation.id)) as {
+        politique_remboursement?: PolitiqueRemboursement;
+      };
+      if (data?.politique_remboursement) {
+        setReservation((prev) =>
+          prev ? { ...prev, politique_remboursement: data.politique_remboursement } : prev,
+        );
+      }
+    } catch {
+      /* garde la politique déjà chargée */
+    }
+  };
+
   return (
-    <div className="max-w-xl mx-auto space-y-5 p-4">
+    <div className="max-w-xl mx-auto space-y-5">
       <div className="flex items-start justify-between gap-3">
         <button
           type="button"
@@ -280,8 +344,8 @@ export default function DetailReservation() {
         >
           <ArrowLeft className="w-4 h-4" /> Retour
         </button>
-        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${badge.className}`}>
-          {badge.label}
+        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${badgeAffiche.className}`}>
+          {badgeAffiche.label}
         </span>
       </div>
 
@@ -293,15 +357,8 @@ export default function DetailReservation() {
           className="text-3xl font-bold text-[var(--color-primary)] tracking-wide"
           style={{ fontFamily: "var(--font-display)" }}
         >
-          {reservation.code_reservation || `Résa #${reservation.id}`}
+          {reservation.code_reservation || `Réservation #${reservation.id}`}
         </h1>
-        {qrUrl && reservation.code_reservation ? (
-          <img
-            src={qrUrl}
-            alt={`QR ${reservation.code_reservation}`}
-            className="mx-auto h-44 w-44 rounded-lg bg-white p-2 border border-[var(--color-border)]"
-          />
-        ) : null}
       </section>
 
       <section className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 space-y-3">
@@ -324,7 +381,7 @@ export default function DetailReservation() {
           <p className="text-xs text-[var(--color-success)]">Lié au compte joueur #{reservation.joueur_id} (visible dans Mes réservations)</p>
         ) : (
           <p className="text-xs text-[var(--color-warning)]">
-            Non lié à un compte app — le joueur ne verra pas cette résa dans Mes réservations.
+            Non lié à un compte app — le joueur ne verra pas cette réservation dans Mes réservations.
           </p>
         )}
         {reservation.joueur_telephone ? (
@@ -392,7 +449,7 @@ export default function DetailReservation() {
             <button
               type="button"
               disabled={encaissing}
-              onClick={handleEncaisser}
+              onClick={() => setConfirmEncaisser(true)}
               className="w-full min-h-[48px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium disabled:opacity-60"
             >
               {encaissing ? "Encaissement…" : `Encaisser ${formatFcfa(reste)}`}
@@ -401,24 +458,31 @@ export default function DetailReservation() {
         ) : null}
       </section>
 
-      <section className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 space-y-2">
-        <h2 className="text-sm font-semibold text-[var(--color-text-primary)] inline-flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-[var(--color-primary)]" />
-          Anti-fraude
-        </h2>
-        {alreadyScanned ? (
-          <div className="flex items-start gap-2 text-sm text-[var(--color-text-secondary)]">
-            <CheckCircle2 className="w-4 h-4 mt-0.5 text-[var(--color-success)] shrink-0" />
-            <p>
-              QR scanné le <strong>{formatDateTime(reservation.qr_code_scanne_at)}</strong>.
-            </p>
-          </div>
-        ) : (
-          <p className="text-sm text-[var(--color-text-secondary)]">
-            Le QR n&apos;a pas encore été scanné.
-          </p>
-        )}
-      </section>
+      {dejaScanne ? (
+        <section className="space-y-2">
+          <span
+            className="inline-flex text-sm font-semibold px-3 py-1.5 rounded-full"
+            style={{ background: "var(--g-libre-bg)", color: "var(--g-libre)" }}
+          >
+            {formatEntreeValidee(reservation.qr_code_scanne_at)}
+          </span>
+          {reste > 0 ? (
+            <span
+              className="flex text-sm font-semibold px-3 py-1.5 rounded-full w-fit"
+              style={{ background: "var(--g-en-cours-bg)", color: "var(--g-warning)" }}
+            >
+              💵 Encaisser {reste.toLocaleString("fr-FR")} FCFA sur place
+            </span>
+          ) : (
+            <span
+              className="flex text-sm font-semibold px-3 py-1.5 rounded-full w-fit"
+              style={{ background: "var(--g-libre-bg)", color: "var(--g-libre)" }}
+            >
+              ✓ Aucun paiement sur place
+            </span>
+          )}
+        </section>
+      ) : null}
 
       {horsFenetreConfirmée && (
         <div className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_12%,white)] p-4 text-sm space-y-2">
@@ -429,16 +493,28 @@ export default function DetailReservation() {
         </div>
       )}
 
+      {bloqueParPriorite && (
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_12%,white)] p-4 text-sm space-y-2">
+          <p className="font-semibold text-[var(--color-warning)]">Un seul créneau scannable à la fois</p>
+          <p className="text-[var(--color-text-secondary)]">
+            Valide d&apos;abord{" "}
+            <strong>
+              {reservation.priorite_heure
+                ? String(reservation.priorite_heure).slice(0, 5).replace(":", "h")
+                : "le créneau prioritaire"}
+            </strong>
+            {reservation.priorite_joueur ? ` (${reservation.priorite_joueur})` : ""}, puis celui-ci.
+          </p>
+        </div>
+      )}
+
       {canResendPaymentLink && (
-        <button
-          type="button"
-          onClick={handleResendPaymentLink}
-          disabled={resending}
-          className="w-full min-h-[52px] rounded-[var(--radius-md)] bg-[#25D366] text-white text-sm font-medium inline-flex items-center justify-center gap-2 disabled:opacity-60"
-        >
-          <MessageCircle className="w-5 h-5" />
-          {resending ? "Envoi en cours..." : "Renvoyer le lien WhatsApp"}
-        </button>
+        <EnAttentePaiementActions
+          reservationId={reservation.id}
+          montantAvance={reservation.montant_avance}
+          features={features}
+          onDone={() => void load()}
+        />
       )}
 
       {canResendQr && (
@@ -453,31 +529,38 @@ export default function DetailReservation() {
         </button>
       )}
 
-      {reservation.statut === "confirme" && !alreadyScanned && (
+      {!hideScanner && canValidateEntree && (
         <>
-          <button
-            type="button"
-            onClick={() => canScan && setScannerOpen(true)}
-            disabled={!canScan}
-            className="w-full min-h-[52px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium inline-flex items-center justify-center gap-2 disabled:opacity-45 disabled:cursor-not-allowed"
-          >
-            <QrCode className="w-5 h-5" />
-            {canScan ? "Scanner le joueur" : "Scanner (hors fenêtre de validation)"}
-          </button>
+          {canScan ? (
+            <button
+              type="button"
+              onClick={() => setScannerOpen(true)}
+              className="w-full min-h-[52px] rounded-xl text-white text-sm font-semibold animate-pulse"
+              style={{ background: "var(--g-primary)" }}
+            >
+              📷 Valider l&apos;entrée — Scanner QR
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => setManualOpen(true)}
-            className="w-full min-h-[48px] rounded-[var(--radius-md)] border border-[var(--color-primary)] text-[var(--color-primary)] text-sm font-medium"
+            disabled={bloqueParPriorite}
+            className="w-full min-h-[48px] rounded-[var(--radius-md)] border border-[var(--color-primary)] text-[var(--color-primary)] text-sm font-medium disabled:opacity-50"
           >
             Valider l&apos;entrée manuellement
           </button>
+          {bloqueParPriorite ? (
+            <p className="text-xs text-[var(--color-text-muted)] text-center">
+              Un autre créneau est prioritaire — valide-le d&apos;abord.
+            </p>
+          ) : null}
         </>
       )}
 
-      {canAnnuler && (
+      {canAnnulerConfirmee && (
         <button
           type="button"
-          onClick={handleAnnuler}
+          onClick={() => void openCancelConfirm()}
           disabled={cancelling}
           className="w-full min-h-[48px] rounded-[var(--radius-md)] border border-[var(--color-danger)] text-[var(--color-danger)] text-sm font-medium disabled:opacity-60"
         >
@@ -529,6 +612,46 @@ export default function DetailReservation() {
         defaultPhone={reservation.joueur_telephone}
         onClose={() => setLierOpen(false)}
         onLinked={load}
+      />
+
+      <ConfirmationModal
+        ouvert={confirmCancel}
+        titre={reservation.politique_remboursement?.titre || "Annuler cette réservation ?"}
+        texte={
+          [
+            reservation.politique_remboursement?.type_annulation === "avec_remboursement"
+              ? "Type : avec remboursement"
+              : "Type : sans remboursement",
+            reservation.politique_remboursement?.delai_heures != null &&
+            Number(reservation.politique_remboursement.delai_heures) > 0
+              ? `Délai terrain : ${reservation.politique_remboursement.delai_heures} h après confirmation`
+              : null,
+            reservation.politique_remboursement?.message ||
+              "Le créneau sera libéré. Le remboursement dépend de la politique de ce terrain. Une notification WhatsApp sera envoyée.",
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        }
+        labelAnnuler="Garder la réservation"
+        labelConfirmer={cancelling ? "Annulation…" : "Oui, annuler — créneau libéré"}
+        variante={
+          reservation.politique_remboursement?.type_annulation === "avec_remboursement"
+            ? "warning"
+            : "danger"
+        }
+        onAnnuler={() => setConfirmCancel(false)}
+        onConfirmer={() => void handleAnnuler()}
+      />
+
+      <ConfirmationModal
+        ouvert={confirmEncaisser}
+        titre="Encaisser le reste sur place ?"
+        texte={`Tu vas enregistrer un encaissement de ${formatFcfa(reste)} (${methode.replace("_", " ")}). Vérifie le montant avant de confirmer.`}
+        labelAnnuler="Annuler"
+        labelConfirmer={encaissing ? "Encaissement…" : `Confirmer ${formatFcfa(reste)}`}
+        variante="warning"
+        onAnnuler={() => setConfirmEncaisser(false)}
+        onConfirmer={() => void handleEncaisser()}
       />
     </div>
   );

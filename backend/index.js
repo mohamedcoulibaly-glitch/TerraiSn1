@@ -1201,6 +1201,130 @@ app.get('/api/terrains/:id', async (req, res) => {
   }
 });
 
+/** Fiche consolidée (terrain + créneaux) — consommé par FicheTerrain / useTerrainFullDetails */
+app.get('/api/terrains/:id/full-details', async (req, res) => {
+  try {
+    const db = await getDb();
+    const tid = Number(req.params.id);
+    const dateStr = String(req.query.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+
+    const terrain = queryOne(db, `
+      SELECT t.*,
+        COALESCE(ROUND(AVG(a.note), 1), 0) as note,
+        COUNT(a.id) as avis_count,
+        p.nom as proprietaire_nom
+      FROM terrains t
+      LEFT JOIN avis a ON a.terrain_id = t.id
+      LEFT JOIN proprietaires p ON p.id = t.proprietaire_id
+      WHERE t.id = ?
+      GROUP BY t.id
+    `, [tid]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
+
+    const horaires = queryAll(db, "SELECT * FROM horaires WHERE terrain_id = ? ORDER BY CASE jour WHEN 'lundi' THEN 1 WHEN 'mardi' THEN 2 WHEN 'mercredi' THEN 3 WHEN 'jeudi' THEN 4 WHEN 'vendredi' THEN 5 WHEN 'samedi' THEN 6 WHEN 'dimanche' THEN 7 END", [tid]);
+    const avis = queryAll(db, 'SELECT a.*, u.nom as joueur_nom FROM avis a LEFT JOIN users u ON u.id = a.joueur_id WHERE a.terrain_id = ? ORDER BY a.created_at DESC LIMIT 40', [tid]);
+    const employe = queryOne(db, 'SELECT whatsapp_number, telephone, nom, prenom FROM employes WHERE terrain_id = ? AND is_active = 1 LIMIT 1', [tid]);
+
+    // Réutilise la logique créneaux via requête interne simplifiée
+    const jour = jourDepuisDate(dateStr);
+    const horaire = queryOne(db, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [tid, jour]);
+    let planned = buildSlotsForOpenDay(dateStr, horaire);
+    const prevDate = addDaysYmd(dateStr, -1);
+    const prevJour = jourDepuisDate(prevDate);
+    const prevHoraire = queryOne(db, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [tid, prevJour]);
+    if (prevHoraire && Number(prevHoraire.est_ouvert) && parseEndHour(prevHoraire.heure_fin) === 24) {
+      const hasMidnight = planned.some((s) => s.date === dateStr && s.heure_debut === '00:00');
+      if (!hasMidnight) {
+        planned = [
+          {
+            date: dateStr,
+            heure_debut: '00:00',
+            heure_fin: '01:00',
+            label: labelHeureSenegal(dateStr, '00:00'),
+            label_court: courtLabelHeureSenegal(dateStr, '00:00'),
+            est_minuit_culturel: true,
+            jour_tarif: prevJour,
+            date_affichage: prevDate,
+          },
+          ...planned,
+        ];
+      }
+    }
+
+    let creneaux = [];
+    let ferme = false;
+    let motif = null;
+    if (!planned.length) {
+      ferme = true;
+      motif = 'Fermé ce jour';
+    } else {
+      // Disponibilité : hors résas actives / blocages (même esprit que /creneaux)
+      const reserved = queryAll(
+        db,
+        `SELECT heure_debut, heure_fin FROM reservations
+         WHERE terrain_id = ? AND date = ?
+           AND statut IN ('en_attente', 'confirme', 'acceptee', 'joue', 'match_joue')`,
+        [tid, dateStr],
+      );
+      const blocages = queryAll(
+        db,
+        `SELECT heure_debut, heure_fin FROM blocages_creneaux WHERE terrain_id = ? AND date = ?`,
+        [tid, dateStr],
+      );
+      const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
+      creneaux = planned.map((slot) => {
+        const taken =
+          reserved.some((r) => overlaps(slot.heure_debut, slot.heure_fin, r.heure_debut, r.heure_fin)) ||
+          blocages.some((b) => overlaps(slot.heure_debut, slot.heure_fin, b.heure_debut, b.heure_fin));
+        return {
+          ...slot,
+          heure: slot.heure_debut,
+          disponible: !taken,
+          statut: taken ? 'occupe' : 'libre',
+          label: slot.label || slot.heure_debut,
+        };
+      });
+    }
+
+    res.json({
+      ...serializeTerrain(terrain),
+      formats: [
+        { cle: 'moitie', label: 'Demi-terrain', prix_heure: Number(terrain.prix_moitie || 0), map_grille: 'demi' },
+        { cle: 'entier', label: 'Terrain entier', prix_heure: Number(terrain.prix_entier || terrain.prix_heure || 0), map_grille: 'entier' },
+      ],
+      durees: [
+        { label: '1h', minutes: 60 },
+        { label: '1h30', minutes: 90 },
+        { label: '2h', minutes: 120 },
+        { label: '3h', minutes: 180 },
+      ],
+      features: {},
+      horaires,
+      avis,
+      employe,
+      en_ligne_indisponible: false,
+      booking_online_available: true,
+      gerant_telephone: employe?.whatsapp_number || employe?.telephone || null,
+      gerant_nom: employe ? [employe.prenom, employe.nom].filter(Boolean).join(' ') : null,
+      planning: {
+        date: dateStr,
+        terrain_id: tid,
+        creneaux,
+        ferme,
+        motif,
+        horaire: horaire || null,
+        calendrier: 'senegal',
+        heure_serveur: new Date().toISOString(),
+        en_ligne_indisponible: false,
+        booking_online_available: true,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // Créneaux disponibles (plages horaires configurables + minuit culturel SN)
 app.get('/api/terrains/:id/creneaux', async (req, res) => {
   try {
@@ -2385,6 +2509,45 @@ app.delete('/api/employes/:id', authMiddleware, requireRole('proprietaire'), asy
 // ============================================================
 // GERANT
 // ============================================================
+
+/** Liste des terrains du gérant (compat UI multi-terrains Babacar). */
+app.get('/api/gerant/terrains', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.user.terrain_id);
+    if (!terrainId) {
+      return res.json({ terrains: [], terrain_actif: null, terrains_ids: [] });
+    }
+    const terrain = queryOne(db, 'SELECT id, nom FROM terrains WHERE id = ?', [terrainId]);
+    if (!terrain) {
+      return res.json({ terrains: [], terrain_actif: null, terrains_ids: [] });
+    }
+    res.json({
+      terrains: [{ id: Number(terrain.id), nom: terrain.nom, est_principal: 1 }],
+      terrain_actif: Number(terrain.id),
+      terrains_ids: [Number(terrain.id)],
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+/** Heartbeat présence gérant (no-op utile pour le layout ; évite 404). */
+app.post('/api/gerant/heartbeat', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const terrainId = Number(req.body?.terrain_id || req.user.terrain_id);
+    res.json({
+      ok: true,
+      terrain_id: Number.isFinite(terrainId) && terrainId > 0 ? terrainId : null,
+      at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 app.get('/api/gerant/dashboard', authMiddleware, requireRole('gerant'), async (req, res) => {
   try {
     const db = await getDb();

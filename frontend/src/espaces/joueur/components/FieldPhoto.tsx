@@ -8,20 +8,35 @@ const FALLBACK_IMAGES = [
   "/fields/field-4.jpg",
 ];
 
+const PLACEHOLDER = "/images/terrain-placeholder.jpg";
+
 export function fieldImageForId(id?: number | string) {
   const n = Number(id) || 1;
   return FALLBACK_IMAGES[(Math.max(1, n) - 1) % FALLBACK_IMAGES.length];
 }
 
-export function resolveTerrainPhoto(terrain: { id?: number | string; photos?: unknown }) {
+export function resolveTerrainPhoto(terrain: {
+  id?: number | string;
+  photos?: unknown;
+  terrain_photos?: Array<{ url?: string; est_principale?: number | boolean }>;
+}) {
   const list = resolveTerrainPhotos(terrain);
-  return list[0] || fieldImageForId(terrain?.id);
+  return list[0] || PLACEHOLDER;
 }
 
-export function resolveTerrainPhotos(terrain: { id?: number | string; photos?: unknown }): string[] {
+export function resolveTerrainPhotos(terrain: {
+  id?: number | string;
+  photos?: unknown;
+  terrain_photos?: Array<{ url?: string; est_principale?: number | boolean; ordre?: number }>;
+}): string[] {
+  const rows = Array.isArray(terrain?.terrain_photos) ? [...terrain.terrain_photos] : [];
+  if (rows.length) {
+    rows.sort((a, b) => Number(a.ordre || 0) - Number(b.ordre || 0));
+    return rows.map((p) => String(p.url || "")).filter(Boolean);
+  }
   const raw = terrain?.photos;
   let list: string[] = [];
-  if (Array.isArray(raw)) list = raw.map(String).filter(Boolean);
+  if (Array.isArray(raw)) list = raw.map((item) => (typeof item === "string" ? item : String((item as { url?: string })?.url || ""))).filter(Boolean);
   else if (typeof raw === "string" && raw.trim()) {
     if (raw.startsWith("[")) {
       try {
@@ -34,17 +49,19 @@ export function resolveTerrainPhotos(terrain: { id?: number | string; photos?: u
       list = [raw];
     }
   }
-  if (list.length === 0) list = [fieldImageForId(terrain?.id)];
-  // Varier le carrousel si une seule photo (démo visuelle)
-  if (list.length === 1) {
-    const base = Number(terrain?.id) || 1;
-    list = [
-      list[0],
-      fieldImageForId(base + 1),
-      fieldImageForId(base + 2),
-    ];
-  }
+  if (list.length === 0) return [PLACEHOLDER];
   return list;
+}
+
+export function resolvePhotoPrincipale(terrain: {
+  id?: number | string;
+  photos?: unknown;
+  terrain_photos?: Array<{ url?: string; est_principale?: number | boolean }>;
+}) {
+  const rows = Array.isArray(terrain?.terrain_photos) ? terrain.terrain_photos : [];
+  const principale = rows.find((p) => Boolean(p.est_principale));
+  if (principale?.url) return principale.url;
+  return resolveTerrainPhotos(terrain)[0] || PLACEHOLDER;
 }
 
 type FieldPhotoProps = {

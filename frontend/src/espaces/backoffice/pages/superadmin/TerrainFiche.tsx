@@ -6,6 +6,7 @@ import { superAdminApi, type TerrainPhoto } from "@/services/superAdminApi";
 import { useAuth } from "@/hooks/use-auth";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
 import GrilleTarifaireAdmin from "@/espaces/backoffice/components/GrilleTarifaireAdmin";
+import FormatsTerrainEditor from "@/espaces/backoffice/components/superadmin/FormatsTerrainEditor";
 import ContratPaiementTab from "@/espaces/backoffice/components/superadmin/ContratPaiementTab";
 import EssaiGratuitSection from "@/espaces/backoffice/components/superadmin/EssaiGratuitSection";
 import FeatureFlag, { type TerrainFeature } from "@/espaces/backoffice/components/superadmin/FeatureFlag";
@@ -13,10 +14,10 @@ import PhotoUploadTerrain from "@/espaces/backoffice/components/superadmin/Photo
 import LocalisationTerrain from "@/espaces/backoffice/components/superadmin/LocalisationTerrain";
 import TerrainCommoditesEditor, { type CommoditeToggle } from "@/espaces/backoffice/components/superadmin/TerrainCommoditesEditor";
 import AuditTables, { type AuditCommoditeRow, type AuditPhotoRow } from "@/espaces/backoffice/components/superadmin/AuditTables";
+import GerantsTerrainTab from "@/espaces/backoffice/components/superadmin/GerantsTerrainTab";
 import {
-  contratDepuisTerrain,
   gerantDuTerrain,
-  overlayFromBackend,
+  getContratOverlay,
   terrainStatutListe,
   type ContratOverlay,
 } from "@/lib/saContrat";
@@ -26,8 +27,9 @@ const TABS = [
   { id: "localisation", label: "Localisation" },
   { id: "contrat", label: "Contrat paiement" },
   { id: "features", label: "Fonctionnalités" },
-  { id: "tarifs", label: "Tarifs" },
-  { id: "users", label: "Utilisateurs" },
+  { id: "formats", label: "Formats & prix" },
+  { id: "tarifs", label: "Grille horaires" },
+  { id: "gerants", label: "Gérants" },
   { id: "audit", label: "Audit" },
   { id: "historique", label: "Historique" },
 ] as const;
@@ -42,12 +44,15 @@ export default function TerrainFiche() {
   const { id } = useParams();
   const terrainId = Number(id);
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = (searchParams.get("tab") as (typeof TABS)[number]["id"]) || "contrat";
+  const tabParam = searchParams.get("tab");
+  const tab = (
+    tabParam === "users" ? "gerants" : (tabParam as (typeof TABS)[number]["id"]) || "contrat"
+  );
   const navigate = useNavigate();
   const { user } = useAuth();
   const [terrain, setTerrain] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
-  const [contrat, setContrat] = useState<ContratOverlay>(contratDepuisTerrain({ id: terrainId }));
+  const [contrat, setContrat] = useState<ContratOverlay>(getContratOverlay(terrainId));
   const [toggling, setToggling] = useState(false);
   const [photos, setPhotos] = useState<TerrainPhoto[]>([]);
   const [adresseTheorique, setAdresseTheorique] = useState("");
@@ -74,17 +79,12 @@ export default function TerrainFiche() {
       superAdminApi.users(),
       superAdminApi.terrainPhotos(terrainId).catch(() => []),
       superAdminApi.terrainCommodites(terrainId).catch(() => []),
-      superAdminApi.getContrat(terrainId).catch(() => null),
-    ]).then(([t, u, p, commodites, contratApi]) => {
+    ]).then(([t, u, p, commodites]) => {
       const list = Array.isArray(t) ? t : [];
       const found = list.find((x: any) => Number(x.id) === terrainId) || null;
       setTerrain(found);
       setUsers(Array.isArray(u) ? u : []);
-      setContrat(
-        (contratApi as any)?.contrat
-          ? overlayFromBackend((contratApi as any).contrat)
-          : contratDepuisTerrain(found || { id: terrainId }),
-      );
+      setContrat(getContratOverlay(terrainId));
       setPhotos(Array.isArray(p) ? p : []);
       const commoditesList = Array.isArray(commodites) ? commodites : [];
       setCatalogCommodites(commoditesList);
@@ -277,7 +277,17 @@ export default function TerrainFiche() {
             </div>
             <div>
               <dt style={{ color: "var(--sa-muted)" }}>Gérant</dt>
-              <dd className="font-medium">{gerant?.nom || "Non assigné"}</dd>
+              <dd className="font-medium flex flex-wrap items-center gap-2">
+                <span>{gerant?.nom || "Non assigné"}</span>
+                <button
+                  type="button"
+                  className="text-[12px] font-semibold underline"
+                  style={{ color: "var(--sa-primary)" }}
+                  onClick={() => setSearchParams({ tab: "gerants" })}
+                >
+                  Gérer les gérants →
+                </button>
+              </dd>
             </div>
             <div>
               <dt style={{ color: "var(--sa-muted)" }}>Taille</dt>
@@ -339,33 +349,14 @@ export default function TerrainFiche() {
         </div>
       ) : null}
 
+      {tab === "formats" ? <FormatsTerrainEditor terrainId={terrain.id} /> : null}
+
       {tab === "tarifs" ? (
         <GrilleTarifaireAdmin terrainId={terrain.id} terrainNom={terrain.nom} onClose={() => navigate(`/backoffice/superadmin/terrains/${terrain.id}?tab=contrat`)} />
       ) : null}
 
-      {tab === "users" ? (
-        <section className="rounded-xl overflow-hidden" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-          <table className="sa-table">
-            <thead>
-              <tr>
-                <th>Nom</th>
-                <th>Rôle</th>
-                <th>Téléphone</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users
-                .filter((u) => (u.role === "gerant" && Number(u.terrain_id) === terrainId) || (u.role === "proprietaire" && Number(u.id) === Number(terrain.proprietaire_id)))
-                .map((u) => (
-                  <tr key={`${u.role}-${u.id}`}>
-                    <td>{u.nom}</td>
-                    <td>{u.role}</td>
-                    <td>{u.telephone || "—"}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </section>
+      {tab === "gerants" ? (
+        <GerantsTerrainTab terrainId={terrainId} terrainNom={terrain.nom || "Terrain"} />
       ) : null}
 
       {tab === "audit" ? (

@@ -4,6 +4,8 @@ import {
   queuePendingReservation,
   cacheTerrainsList,
   getCachedTerrainsList,
+  cacheRecentTerrain,
+  getCachedRecentTerrain,
   isOnline,
   type CachedReservation,
 } from './offlineStore';
@@ -39,6 +41,24 @@ function getUser(): any | null {
 
 function removeUser() {
   localStorage.removeItem('terrainsn_user');
+}
+
+const GERANT_TERRAIN_KEY = 'gerant_terrain_actif';
+
+export function getGerantTerrainActif(): number | null {
+  const raw = localStorage.getItem(GERANT_TERRAIN_KEY);
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function setGerantTerrainActif(terrainId: number | string | null) {
+  if (terrainId == null || terrainId === '') {
+    localStorage.removeItem(GERANT_TERRAIN_KEY);
+    return;
+  }
+  localStorage.setItem(GERANT_TERRAIN_KEY, String(terrainId));
+  window.dispatchEvent(new CustomEvent('gerant-terrain-changed', { detail: Number(terrainId) }));
 }
 
 const TECHNICAL_ERROR_RE = /syntaxerror|sql\b|stack|paytech|<html|exception|traceback|econnrefused|errno/i;
@@ -401,6 +421,52 @@ export const terrainsApi = {
     return await request(`/terrains/${id}`);
   },
 
+  /**
+   * Fiche consolidée (terrain + planning jour) — fallback si /full-details absent.
+   */
+  async getFullDetails(
+    id: number | string,
+    opts?: { date?: string; duree_minutes?: number },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.date) q.set('date', opts.date);
+    if (opts?.duree_minutes != null) q.set('duree_minutes', String(opts.duree_minutes));
+    const qs = q.toString();
+    try {
+      const data = await request(`/terrains/${id}/full-details${qs ? `?${qs}` : ''}`);
+      await cacheRecentTerrain(id, data);
+      return data;
+    } catch (err) {
+      try {
+        const date = opts?.date || new Date().toISOString().slice(0, 10);
+        const [terrain, creneauxPayload] = await Promise.all([
+          request(`/terrains/${id}`),
+          request(`/terrains/${id}/creneaux?date=${encodeURIComponent(date)}`).catch(() => ({
+            creneaux: [],
+            ferme: false,
+          })),
+        ]);
+        const payload = {
+          ...(terrain as object),
+          planning: {
+            date,
+            terrain_id: Number(id),
+            creneaux: Array.isArray((creneauxPayload as { creneaux?: unknown[] })?.creneaux)
+              ? (creneauxPayload as { creneaux: unknown[] }).creneaux
+              : [],
+            ...(typeof creneauxPayload === 'object' && creneauxPayload ? creneauxPayload : {}),
+          },
+        };
+        await cacheRecentTerrain(id, payload);
+        return payload;
+      } catch {
+        const cached = await getCachedRecentTerrain(id);
+        if (cached) return cached;
+        throw err;
+      }
+    }
+  },
+
   async getCreneaux(id: number | string, date: string) {
     return await request(`/terrains/${id}/creneaux?date=${date}`);
   },
@@ -663,6 +729,21 @@ export const gerantApi = {
     return await request('/gerant/dashboard');
   },
 
+  /** Terrains gérés + terrain actif (sélecteur multi-terrains). */
+  async terrains() {
+    return await request('/gerant/terrains') as {
+      terrains: { id: number; nom: string; est_principal?: number }[];
+      terrain_actif?: number | null;
+    };
+  },
+
+  async heartbeat(terrainId: number | string) {
+    return await request('/gerant/heartbeat', {
+      method: 'POST',
+      body: JSON.stringify({ terrain_id: Number(terrainId) }),
+    });
+  },
+
   async reservationsToday(date?: string) {
     const q = date ? `?date=${encodeURIComponent(date)}` : '';
     return await request(`/gerant/reservations/today${q}`);
@@ -811,14 +892,21 @@ export const gerantApi = {
     });
   },
 
-  async whatsappStatus() {
+  async whatsappStatus(gerantId?: number | string) {
+    if (gerantId != null) {
+      return await request(`/gerant/whatsapp/status/${gerantId}`);
+    }
     return await request('/gerant/whatsapp/status');
   },
 
-  async whatsappConnect(opts?: { force?: boolean }) {
+  async whatsappConnect(opts?: { force?: boolean; telephone?: string; mode?: 'pairing' | 'qr' }) {
     return await request('/gerant/whatsapp/connect', {
       method: 'POST',
-      body: JSON.stringify({ force: Boolean(opts?.force) }),
+      body: JSON.stringify({
+        force: Boolean(opts?.force),
+        telephone: opts?.telephone || undefined,
+        mode: opts?.mode || undefined,
+      }),
     });
   },
 

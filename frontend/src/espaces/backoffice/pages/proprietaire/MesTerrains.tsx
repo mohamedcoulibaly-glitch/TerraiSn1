@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { User } from "lucide-react";
 import { employesApi, proprietaireApi } from "@/lib/api";
 import ProprioEmptyState from "@/espaces/backoffice/components/ProprioEmptyState";
@@ -14,18 +15,10 @@ type Terrain = {
   prix_entier?: number;
   prix_heure?: number;
   prix_moitie?: number;
-  contrat_resume?: {
-    commission_pourcentage?: number;
-    pourcentage_avance?: number;
-    remboursement?: string;
-    payout_mode?: string;
-    frais_label?: string;
-    wave_om_verifies?: boolean;
-    encore_du?: number;
-  };
 };
 
 export default function MesTerrains() {
+  const navigate = useNavigate();
   const [terrains, setTerrains] = useState<Terrain[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [employes, setEmployes] = useState<any[]>([]);
@@ -102,7 +95,16 @@ export default function MesTerrains() {
           return (
             <article
               key={t.id}
-              className="rounded-2xl p-4"
+              role="button"
+              tabIndex={0}
+              onClick={() => navigate(`/backoffice/proprietaire/terrain/${t.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  navigate(`/backoffice/proprietaire/terrain/${t.id}`);
+                }
+              }}
+              className="rounded-2xl p-4 cursor-pointer transition-opacity hover:opacity-95"
               style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}
             >
               <div className="flex items-start gap-3">
@@ -144,16 +146,6 @@ export default function MesTerrains() {
                 <span className="text-[11px] px-2.5 py-1 rounded-full" style={{ background: "var(--p-surface-2)", color: "var(--p-text-2)" }}>
                   Demi : {prixMoitie.toLocaleString("fr-FR")} FCFA / h
                 </span>
-                {t.contrat_resume ? (
-                  <>
-                    <span className="text-[11px] px-2.5 py-1 rounded-full" style={{ background: "var(--p-surface-2)", color: "var(--p-text-2)" }}>
-                      {t.contrat_resume.payout_mode === "auto" ? "Auto (frais)" : "Retrait 0 frais"}
-                    </span>
-                    <span className="text-[11px] px-2.5 py-1 rounded-full" style={{ background: "var(--p-surface-2)", color: "var(--p-text-2)" }}>
-                      Avance {t.contrat_resume.pourcentage_avance}% · Com. {t.contrat_resume.commission_pourcentage}%
-                    </span>
-                  </>
-                ) : null}
               </div>
 
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
@@ -169,7 +161,7 @@ export default function MesTerrains() {
                   <p className="text-sm font-bold tabular-nums" style={{ color: "var(--p-text)" }}>
                     {formatFcfa(row?.revenue).replace(" FCFA", "")}
                   </p>
-                  <p className="text-[10px]" style={{ color: "var(--p-muted)" }}>Versé gérant</p>
+                  <p className="text-[10px]" style={{ color: "var(--p-muted)" }}>CA du mois</p>
                 </div>
               </div>
             </article>

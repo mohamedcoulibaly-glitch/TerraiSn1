@@ -1,6 +1,8 @@
 import { MapPin } from "lucide-react";
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { terrainsApi } from "@/lib/api";
+import { useState, useEffect, useMemo } from "react";
+import { useSilentRefresh } from "@/hooks/useSilentRefresh";
+import { useTerrainsList } from "@/hooks/useJoueurData";
+import SilentSyncDot from "@/components/SilentSyncDot";
 import { PitchCard } from "@/espaces/joueur/components/PitchCard";
 import BannerVideoHeader from "@/espaces/joueur/components/BannerVideoHeader";
 import SkeletonAccueil from "@/components/skeletons/SkeletonAccueil";
@@ -16,6 +18,7 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
+import { usePersistedState } from "@/hooks/usePersistedState";
 
 type GeoState = {
   lat: number | null;
@@ -34,6 +37,11 @@ type QuickFiltre =
   | "7v7"
   | "11v11";
 
+type AccueilDraft = {
+  searchQuery: string;
+  quickFiltre: QuickFiltre;
+  appliedFiltres: FiltresTerrainValues;
+};
 const QUICK_FILTRES: { id: QuickFiltre; label: string }[] = [
   { id: "tous", label: "Tous" },
   { id: "pres", label: "Près de toi" },
@@ -83,16 +91,31 @@ function dateContextLabel(quick: QuickFiltre, advancedDate?: string): string | n
 }
 
 const Accueil = () => {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [terrains, setTerrains] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [accueilDraft, setAccueilDraft] = usePersistedState<AccueilDraft>("joueur:accueil", {
+    searchQuery: "",
+    quickFiltre: "tous",
+    appliedFiltres: FILTRES_TERRAIN_DEFAUT,
+  });
+  const searchQuery = accueilDraft.searchQuery;
+  const quickFiltre = accueilDraft.quickFiltre;
+  const appliedFiltres = accueilDraft.appliedFiltres;
+  const setSearchQuery = (v: string) => setAccueilDraft((d) => ({ ...d, searchQuery: v }));
+  const setQuickFiltre = (v: QuickFiltre) => setAccueilDraft((d) => ({ ...d, quickFiltre: v }));
+  const setAppliedFiltres = (
+    v: FiltresTerrainValues | ((prev: FiltresTerrainValues) => FiltresTerrainValues),
+  ) =>
+    setAccueilDraft((d) => ({
+      ...d,
+      appliedFiltres: typeof v === "function" ? v(d.appliedFiltres) : v,
+    }));
   const [showFiltres, setShowFiltres] = useState(false);
-  const [quickFiltre, setQuickFiltre] = useState<QuickFiltre>("tous");
   const [favTick, setFavTick] = useState(0);
-  const [draftFiltres, setDraftFiltres] = useState<FiltresTerrainValues>(FILTRES_TERRAIN_DEFAUT);
-  const [appliedFiltres, setAppliedFiltres] = useState<FiltresTerrainValues>(FILTRES_TERRAIN_DEFAUT);  const [geo, setGeo] = useState<GeoState>({ lat: null, lng: null, denied: false, ready: false });
+  const [draftFiltres, setDraftFiltres] = useState<FiltresTerrainValues>(appliedFiltres);
+  const [geo, setGeo] = useState<GeoState>({ lat: null, lng: null, denied: false, ready: false });
 
+  useEffect(() => {
+    setDraftFiltres(appliedFiltres);
+  }, [appliedFiltres]);
   useEffect(() => {
     if (!navigator.geolocation) {
       setGeo({ lat: null, lng: null, denied: true, ready: true });
@@ -124,55 +147,63 @@ const Accueil = () => {
     };
   }, []);
 
-  const loadTerrains = useCallback(async () => {
-    if (!geo.ready) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const filters: Record<string, string | number> = {};
+  const listFilters = useMemo(() => {
+    if (!geo.ready) return null;
+    const filters: Record<string, string | number> = {};
 
-      // Géoloc uniquement sur « Près de toi ». Sinon (GPS hors SN) la liste restait vide.
-      const useGeo =
-        quickFiltre === "pres" && !geo.denied && geo.lat != null && geo.lng != null;
-      if (useGeo) {
-        filters.lat = geo.lat;
-        filters.lng = geo.lng;
+    // Toujours enrichir avec la position si dispo (affichage distance),
+    // mais ne filtrer par rayon que pour « Près de toi » ou filtre avancé modifié.
+    if (!geo.denied && geo.lat != null && geo.lng != null) {
+      filters.lat = geo.lat;
+      filters.lng = geo.lng;
+      if (quickFiltre === "pres") {
         filters.distance_max = 3;
+      } else if (appliedFiltres.distance_max !== FILTRES_TERRAIN_DEFAUT.distance_max) {
+        filters.distance_max = appliedFiltres.distance_max;
       }
-
-      if (appliedFiltres.quartier.trim()) filters.quartier = appliedFiltres.quartier.trim();
-      if (searchQuery.trim()) filters.search = searchQuery.trim();
-
-      // Format terrain (5v5 / 7v7 / 11v11) ou filtre avancé demi/entier
-      if (FORMAT_FILTRES.includes(quickFiltre)) filters.type = quickFiltre;
-      else if (appliedFiltres.type) filters.type = appliedFiltres.type;
-
-      // Dates selon puce rapide
-      if (quickFiltre === "demain") {
-        filters.date = getTomorrowISO();
-      } else if (quickFiltre === "weekend") {
-        filters.dates = getWeekendISOs().join(",");
-      } else if (appliedFiltres.date) {
-        filters.date = appliedFiltres.date;
-      }
-
-      if (appliedFiltres.heure) filters.heure = appliedFiltres.heure;
-      if (appliedFiltres.prix_max < 100000) filters.prix_max = appliedFiltres.prix_max;
-
-      const data = await terrainsApi.list(filters);
-      setTerrains(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
-      setError("Une erreur est survenue lors du chargement des terrains.");
-      setTerrains([]);
-    } finally {
-      setLoading(false);
+    } else if (quickFiltre === "pres" && geo.lat != null && geo.lng != null) {
+      filters.lat = geo.lat;
+      filters.lng = geo.lng;
+      filters.distance_max = 3;
     }
+
+    if (appliedFiltres.quartier.trim()) filters.quartier = appliedFiltres.quartier.trim();
+    if (searchQuery.trim()) filters.search = searchQuery.trim();
+
+    if (FORMAT_FILTRES.includes(quickFiltre)) filters.type = quickFiltre;
+    else if (appliedFiltres.type) filters.type = appliedFiltres.type;
+
+    if (quickFiltre === "demain") {
+      filters.date = getTomorrowISO();
+    } else if (quickFiltre === "weekend") {
+      filters.dates = getWeekendISOs().join(",");
+    } else if (appliedFiltres.date) {
+      filters.date = appliedFiltres.date;
+    }
+
+    if (appliedFiltres.heure) filters.heure = appliedFiltres.heure;
+    if (appliedFiltres.prix_max < 100000) filters.prix_max = appliedFiltres.prix_max;
+
+    return filters;
   }, [geo, searchQuery, appliedFiltres, quickFiltre]);
 
-  useEffect(() => {
-    loadTerrains();
-  }, [loadTerrains]);
+  const {
+    terrains,
+    isInitialLoading,
+    isRefetching,
+    error: queryError,
+    refetch,
+  } = useTerrainsList(listFilters || undefined, Boolean(geo.ready && listFilters));
+
+  useSilentRefresh({
+    enabled: geo.ready,
+    onRefresh: () => refetch(),
+  });
+
+  const error = queryError
+    ? "Une erreur est survenue lors du chargement des terrains."
+    : null;
+  const loading = isInitialLoading;
 
   const activeFilterCount = useMemo(() => {
     let n = 0;
@@ -252,7 +283,10 @@ const Accueil = () => {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-8 page-enter">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <SilentSyncDot active={isRefetching && terrains.length > 0} />
+
+      {/* Header plein écran / bleed mobile — contenu sous navbar en desktop */}
+      <div className="w-full md:max-w-7xl md:mx-auto md:px-6 lg:px-8">
         <BannerVideoHeader
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -262,11 +296,12 @@ const Accueil = () => {
           }}
           activeFilterCount={activeFilterCount}
         />
-
+      </div>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {geo.denied && (
           <div className="mt-2">
             <div className="flex items-center gap-2 px-3 h-9 bg-[var(--surface)] border border-[var(--border)] rounded-2xl max-w-md">
-              <MapPin className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+              <MapPin className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />
               <input
                 type="text"
                 placeholder="Filtrer par quartier..."
@@ -339,7 +374,7 @@ const Accueil = () => {
             <div className="text-red-400 text-sm mb-4">{error}</div>
             <button
               type="button"
-              onClick={loadTerrains}
+              onClick={() => void refetch()}
               className="px-6 py-2.5 rounded-xl bg-[var(--primary)] text-white font-bold text-sm active:scale-95 transition-transform"
             >
               Réessayer
@@ -363,7 +398,7 @@ const Accueil = () => {
                 <button
                   type="button"
                   onClick={resetFiltres}
-                  className="mt-5 px-5 py-2 rounded-xl border border-emerald-500 text-emerald-400 text-sm font-semibold active:scale-95 transition-transform min-h-[40px]"
+                  className="mt-5 px-5 py-2 rounded-xl border border-[var(--primary)] text-[var(--primary)] text-sm font-semibold active:scale-95 transition-transform min-h-[40px]"
                 >
                   Réinitialiser
                 </button>

@@ -1,5 +1,5 @@
 import { ChangeEvent, ReactNode, useRef, useState } from "react";
-import { Camera, LogOut, X } from "lucide-react";
+import { Camera, LogOut, X, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -49,7 +49,13 @@ export function ProfileLoading() {
   );
 }
 
-export function ProfileError({ message }: { message: string }) {
+export function ProfileError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}) {
   const navigate = useNavigate();
 
   return (
@@ -61,7 +67,14 @@ export function ProfileError({ message }: { message: string }) {
           <Button type="button" variant="outline" onClick={() => navigate(-1)}>
             Retour
           </Button>
-          <Button type="button" variant="hero" onClick={() => window.location.reload()}>
+          <Button
+            type="button"
+            variant="hero"
+            onClick={() => {
+              if (onRetry) onRetry();
+              else navigate(0);
+            }}
+          >
             Reessayer
           </Button>
         </div>
@@ -125,17 +138,22 @@ export function ProfileShell({
   roleLabel,
   subtitle,
   children,
+  className,
+  backTo,
 }: {
   account?: ProfileAccount | null;
   roleLabel: string;
   subtitle?: string;
   children: ReactNode;
+  className?: string;
+  backTo?: string;
 }) {
+  const navigate = useNavigate();
   const [photoUrl, setPhotoUrl] = useState(account?.photo_url || "");
   const displayName = [account?.prenom, account?.nom].filter(Boolean).join(" ").trim() || account?.nom || "Utilisateur";
 
   return (
-    <main className="min-h-screen bg-[var(--color-bg)] page-enter">
+    <main className={`min-h-screen bg-[var(--color-bg)] page-enter ${className || ""}`}>
       <div className="relative h-[180px] bg-[var(--color-primary)] overflow-hidden">
         <img
           src={fieldImageForId(1)}
@@ -144,6 +162,16 @@ export function ProfileShell({
           style={{ filter: "brightness(0.5)" }}
           aria-hidden
         />
+        {backTo ? (
+          <button
+            type="button"
+            onClick={() => navigate(backTo)}
+            className="absolute top-3 left-3 z-[2] min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-full bg-black/25 text-white"
+            aria-label="Retour"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+        ) : null}
       </div>
       <div className="mx-auto w-full max-w-md px-4 -mt-[50px] relative z-[1] pb-10">
         <section className="text-center">

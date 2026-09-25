@@ -43,8 +43,8 @@ describe("Parcours joueur — inscription → home", () => {
     expect(homeForUser({ role: "joueur" })).toBe("/");
   });
 
-  it("affiche Jeudi minuit pour le créneau culturel", () => {
-    expect(labelHeureSenegal("2026-09-18", "00:00")).toBe("Jeudi minuit");
+  it("affiche le libellé culturel pour le créneau 00:00", () => {
+    expect(labelHeureSenegal("2026-09-18", "00:00")).toBe("Nuit du Jeudi à Vendredi");
   });
 });
 
@@ -107,5 +107,42 @@ describe("Parcours staff — redirections post-login", () => {
     expect(homeForUser({ role: "gerant" })).toBe("/backoffice/gerant");
     expect(homeForUser({ role: "proprietaire" })).toBe("/backoffice/proprietaire");
     expect(homeForUser({ role: "super_admin" })).toBe("/backoffice/superadmin");
+  });
+});
+
+describe("Parcours propriétaire — navigation backoffice", () => {
+  it("home puis revenus / santé / terrains (chemins canoniques)", () => {
+    expect(normalizeRole({ role: "proprietaire" })).toBe("proprietaire");
+    expect(homeForUser({ role: "proprietaire" })).toBe("/backoffice/proprietaire");
+
+    const steps = [
+      "/backoffice/proprietaire",
+      "/backoffice/proprietaire/revenus",
+      "/backoffice/proprietaire/sante",
+      "/backoffice/proprietaire/terrains",
+      "/backoffice/proprietaire/terrain/1",
+    ];
+    for (const path of steps) {
+      expect(path.startsWith("/backoffice/proprietaire")).toBe(true);
+      expect(path).not.toBe("/joueur");
+    }
+  });
+});
+
+describe("Parcours superadmin — navigation plateforme", () => {
+  it("home puis terrains / caisse / utilisateurs", () => {
+    expect(normalizeRole({ role: "superadmin" })).toBe("super_admin");
+    expect(homeForUser({ role: "super_admin" })).toBe("/backoffice/superadmin");
+
+    const steps = [
+      "/backoffice/superadmin",
+      "/backoffice/superadmin/terrains",
+      "/backoffice/superadmin/caisse",
+      "/backoffice/superadmin/utilisateurs",
+    ];
+    for (const path of steps) {
+      expect(path.startsWith("/backoffice/superadmin")).toBe(true);
+      expect(path).not.toMatch(/^\/joueur/);
+    }
   });
 });

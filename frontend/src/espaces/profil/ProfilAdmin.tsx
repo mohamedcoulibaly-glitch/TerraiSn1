@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { profilApi } from "@/lib/api";
 import { PasswordBlock, ProfileAccount, ProfileError, ProfileLoading, ProfileShell, StatGrid, formatDate, readonlyInput } from "./ProfileBlocks";
+import PushPreferencesPanel from "@/components/pwa/PushPreferencesPanel";
 
 type AdminProfile = {
   account: ProfileAccount;
@@ -16,6 +17,7 @@ export default function ProfilAdmin() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let mounted = true;
@@ -40,7 +42,7 @@ export default function ProfilAdmin() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -58,10 +60,17 @@ export default function ProfilAdmin() {
   };
 
   if (loading) return <ProfileLoading />;
-  if (error || !data) return <ProfileError message={error || "Profil admin introuvable"} />;
+  if (error || !data) {
+    return (
+      <ProfileError
+        message={error || "Profil admin introuvable"}
+        onRetry={() => setReloadKey((k) => k + 1)}
+      />
+    );
+  }
 
   return (
-    <ProfileShell account={data.account} roleLabel="Admin">
+    <ProfileShell account={data.account} roleLabel="Admin" backTo="/backoffice/superadmin">
       <form onSubmit={submit} className="mt-8 space-y-3">
         <Input placeholder="Prenom" value={form.prenom} onChange={(e) => setForm({ ...form, prenom: e.target.value })} />
         <Input placeholder="Nom" required value={form.nom} onChange={(e) => setForm({ ...form, nom: e.target.value })} />
@@ -70,6 +79,9 @@ export default function ProfilAdmin() {
         <Button type="submit" variant="hero" className="w-full" disabled={saving}>{saving ? "Enregistrement..." : "Enregistrer"}</Button>
       </form>
       <PasswordBlock requireOld />
+      <div className="mt-6">
+        <PushPreferencesPanel />
+      </div>
       <StatGrid stats={[{ label: "Membre depuis", value: formatDate(data.stats.membre_depuis) }]} />
     </ProfileShell>
   );

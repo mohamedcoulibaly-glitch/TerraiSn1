@@ -113,6 +113,56 @@ async function stubPublicApi(page: Page) {
       });
     }
 
+    // Fiche terrain consolidée /api/terrains/:id/full-details
+    if (/\/terrains\/\d+\/full-details/.test(path) && method === "GET") {
+      return mockJson(route, {
+        id: 1,
+        nom: "Arena Test Parcelles",
+        ville: "Dakar",
+        adresse: "Parcelles Assainies",
+        sport: "foot",
+        type: "5v5",
+        prix_entier: 40000,
+        prix_moitie: 24000,
+        prix_heure: 40000,
+        pourcentage_avance: 12.5,
+        description: "Terrain synthétique",
+        is_active: 1,
+        note: 4.5,
+        avis_count: 12,
+        horaires: [{ jour: "lundi", heure_debut: "08:00", heure_fin: "00:00", est_ouvert: 1 }],
+        commodites: [],
+        photos: [],
+        avis: [],
+        formats: [
+          { cle: "moitie", label: "Demi-terrain", prix_heure: 24000 },
+          { cle: "entier", label: "Terrain entier", prix_heure: 40000 },
+        ],
+        durees: [
+          { label: "1h", minutes: 60 },
+          { label: "2h", minutes: 120 },
+        ],
+        features: {},
+        en_ligne_indisponible: false,
+        booking_online_available: true,
+        planning: {
+          date: "2026-12-01",
+          terrain_id: 1,
+          creneaux: [
+            {
+              heure: "18:00",
+              heure_debut: "18:00",
+              heure_fin: "19:00",
+              disponible: true,
+              statut: "libre",
+              label: "18:00",
+            },
+          ],
+          ferme: false,
+        },
+      });
+    }
+
     // Fiche terrain /api/terrains/:id (pas la liste)
     if (/\/terrains\/\d+(\?|$)/.test(path) && method === "GET") {
       return mockJson(route, {
@@ -196,7 +246,9 @@ test.describe("E2E — Parcours joueur (UI)", () => {
     await page.locator("#login-id").fill("fail@test.sn");
     await page.locator("#login-pass").fill("wrongpass");
     await page.locator('button[type="submit"]').first().click();
-    await expect(page.getByText(/Identifiants incorrects/i).first()).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/Mot de passe incorrect|Identifiants incorrects/i).first()).toBeVisible({
+      timeout: 10000,
+    });
   });
 
   test("Login joueur réussi quitte /login", async ({ page }) => {
@@ -251,6 +303,13 @@ test.describe("E2E — Navigation parcours critique", () => {
 
   test("404 pour route inconnue", async ({ page }) => {
     await page.goto("/cette-route-nexiste-pas-xyz");
+    await expect(page.getByText(/404|not found|introuvable/i).first()).toBeVisible({
+      timeout: 15000,
+    });
+  });
+
+  test("Legacy /joueur est une 404 (pas d'espace dédié)", async ({ page }) => {
+    await page.goto("/joueur");
     await expect(page.getByText(/404|not found|introuvable/i).first()).toBeVisible({
       timeout: 15000,
     });

@@ -10,8 +10,8 @@ const AdminButton = () => {
       variant="ghost"
       size="icon"
       className="fixed top-3 right-3 z-50 bg-card/80 backdrop-blur-sm shadow-md rounded-full"
-      onClick={() => navigate("/login")}
-      title="Connexion"
+      onClick={() => navigate("/backoffice/login")}
+      title="Connexion backoffice"
     >
       <Shield className="w-5 h-5 text-primary" />
     </Button>

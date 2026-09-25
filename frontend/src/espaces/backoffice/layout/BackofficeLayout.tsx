@@ -23,16 +23,16 @@ type HeaderUser = { prenom?: string; nom?: string; photo_url?: string } | null;
 
 const NAV_BY_ROLE: Record<Exclude<AppRole, "joueur">, NavItem[]> = {
   super_admin: [
-    { to: "/backoffice/admin", label: "Dashboard", icon: LayoutDashboard, end: true },
-    { to: "/backoffice/admin/terrains", label: "Terrains", icon: Map },
-    { to: "/backoffice/admin/utilisateurs", label: "Utilisateurs", icon: Users },
-    { to: "/backoffice/admin/revenus", label: "Revenus", icon: Banknote },
-    { to: "/backoffice/admin/abonnements", label: "Abonnements", icon: Calendar },
+    { to: "/backoffice/superadmin", label: "Dashboard", icon: LayoutDashboard, end: true },
+    { to: "/backoffice/superadmin/terrains", label: "Terrains", icon: Map },
+    { to: "/backoffice/superadmin/utilisateurs", label: "Utilisateurs", icon: Users },
+    { to: "/backoffice/superadmin/revenus", label: "Revenus", icon: Banknote },
+    { to: "/backoffice/superadmin/abonnements", label: "Abonnements", icon: Calendar },
   ],
   gerant: [
     { to: "/backoffice/gerant", label: "Dashboard", icon: LayoutDashboard, end: true },
-    { to: "/backoffice/gerant/creneaux", label: "Creneaux", icon: Calendar },
-    { to: "/backoffice/gerant/reservations", label: "Resa manuelle", icon: HandCoins },
+    { to: "/backoffice/gerant/parametres", label: "Parametres", icon: Calendar },
+    { to: "/backoffice/gerant/joueurs", label: "Réservation manuelle", icon: HandCoins },
   ],
   proprietaire: [
     { to: "/backoffice/proprietaire", label: "Dashboard", icon: LayoutDashboard, end: true },

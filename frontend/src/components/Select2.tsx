@@ -7,6 +7,7 @@ export type Select2Option = {
   value: string;
   label: string;
   disabled?: boolean;
+  separator?: boolean;
 };
 
 type Props = {
@@ -20,7 +21,23 @@ type Props = {
   className?: string;
   style?: React.CSSProperties;
   size?: "sm" | "md";
+  id?: string;
+  ariaLabel?: string;
 };
+
+function isSelectable(opt: Select2Option | undefined) {
+  return Boolean(opt) && !opt?.disabled && !opt?.separator;
+}
+
+function nextSelectable(list: Select2Option[], from: number, dir: 1 | -1) {
+  if (list.length === 0) return 0;
+  let i = from;
+  for (let n = 0; n < list.length; n += 1) {
+    i = (i + dir + list.length) % list.length;
+    if (isSelectable(list[i])) return i;
+  }
+  return from;
+}
 
 export default function Select2({
   value,
@@ -33,6 +50,8 @@ export default function Select2({
   className = "",
   style,
   size = "md",
+  id,
+  ariaLabel,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -43,12 +62,16 @@ export default function Select2({
   const [active, setActive] = useState(0);
   const [menu, setMenu] = useState<{ top: number; left: number; width: number; up: boolean } | null>(null);
 
-  const showSearch = searchable ?? options.length >= 6;
-  const selected = options.find((o) => o.value === value);
+  const showSearch = searchable ?? options.filter((o) => !o.separator).length >= 6;
+  const selected = options.find((o) => o.value === value && !o.separator);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return options;
-    return options.filter((o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q));
+    return options.filter(
+      (o) =>
+        !o.separator &&
+        (o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q)),
+    );
   }, [options, query]);
 
   function place() {
@@ -70,7 +93,7 @@ export default function Select2({
   }
 
   function pick(opt: Select2Option) {
-    if (opt.disabled) return;
+    if (opt.disabled || opt.separator) return;
     onChange(opt.value);
     close();
   }
@@ -98,8 +121,9 @@ export default function Select2({
   }, [open]);
 
   useEffect(() => {
-    setActive(0);
-  }, [query, open]);
+    const first = filtered.findIndex(isSelectable);
+    setActive(first >= 0 ? first : 0);
+  }, [query, open, filtered]);
 
   const height = size === "sm" ? 36 : 44;
 
@@ -120,6 +144,8 @@ export default function Select2({
             setOpen(true);
           }
         }}
+        id={id}
+        aria-label={ariaLabel}
         className="select2-trigger"
         style={{ minHeight: height }}
       >
@@ -167,14 +193,14 @@ export default function Select2({
                         close();
                       } else if (e.key === "ArrowDown") {
                         e.preventDefault();
-                        setActive((i) => Math.min(filtered.length - 1, i + 1));
+                        setActive((i) => nextSelectable(filtered, i, 1));
                       } else if (e.key === "ArrowUp") {
                         e.preventDefault();
-                        setActive((i) => Math.max(0, i - 1));
+                        setActive((i) => nextSelectable(filtered, i, -1));
                       } else if (e.key === "Enter") {
                         e.preventDefault();
                         const opt = filtered[active];
-                        if (opt) pick(opt);
+                        if (opt && isSelectable(opt)) pick(opt);
                       }
                     }}
                   />
@@ -185,6 +211,13 @@ export default function Select2({
                   <p className="select2-empty">Aucun résultat</p>
                 ) : (
                   filtered.map((opt, i) => {
+                    if (opt.separator) {
+                      return (
+                        <div key={`${opt.value}-${i}`} className="select2-separator" role="separator">
+                          {opt.label}
+                        </div>
+                      );
+                    }
                     const isSel = opt.value === value;
                     return (
                       <button

@@ -23,9 +23,9 @@ describe("scheduleSn — calendrier culturel sénégalais", () => {
     expect(veilleJour("vendredi")).toBe("jeudi");
   });
 
-  it("labellise Jeudi minuit pour vendredi 00:00", () => {
-    expect(labelHeureSenegal("2026-09-18", "00:00")).toBe("Jeudi minuit");
-    expect(courtLabelHeureSenegal("2026-09-18", "00:00")).toBe("Minuit");
+  it("labellise la nuit culturelle pour vendredi 00:00", () => {
+    expect(labelHeureSenegal("2026-09-18", "00:00")).toBe("Nuit du Jeudi à Vendredi");
+    expect(courtLabelHeureSenegal("2026-09-18", "00:00")).toBe("Nuit du Jeudi à Vendredi");
     expect(labelHeureSenegal("2026-09-14", "18:00")).toBe("18:00");
   });
 

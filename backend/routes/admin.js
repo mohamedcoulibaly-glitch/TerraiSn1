@@ -602,11 +602,235 @@ router.post('/terrains/:id/achat-definitif/checkout', async (req, res) => {
 
 router.get('/users', async (req, res) => {
   const db = await getDb();
-  const proprietaires = queryAll(db, `SELECT id, nom, telephone, email, statut, must_change_password,
+  const proprietaires = queryAll(db, `SELECT id, nom, prenom, telephone, email, statut, must_change_password,
     'proprietaire' AS role, NULL AS terrain_id FROM proprietaires`);
-  const gerants = queryAll(db, `SELECT e.id, e.nom, e.telephone, e.email, e.is_active AS statut, e.must_change_password,
+  const gerants = queryAll(db, `SELECT e.id, e.nom, e.prenom, e.telephone, e.email, e.is_active AS statut, e.must_change_password,
     'gerant' AS role, e.terrain_id, t.nom AS terrain_nom FROM employes e LEFT JOIN terrains t ON t.id = e.terrain_id`);
-  res.json([...proprietaires, ...gerants]);
+  const superadmins = queryAll(db, `SELECT id, nom, prenom, telephone, email, is_active AS statut, must_change_password,
+    'super_admin' AS role, NULL AS terrain_id FROM users WHERE role IN ('super_admin', 'superadmin')`);
+  res.json([...superadmins, ...proprietaires, ...gerants]);
+});
+
+// ─── Propriétaires CRUD (pages SA GestionProprietaires) ───────────────────
+router.get('/proprietaires', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = queryAll(db, `
+      SELECT p.*,
+        (SELECT COUNT(*) FROM terrains t WHERE t.proprietaire_id = p.id) AS nb_terrains,
+        (SELECT COUNT(*) FROM employes e WHERE e.proprietaire_id = p.id AND e.is_active = 1) AS nb_gerants
+      FROM proprietaires p
+      ORDER BY p.id DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+router.post('/proprietaires', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { nom, prenom, telephone, email, terrain_id } = req.body || {};
+    if (!nom || !telephone) return res.status(400).json({ error: 'Nom et téléphone requis' });
+    const telDigits = String(telephone).replace(/\D/g, '');
+    const existing = queryAll(db, 'SELECT id, telephone FROM proprietaires').find(
+      (p) => String(p.telephone || '').replace(/\D/g, '') === telDigits,
+    );
+    if (existing) return res.status(409).json({ error: 'Un propriétaire avec ce téléphone existe déjà' });
+
+    const temporaryPassword = crypto.randomBytes(6).toString('base64url');
+    const passwordHash = bcrypt.hashSync(temporaryPassword, 12);
+    const mail = email || `proprietaire-${Date.now()}@terrainsn.local`;
+    let id;
+    transaction(db, () => {
+      runSql(
+        db,
+        `INSERT INTO proprietaires (nom, prenom, email, telephone, password_hash, statut, must_change_password)
+         VALUES (?, ?, ?, ?, ?, 'actif', 1)`,
+        [nom, prenom || null, mail, telephone, passwordHash],
+      );
+      id = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
+      if (terrain_id) {
+        runSql(db, 'UPDATE terrains SET proprietaire_id = ? WHERE id = ?', [id, Number(terrain_id)]);
+      }
+    });
+    try {
+      await envoyerAcces({ telephone, motDePasse: temporaryPassword, role: 'proprietaire' });
+    } catch (waErr) {
+      console.warn('[admin] Accès propriétaire créé mais WhatsApp échoué:', waErr.message);
+    }
+    const row = queryOne(db, 'SELECT * FROM proprietaires WHERE id = ?', [id]);
+    res.status(201).json({ ...row, role: 'proprietaire', temporary_password_sent: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.patch('/proprietaires/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const id = Number(req.params.id);
+    const current = queryOne(db, 'SELECT * FROM proprietaires WHERE id = ?', [id]);
+    if (!current) return res.status(404).json({ error: 'Propriétaire introuvable' });
+    const nom = req.body.nom !== undefined ? req.body.nom : current.nom;
+    const prenom = req.body.prenom !== undefined ? req.body.prenom : current.prenom;
+    const telephone = req.body.telephone !== undefined ? req.body.telephone : current.telephone;
+    const email = req.body.email !== undefined ? req.body.email : current.email;
+    let statut = req.body.statut !== undefined ? String(req.body.statut) : current.statut;
+    if (req.body.actif != null) statut = Number(req.body.actif) ? 'actif' : 'inactif';
+    runSql(
+      db,
+      `UPDATE proprietaires SET nom = ?, prenom = ?, telephone = ?, email = ?, statut = ? WHERE id = ?`,
+      [nom, prenom, telephone, email, statut, id],
+    );
+    res.json(queryOne(db, 'SELECT * FROM proprietaires WHERE id = ?', [id]));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ─── Superadmins CRUD ─────────────────────────────────────────────────────
+router.get('/superadmins', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = queryAll(
+      db,
+      `SELECT id, nom, prenom, email, telephone, role, is_active, must_change_password, created_at
+       FROM users WHERE role IN ('super_admin', 'superadmin') ORDER BY id ASC`,
+    );
+    res.json(rows.map((r) => ({ ...r, role: 'super_admin' })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+router.post('/superadmins', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { nom, prenom, telephone, email } = req.body || {};
+    if (!nom || !telephone) return res.status(400).json({ error: 'Nom et téléphone requis' });
+    const mail = email || `superadmin-${Date.now()}@terrainsn.local`;
+    const temporaryPassword = crypto.randomBytes(6).toString('base64url');
+    const passwordHash = bcrypt.hashSync(temporaryPassword, 12);
+    runSql(
+      db,
+      `INSERT INTO users (nom, prenom, email, telephone, password_hash, role, is_active, must_change_password)
+       VALUES (?, ?, ?, ?, ?, 'super_admin', 1, 1)`,
+      [nom, prenom || null, mail, telephone, passwordHash],
+    );
+    const id = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
+    try {
+      await envoyerAcces({ telephone, motDePasse: temporaryPassword, role: 'super_admin' });
+    } catch (waErr) {
+      console.warn('[admin] Accès SA créé mais WhatsApp échoué:', waErr.message);
+    }
+    const row = queryOne(db, 'SELECT id, nom, prenom, email, telephone, role, is_active FROM users WHERE id = ?', [id]);
+    res.status(201).json({ ...row, role: 'super_admin', temporary_password_sent: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.patch('/superadmins/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const id = Number(req.params.id);
+    const current = queryOne(
+      db,
+      `SELECT * FROM users WHERE id = ? AND role IN ('super_admin', 'superadmin')`,
+      [id],
+    );
+    if (!current) return res.status(404).json({ error: 'Superadmin introuvable' });
+    if (Number(req.user.id) === id && (req.body.is_active === 0 || req.body.actif === 0 || req.body.actif === false)) {
+      return res.status(400).json({ error: 'Tu ne peux pas désactiver ton propre compte' });
+    }
+    const nom = req.body.nom !== undefined ? req.body.nom : current.nom;
+    const prenom = req.body.prenom !== undefined ? req.body.prenom : current.prenom;
+    const telephone = req.body.telephone !== undefined ? req.body.telephone : current.telephone;
+    const email = req.body.email !== undefined ? req.body.email : current.email;
+    const isActive =
+      req.body.is_active != null
+        ? Number(req.body.is_active) ? 1 : 0
+        : req.body.actif != null
+          ? Number(req.body.actif) ? 1 : 0
+          : Number(current.is_active);
+    runSql(
+      db,
+      `UPDATE users SET nom = ?, prenom = ?, telephone = ?, email = ?, is_active = ? WHERE id = ?`,
+      [nom, prenom, telephone, email, isActive, id],
+    );
+    res.json(queryOne(db, 'SELECT id, nom, prenom, email, telephone, role, is_active FROM users WHERE id = ?', [id]));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ─── Gérants d'un terrain (compat UI multi-gérants, modèle SQLite 1:1) ─────
+router.get('/terrains/:id/gerants', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id, nom FROM terrains WHERE id = ?', [terrainId]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+    const gerants = queryAll(
+      db,
+      `SELECT e.id, e.nom, e.prenom, e.telephone, e.email, e.is_active AS actif,
+              e.terrain_id, 1 AS est_principal
+       FROM employes e WHERE e.terrain_id = ? ORDER BY e.id ASC`,
+      [terrainId],
+    );
+    const garde = gerants.find((g) => Number(g.actif) === 1) || gerants[0] || null;
+    res.json({ gerants, garde_actuelle: garde, planning: [] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+router.get('/terrains/:id/gerants/garde-actuelle', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const garde = queryOne(
+      db,
+      `SELECT e.id, e.nom, e.prenom, e.telephone, e.email, e.is_active AS actif, 1 AS est_principal
+       FROM employes e WHERE e.terrain_id = ? AND e.is_active = 1 ORDER BY e.id ASC LIMIT 1`,
+      [terrainId],
+    );
+    res.json({ garde: garde || null });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+router.get('/gerants/search', async (req, res) => {
+  try {
+    const db = await getDb();
+    const q = String(req.query.q || '').trim().toLowerCase();
+    let rows = queryAll(
+      db,
+      `SELECT e.id, e.nom, e.prenom, e.telephone, e.email, e.terrain_id, t.nom AS terrain_nom
+       FROM employes e LEFT JOIN terrains t ON t.id = e.terrain_id
+       WHERE e.is_active = 1 ORDER BY e.nom ASC LIMIT 50`,
+    );
+    if (q) {
+      rows = rows.filter((r) =>
+        `${r.nom} ${r.prenom} ${r.telephone} ${r.email}`.toLowerCase().includes(q),
+      );
+    }
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
 });
 
 router.post('/users', async (req, res) => {
