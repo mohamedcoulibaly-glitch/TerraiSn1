@@ -43,3 +43,5 @@ backend/.wwebjs_cache
 *.njsproj
 *.sln
 *.sw?
+
+backend/uploads/
