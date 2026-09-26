@@ -121,6 +121,11 @@ async function resoudreUrlsPaiement(reservationId, gateway = activeGateway(), op
 
   if (!publicBase) publicBase = publicBaseDepuisEnv();
 
+  // Render / prod : APP_DOMAIN ou RENDER_EXTERNAL_URL (HTTPS public) comme base IPN
+  if (!publicBase && isPublicHttps(domain)) {
+    publicBase = domain;
+  }
+
   let ipnUrl;
   let successUrl;
   let cancelUrl;
@@ -151,7 +156,10 @@ async function resoudreUrlsPaiement(reservationId, gateway = activeGateway(), op
   if (!isPublicHttps(ipnUrl) || !isPublicHttps(successUrl) || !isPublicHttps(cancelUrl)) {
     const prestataire = resolvedGateway === 'paydunya' ? 'PayDunya' : 'PayTech';
     const error = new Error(
-      `${prestataire} exige des URLs HTTPS publiques. Lance ngrok (ngrok http 3001) puis réessaie.`,
+      `${prestataire} exige des URLs HTTPS publiques. ` +
+        `Définis APP_DOMAIN=https://<ton-service>.onrender.com ` +
+        `(ou ${paths.envIpn} / ${paths.envSuccess} / ${paths.envCancel}), ` +
+        `ou lance ngrok (ngrok http 3001) en local.`,
     );
     error.statusCode = 503;
     error.code = 'PAYTECH_PUBLIC_URL_REQUIRED';

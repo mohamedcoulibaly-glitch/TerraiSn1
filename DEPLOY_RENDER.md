@@ -15,48 +15,61 @@ Dans le dashboard Render → ton service → **Settings** :
 | **Build Command** | `npm run build:render` |
 | **Start Command** | `npm start` |
 
-Puis **Environment** → ajoute au minimum :
+Puis **Environment** → variables de base :
 
 | Key | Value |
 |-----|-------|
 | `NODE_ENV` | `production` |
 | `JWT_SECRET` | une longue chaîne aléatoire |
 | `JWT_REFRESH_SECRET` | une autre chaîne aléatoire |
-| `PAYTECH_MOCK` | `true` |
-| `PAYMENT_MODE` | `simulation` |
 | `SKIP_SEED` | `false` |
 | `COOKIE_SAMESITE` | `lax` |
+| `APP_DOMAIN` | `https://<ton-service>.onrender.com` |
 
 **Manual Deploy** → **Deploy latest commit**.
 
 > Ne laisse pas Build = `yarn` et Start = `yarn start`.
 
-## WhatsApp en production (obligatoire)
+## Paiements en production (PayTech)
 
-Sans ces variables, **aucun message réel** ne part (mock ou OpenWA non configuré).
+Sans ces variables, le checkout reste en **page simulation locale** (aucun argent réel).
+
+| Key | Value |
+|-----|-------|
+| `PAYTECH_MOCK` | `false` |
+| `PAYMENT_MODE` | `production` |
+| `PAYMENT_PROVIDER` | `paytech` |
+| `PAYTECH_ENV` | `prod` |
+| `PAYTECH_API_KEY` | clé live PayTech |
+| `PAYTECH_API_SECRET` | secret live PayTech |
+
+`APP_DOMAIN` (ou `RENDER_EXTERNAL_URL`) sert aussi pour les URLs IPN / success / cancel :
+`/webhook/paytech`, `/paytech/success`, `/paytech/cancel`.
+
+Vérif : `GET /health` → `payment.readyForProd: true`, `payment.simulationLocale: false`, `warnings: []`.
+
+> Si `PAYMENT_MODE=simulation` ou `PAYTECH_MOCK=true` (ancienne config), les paiements « marchent » vers `/simulation/paiement` mais **aucun prestataire n’est appelé**.
+
+Sandbox PayDunya (tests uniquement) : `PAYMENT_PROVIDER=paydunya` + clés PayDunya + `PAYMENT_MODE=production`.
+
+## WhatsApp en production
 
 | Key | Value |
 |-----|-------|
 | `WHATSAPP_MOCK` | `false` |
 | `OPENWA_API_KEY` | clé OpenWA (secret) |
 | `OPENWA_BASE_URL` | `https://mywa.tickets-place.net` |
-| `OPENWA_SHARED_SESSION_ID` | UUID d’une session OpenWA **déjà connectée** (recommandé sur Render free) |
+| `OPENWA_SHARED_SESSION_ID` | UUID session OpenWA déjà connectée |
 | `APP_DOMAIN` | `https://<ton-service>.onrender.com` |
 
-Vérifications après deploy :
-
-1. `GET /api/whatsapp/status` → `connected: true`, `mock: false`
-2. Ouvre `/whatsapp-qr` si `OPENWA_SHARED_SESSION_ID` n’est pas défini (scanner le QR)
-3. Créer une réservation gérant en mode paiement → le joueur doit recevoir le lien WhatsApp
-
-> Si `WHATSAPP_MOCK=true` (ancienne config), les logs affichent `[WHATSAPP MOCK]` et **rien n’est envoyé**.
+Vérif : `GET /api/whatsapp/status` → `config.readyForProd: true`.
 
 ## Option B — Nouveau Blueprint (1 minute)
 
-1. Push à jour (déjà sur `MOHAMED_COULIBALY`)
+1. Push à jour (branche `MOHAMED_COULIBALY`)
 2. **New** → **Blueprint** → repo `TerraiSn1` → branche `MOHAMED_COULIBALY`
-3. **Apply** (`render.yaml` configure build/start + env)
-4. Dans le dashboard, renseigner les secrets OpenWA (`sync: false` dans le blueprint)
+3. **Apply** (`render.yaml` configure build/start)
+4. Dans le dashboard, renseigner les secrets OpenWA + PayTech (`sync: false`)
 
 ## URLs
 
@@ -69,6 +82,7 @@ Vérifications après deploy :
 | Health | `/health` |
 | WhatsApp status | `/api/whatsapp/status` |
 | WhatsApp QR | `/whatsapp-qr` |
+| IPN PayTech | `/webhook/paytech` |
 
 ## Comptes démo (mdp `password123`)
 
@@ -88,7 +102,7 @@ Vérifications après deploy :
 - **Pas de disque persistant** : la DB SQLite peut être effacée à chaque redeploy / cold start machine → le seed se recharge si la base est vide.
 - Cold start ~30–60 s après inactivité.
 - Pour une DB durable : plan **Starter** + Docker (`Dockerfile`) + disque `/data`.
-- WhatsApp : préférer `OPENWA_SHARED_SESSION_ID` (session déjà authentifiée côté OpenWA) plutôt que de rescanner un QR à chaque machine neuve.
+- WhatsApp : préférer `OPENWA_SHARED_SESSION_ID`.
 
 ## Re-seed forcé
 

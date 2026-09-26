@@ -51,12 +51,32 @@ function getLiveAdapter() {
 function describe() {
   const target = targetProvider();
   const active = activeGateway();
+  const simulationLocale = estSimulation();
+  const hasPaytechKeys = Boolean(
+    String(process.env.PAYTECH_API_KEY || '').trim()
+    && String(process.env.PAYTECH_API_SECRET || '').trim(),
+  );
+  const hasPaydunyaKeys = Boolean(
+    String(process.env.PAYDUNYA_MASTER_KEY || '').trim()
+    && String(process.env.PAYDUNYA_PRIVATE_KEY || '').trim()
+    && String(process.env.PAYDUNYA_TOKEN || '').trim(),
+  );
+  const appDomain = String(
+    process.env.APP_DOMAIN || process.env.RENDER_EXTERNAL_URL || '',
+  ).trim();
+  const publicHttps = /^https:\/\//i.test(appDomain)
+    && !/localhost|127\.0\.0\.1/i.test(appDomain);
+  const keysOk = target === PROVIDERS.PAYTECH ? hasPaytechKeys : hasPaydunyaKeys;
   return {
     activeGateway: active,
     targetProvider: target,
     methode: methodePaiement(),
-    simulationLocale: estSimulation(),
+    simulationLocale,
     role: providerRole(target),
+    hasApiKeys: keysOk,
+    appDomain: appDomain || null,
+    publicHttps,
+    readyForProd: !simulationLocale && keysOk && publicHttps && active !== PROVIDERS.SIMULATION,
     switchHint: 'PAYMENT_PROVIDER=paytech pour la production ; PAYMENT_PROVIDER=paydunya pour la sandbox',
   };
 }

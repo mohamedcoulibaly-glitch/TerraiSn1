@@ -348,20 +348,29 @@ app.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
 app.get(['/health', '/api/health'], (_req, res) => {
   const paymentService = require('./services/payment');
-  const { targetProvider, providerRole } = require('./lib/paymentGateway');
+  const { targetProvider, providerRole, estSimulation } = require('./lib/paymentGateway');
   const whatsappMock = String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true';
+  const payment = paymentService.describe();
   res.status(200).json({
     status: 'ok',
     service: 'terrainsn-api',
     payment_gateway: activeGateway(),
     payment_provider: targetProvider(),
     payment_role: providerRole(targetProvider()),
-    payment: paymentService.describe(),
+    payment,
     whatsapp: {
       mock: whatsappMock,
       hasApiKey: Boolean(String(process.env.OPENWA_API_KEY || '').trim()),
       sharedSession: Boolean(String(process.env.OPENWA_SHARED_SESSION_ID || '').trim()),
     },
+    warnings: [
+      ...(estSimulation() && process.env.NODE_ENV === 'production'
+        ? ['PAYMENT_MODE=simulation / PAYTECH_MOCK=true — aucun paiement réel']
+        : []),
+      ...(whatsappMock && process.env.NODE_ENV === 'production'
+        ? ['WHATSAPP_MOCK=true — aucune notif WhatsApp réelle']
+        : []),
+    ],
     uptime: Math.round(process.uptime()),
   });
 });
@@ -3605,10 +3614,29 @@ async function start() {
     if (process.env.APP_DOMAIN) {
       logger.info('index.js', `APP_DOMAIN=${process.env.APP_DOMAIN}`);
     }
+    const paymentService = require('./services/payment');
+    const paymentInfo = paymentService.describe();
+    if (paymentInfo.simulationLocale && process.env.NODE_ENV === 'production') {
+      logger.warn(
+        'index.js',
+        '[PAYMENT SIMULATION] PAYMENT_MODE=simulation ou PAYTECH_MOCK=true — aucun appel PayTech/PayDunya. '
+          + 'Passe PAYMENT_MODE=production, PAYTECH_MOCK=false, PAYMENT_PROVIDER=paytech + clés API.',
+      );
+    } else {
+      logger.info(
+        'index.js',
+        `Paiement actif=${paymentInfo.activeGateway} cible=${paymentInfo.targetProvider}`
+          + ` readyForProd=${paymentInfo.readyForProd}`,
+      );
+    }
     const { resoudreIpnUrl } = require('./lib/publicIpnUrl');
     resoudreIpnUrl()
       .then((ipn) => logger.info('index.js', `IPN paiement (${activeGateway()}) : ${ipn}`))
-      .catch(() => {});
+      .catch((err) => {
+        if (!paymentInfo.simulationLocale) {
+          logger.warn('index.js', `IPN paiement non résolu : ${err.message}`);
+        }
+      });
   }).on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
       logger.error('index.js', `Port ${PORT} deja utilise. Arretez l'autre process ou changez PORT.`);

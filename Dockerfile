@@ -38,8 +38,10 @@ ENV NODE_ENV=production \
     ADMIN_PUBLIC_DIR=/app/public-admin \
     SKIP_SEED=false \
     WHATSAPP_MOCK=false \
-    PAYTECH_MOCK=true \
-    PAYMENT_MODE=simulation
+    PAYTECH_MOCK=false \
+    PAYMENT_MODE=production \
+    PAYMENT_PROVIDER=paytech \
+    PAYTECH_ENV=prod
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends wget ca-certificates \
