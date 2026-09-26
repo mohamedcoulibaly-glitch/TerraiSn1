@@ -1,4 +1,4 @@
-﻿import { ArrowLeft, Lock, Shield, AlertTriangle, Eye, EyeOff } from "lucide-react";
+﻿import { ArrowLeft, Lock, Shield, AlertTriangle, Eye, EyeOff, MessageCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
@@ -13,11 +13,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { authApi } from "@/lib/api";
+import { profilApi } from "@/lib/api";
+
+function supportWhatsAppHref(message: string) {
+  const raw = String(import.meta.env.VITE_SUPPORT_WHATSAPP || "221770000000").replace(/\D/g, "");
+  const phone = raw.startsWith("221") ? raw : raw.length === 9 ? `221${raw}` : raw;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+}
 
 const ProfilSecurite = () => {
   const navigate = useNavigate();
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -40,12 +46,12 @@ const ProfilSecurite = () => {
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (passwords.new !== passwords.confirm) {
       toast.error("Les nouveaux mots de passe ne correspondent pas");
       return;
     }
-    
+
     if (passwords.new.length < 8) {
       toast.error("Le mot de passe doit contenir au moins 8 caractères");
       return;
@@ -53,40 +59,26 @@ const ProfilSecurite = () => {
 
     setLoading(true);
     try {
-      // In a real app, this would call an API endpoint
-      // For now, we'll simulate success
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await profilApi.changePassword({
+        old_password: passwords.current || undefined,
+        new_password: passwords.new,
+        confirm_password: passwords.confirm,
+      });
       toast.success("Mot de passe modifié avec succès");
       setPasswords({ current: "", new: "", confirm: "" });
-    } catch (err: any) {
-      toast.error(err.message || "Erreur lors du changement de mot de passe");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Erreur lors du changement de mot de passe");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDeleteAccount = async () => {
-    if (!confirm("Êtes-vous sûr de vouloir supprimer votre compte ? Cette action est irréversible.")) {
-      return;
-    }
-    
-    if (!confirm("Voulez-vous vraiment continuer ? Toutes vos données seront définitivement supprimées.")) {
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // In a real app, this would call an API endpoint
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      toast.success("Compte supprimé avec succès");
-      logout();
-      navigate("/");
-    } catch (err: any) {
-      toast.error(err.message || "Erreur lors de la suppression du compte");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const deleteAccountHref = supportWhatsAppHref(
+    `Bonjour, je souhaite supprimer mon compte TerrainSN.\n` +
+      `Nom : ${[user.prenom, user.nom].filter(Boolean).join(" ") || "—"}\n` +
+      `Téléphone : ${user.telephone || "—"}\n` +
+      `Merci de me confirmer la procédure.`,
+  );
 
   return (
     <div className="page-container">
@@ -98,7 +90,6 @@ const ProfilSecurite = () => {
       </div>
 
       <div className="max-w-2xl mx-auto">
-        {/* Change Password */}
         <div className="responsive-padding mt-2">
           <Card>
             <CardHeader>
@@ -119,8 +110,9 @@ const ProfilSecurite = () => {
                       id="current-password"
                       type={showCurrentPassword ? "text" : "password"}
                       value={passwords.current}
-                      onChange={(e) => setPasswords(prev => ({ ...prev, current: e.target.value }))}
+                      onChange={(e) => setPasswords((prev) => ({ ...prev, current: e.target.value }))}
                       placeholder="••••••••"
+                      autoComplete="current-password"
                     />
                     <button
                       type="button"
@@ -138,8 +130,9 @@ const ProfilSecurite = () => {
                       id="new-password"
                       type={showNewPassword ? "text" : "password"}
                       value={passwords.new}
-                      onChange={(e) => setPasswords(prev => ({ ...prev, new: e.target.value }))}
+                      onChange={(e) => setPasswords((prev) => ({ ...prev, new: e.target.value }))}
                       placeholder="••••••••"
+                      autoComplete="new-password"
                     />
                     <button
                       type="button"
@@ -160,8 +153,9 @@ const ProfilSecurite = () => {
                       id="confirm-password"
                       type={showConfirmPassword ? "text" : "password"}
                       value={passwords.confirm}
-                      onChange={(e) => setPasswords(prev => ({ ...prev, confirm: e.target.value }))}
+                      onChange={(e) => setPasswords((prev) => ({ ...prev, confirm: e.target.value }))}
                       placeholder="••••••••"
+                      autoComplete="new-password"
                     />
                     <button
                       type="button"
@@ -172,9 +166,9 @@ const ProfilSecurite = () => {
                     </button>
                   </div>
                 </div>
-                <Button 
-                  type="submit" 
-                  variant="hero" 
+                <Button
+                  type="submit"
+                  variant="hero"
                   className="w-full"
                   disabled={loading || !passwords.current || !passwords.new || !passwords.confirm}
                 >
@@ -185,7 +179,6 @@ const ProfilSecurite = () => {
           </Card>
         </div>
 
-        {/* Security Info */}
         <div className="responsive-padding mt-4">
           <h3 className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-wider">
             Informations de sécurité
@@ -206,15 +199,14 @@ const ProfilSecurite = () => {
                 <Lock className="w-4 h-4 text-secondary-foreground" />
               </div>
               <div className="flex-1">
-                <p className="text-sm font-medium">Dernière connexion</p>
-                <p className="text-[10px] text-muted-foreground">Connecté actuellement</p>
+                <p className="text-sm font-medium">Téléphone associé</p>
+                <p className="text-[10px] text-muted-foreground">{user.telephone || "Non renseigné"}</p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Danger Zone */}
-        <div className="responsive-padding mt-6">
+        <div className="responsive-padding mt-6 pb-8">
           <h3 className="text-xs font-medium text-destructive mb-3 uppercase tracking-wider">
             Zone de danger
           </h3>
@@ -224,18 +216,17 @@ const ProfilSecurite = () => {
               <div className="flex-1">
                 <p className="text-sm font-medium">Supprimer le compte</p>
                 <p className="text-[10px] text-muted-foreground mt-1">
-                  Cette action est irréversible. Toutes vos données (réservations, avis, informations personnelles) seront définitivement supprimées.
+                  La suppression définitive est traitée par le support pour éviter toute perte accidentelle
+                  de réservations. Contactez-nous via WhatsApp pour lancer la procédure.
                 </p>
               </div>
             </div>
             <div className="px-4 pb-4">
-              <Button
-                variant="outline"
-                className="w-full text-destructive border-destructive/20 hover:bg-destructive/5"
-                onClick={handleDeleteAccount}
-                disabled={loading}
-              >
-                {loading ? "Suppression..." : "Supprimer mon compte"}
+              <Button variant="outline" className="w-full text-destructive border-destructive/20 hover:bg-destructive/5" asChild>
+                <a href={deleteAccountHref} target="_blank" rel="noreferrer">
+                  <MessageCircle className="w-4 h-4 mr-2" />
+                  Demander la suppression via WhatsApp
+                </a>
               </Button>
             </div>
           </div>

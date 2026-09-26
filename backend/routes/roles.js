@@ -51,6 +51,141 @@ router.get('/proprietaire/revenus', authMiddleware, requireRole('proprietaire'),
   });
 });
 
+/** Finances détaillées pour la page Mes revenus (historique + KPIs). */
+router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const periode = String(req.query.periode || 'mois');
+    const from = periodStart(periode === 'aujourd_hui' ? 'semaine' : periode);
+    const today = new Date().toISOString().slice(0, 10);
+    const since = periode === 'aujourd_hui' ? today : from;
+    const terrainFilter = req.query.terrain_id ? Number(req.query.terrain_id) : null;
+
+    const terrains = queryAll(
+      db,
+      'SELECT id, nom FROM terrains WHERE proprietaire_id = ? ORDER BY nom ASC',
+      [req.user.id],
+    );
+    const terrainIds = terrains.map((t) => Number(t.id));
+    if (terrainFilter && !terrainIds.includes(terrainFilter)) {
+      return res.status(403).json({ error: 'Terrain non autorisé' });
+    }
+    const ids = terrainFilter ? [terrainFilter] : terrainIds;
+    if (!ids.length) {
+      return res.json({
+        total_encaisse: 0,
+        avances_recues: 0,
+        matchs_joues: 0,
+        a_venir: 0,
+        historique: [],
+        graphique: [],
+        mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
+      });
+    }
+
+    const placeholders = ids.map(() => '?').join(',');
+    const reservations = queryAll(
+      db,
+      `SELECT r.id, r.date, r.heure_debut, r.joueur_nom, r.joueur_telephone, r.statut,
+              r.montant_avance, r.acompte, r.montant, r.prix_total, t.nom AS terrain_nom, t.id AS terrain_id
+       FROM reservations r
+       JOIN terrains t ON t.id = r.terrain_id
+       WHERE r.terrain_id IN (${placeholders})
+         AND r.date >= ?
+         AND r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'en_attente')
+       ORDER BY r.date DESC, r.heure_debut DESC
+       LIMIT 500`,
+      [...ids, since],
+    );
+
+    const historique = reservations.map((r) => ({
+      id: r.id,
+      date: r.date,
+      heure_debut: r.heure_debut,
+      joueur_nom: r.joueur_nom || '—',
+      joueur_telephone: r.joueur_telephone || null,
+      montant_avance: Number(r.montant_avance ?? r.acompte ?? 0),
+      terrain_nom: r.terrain_nom,
+      statut: r.statut,
+      source: r.statut,
+    }));
+
+    const avanceConfirmee = (r) =>
+      ['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut))
+        ? Number(r.montant_avance ?? r.acompte ?? 0)
+        : 0;
+
+    const totalEncaisse = historique.reduce((s, r) => s + (['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut)) ? Number(r.montant_avance || 0) : 0), 0);
+    const matchsJoues = reservations.filter((r) => ['match_joue', 'joue'].includes(String(r.statut))).length;
+    const aVenir = reservations.filter(
+      (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
+    ).length;
+
+    const byDay = new Map();
+    for (const r of reservations) {
+      if (!['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut))) continue;
+      const key = String(r.date).slice(0, 10);
+      const cur = byDay.get(key) || { label: key, montant: 0, matchs: 0 };
+      cur.montant += avanceConfirmee(r);
+      cur.matchs += 1;
+      byDay.set(key, cur);
+    }
+    const graphique = [...byDay.values()].sort((a, b) => String(a.label).localeCompare(String(b.label)));
+
+    res.json({
+      total_encaisse: totalEncaisse,
+      avances_recues: totalEncaisse,
+      matchs_joues: matchsJoues,
+      a_venir: aVenir,
+      historique,
+      graphique,
+      series: terrains.map((t) => ({ key: String(t.id), id: t.id, nom: t.nom })),
+      mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
+      encaisse_abonnements: 0,
+      encaisse_tournois: 0,
+      encaisse_blocages: 0,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+router.get('/proprietaire/terrains/:terrainId/tarifs', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrain = queryOne(
+      db,
+      'SELECT * FROM terrains WHERE id = ? AND proprietaire_id = ?',
+      [Number(req.params.terrainId), req.user.id],
+    );
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+    const grille = grilleTarifs(db, terrain);
+    res.json({
+      ...grille,
+      prix_entier_base: Number(terrain.prix_entier || terrain.prix_heure || 0),
+      prix_moitie_base: Number(terrain.prix_moitie || Math.round(Number(terrain.prix_entier || terrain.prix_heure || 0) * 0.6)),
+      pourcentage_avance: Number(terrain.pourcentage_avance || 0),
+      lecture_seule: true,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+router.post('/proprietaire/terrains/:terrainId/tarifs/proposition', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  res.status(501).json({
+    error: 'Les propositions de tarifs propriétaire seront ouvertes prochainement. Contactez l’administration.',
+  });
+});
+
+router.post('/proprietaire/reservations/:id/confirmer-avance', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  res.status(501).json({
+    error: 'La confirmation d’avance manuelle propriétaire n’est pas activée. Le gérant gère les encaissements.',
+  });
+});
+
 router.get('/proprietaire/contrat/:terrainId', authMiddleware, requireRole('proprietaire'), async (req, res) => {
   const db = await getDb();
   const terrain = queryOne(

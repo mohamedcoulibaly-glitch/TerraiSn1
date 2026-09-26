@@ -457,8 +457,9 @@ const FieldDetails = () => {
     setFav(next);
     try {
       localStorage.setItem(favKey(terrain.id), next ? "1" : "0");
+      toast.success(next ? "Favori enregistré sur cet appareil" : "Retiré des favoris de cet appareil");
     } catch {
-      /* ignore */
+      toast.error("Impossible d'enregistrer le favori sur cet appareil");
     }
   };
 
@@ -560,7 +561,8 @@ const FieldDetails = () => {
             type="button"
             onClick={toggleFav}
             className="absolute right-4 w-11 h-11 rounded-full bg-white/85 backdrop-blur-md flex items-center justify-center top-[calc(1rem+env(safe-area-inset-top))]"
-            aria-label={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
+            aria-label={fav ? "Retirer des favoris (cet appareil)" : "Ajouter aux favoris (cet appareil)"}
+            title={fav ? "Favori sur cet appareil" : "Enregistrer sur cet appareil"}
           >
             <Heart className={`w-5 h-5 ${fav ? "fill-red-500 text-red-500" : "text-slate-600"}`} />
           </button>

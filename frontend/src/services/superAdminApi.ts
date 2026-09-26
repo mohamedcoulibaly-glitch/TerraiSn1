@@ -280,6 +280,76 @@ export const superAdminApi = {
     const q = sp.toString();
     return adminRequest(`/push/logs${q ? `?${q}` : ""}`);
   },
+
+  // Contrats / canaux (adminPaiements)
+  getContrat: (terrainId: number) => adminRequest(`/admin/terrains/${terrainId}/contrat`),
+  saveContrat: (terrainId: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${terrainId}/contrat`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  previewContrat: (terrainId: number, body?: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${terrainId}/contrat/preview`, {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  testCanal100: (terrainId: number, canal: "wave" | "om") =>
+    adminRequest(`/admin/terrains/${terrainId}/canaux/${canal}/test-100`, { method: "POST" }),
+  verifierCanal: (terrainId: number, canal: "wave" | "om") =>
+    adminRequest(`/admin/terrains/${terrainId}/canaux/${canal}/verifier`, { method: "POST" }),
+
+  // Checkout passerelle
+  checkoutAbonnement: (abonnementId: number, body?: { canal?: string; methode?: string }) =>
+    adminRequest(`/admin/abonnements/${abonnementId}/checkout`, {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  checkoutAchatDefinitif: (
+    terrainId: number,
+    body?: { montant?: number; canal?: string; methode?: string },
+  ) =>
+    adminRequest(`/admin/terrains/${terrainId}/achat-definitif/checkout`, {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+
+  // Caisse & retraits
+  caisseDashboard: () => adminRequest("/admin/caisse/dashboard"),
+  caisseFenetre: () => adminRequest("/admin/caisse/fenetre"),
+  caissePayableAuto: () => adminRequest("/admin/caisse/payable-auto"),
+  caissePayable: () => adminRequest("/admin/caisse/payable"),
+  caisseRetraits: (statut: string = "en_attente") =>
+    adminRequest(`/admin/caisse/retraits?statut=${encodeURIComponent(statut)}`),
+  caisseHistorique: (params?: { terrain_id?: number; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.terrain_id) sp.set("terrain_id", String(params.terrain_id));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return adminRequest(`/admin/caisse/historique${q ? `?${q}` : ""}`);
+  },
+  marquerRetraitEnvoye: (
+    id: number | string,
+    ref_manuelle?: string,
+    opts?: { mode_manuel?: boolean; manuel?: boolean },
+  ) =>
+    adminRequest(`/admin/caisse/retraits/${id}/envoyer`, {
+      method: "POST",
+      body: JSON.stringify({
+        ref_manuelle: ref_manuelle || undefined,
+        mode_manuel: Boolean(opts?.mode_manuel || opts?.manuel),
+        manuel: Boolean(opts?.mode_manuel || opts?.manuel),
+      }),
+    }),
+  rejeterRetrait: (id: number | string, motif: string) =>
+    adminRequest(`/admin/caisse/retraits/${id}/rejeter`, {
+      method: "POST",
+      body: JSON.stringify({ motif }),
+    }),
+  verserDu: (id: number | string) =>
+    adminRequest(`/admin/caisse/dus/${id}/verser`, { method: "POST" }),
+  tickFenetres: () => adminRequest("/admin/caisse/tick-fenetres", { method: "POST" }),
+  rapprochement: () => adminRequest("/admin/rapprochement"),
+  revenusPaiements: () => adminRequest("/admin/revenus-paiements"),
 };
 
 export type TerrainGerant = {

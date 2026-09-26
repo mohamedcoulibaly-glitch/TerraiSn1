@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
@@ -13,6 +13,7 @@ import {
   RefreshCw,
   ShoppingCart,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
 import SaKpi from "@/espaces/backoffice/components/superadmin/ui/SaKpi";
@@ -29,12 +30,43 @@ import {
   fcfa,
   gerantDuTerrain,
   getContratOverlay,
-  getDemandesRetrait,
   getIncidentsAuto,
   relativeDepuis,
-  upsertDemandeRetrait,
-  type DemandeRetrait,
 } from "@/lib/saContrat";
+
+type RetraitAttente = {
+  id: number | string;
+  terrain_id?: number;
+  terrain_nom?: string;
+  gerant_nom?: string;
+  montant_net: number;
+  demande_at: string;
+  statut?: string;
+};
+
+function asRetraits(payload: unknown): RetraitAttente[] {
+  const list = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object"
+      ? ((payload as Record<string, unknown>).demandes as unknown[]) ||
+        ((payload as Record<string, unknown>).items as unknown[]) ||
+        ((payload as Record<string, unknown>).rows as unknown[]) ||
+        []
+      : [];
+  if (!Array.isArray(list)) return [];
+  return list.map((raw) => {
+    const d = raw as Record<string, unknown>;
+    return {
+      id: (d.id as number | string) ?? "",
+      terrain_id: d.terrain_id != null ? Number(d.terrain_id) : undefined,
+      terrain_nom: String(d.terrain_nom || ""),
+      gerant_nom: String(d.gerant_nom || d.gerant || "Gérant"),
+      montant_net: Number(d.montant_net ?? d.montant ?? 0),
+      demande_at: String(d.demande_at || d.created_at || ""),
+      statut: d.statut != null ? String(d.statut) : undefined,
+    };
+  });
+}
 
 export default function Dashboard() {
   const { setAlertCount } = useSaHeader();
@@ -46,19 +78,25 @@ export default function Dashboard() {
   const [finances, setFinances] = useState<any>();
   const [terrains, setTerrains] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
-  const [demandes, setDemandes] = useState<DemandeRetrait[]>([]);
+  const [demandes, setDemandes] = useState<RetraitAttente[]>([]);
   const [incidents, setIncidents] = useState(getIncidentsAuto());
   const [essaiKpis, setEssaiKpis] = useState<{ actifs?: number; proches?: number; expires?: number } | null>(null);
-  const [refModal, setRefModal] = useState<DemandeRetrait | null>(null);
-  const [rejectModal, setRejectModal] = useState<DemandeRetrait | null>(null);
+  const [refModal, setRefModal] = useState<RetraitAttente | null>(null);
+  const [rejectModal, setRejectModal] = useState<RetraitAttente | null>(null);
   const [refInput, setRefInput] = useState("");
   const [motif, setMotif] = useState("Numéro incorrect");
   const [motifLibre, setMotifLibre] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const reloadOps = () => {
-    setDemandes(getDemandesRetrait().filter((d) => d.statut === "en_attente"));
+  const reloadOps = useCallback(async () => {
     setIncidents(getIncidentsAuto());
-  };
+    try {
+      const retraits = await superAdminApi.caisseRetraits("en_attente");
+      setDemandes(asRetraits(retraits));
+    } catch {
+      setDemandes([]);
+    }
+  }, []);
 
   useEffect(() => {
     superAdminApi.finances().then(setFinances).catch(console.error);
@@ -67,8 +105,8 @@ export default function Dashboard() {
       setUsers(Array.isArray(u) ? u : []);
     }).catch(console.error);
     superAdminApi.essaiKpis().then(setEssaiKpis).catch(() => {});
-    reloadOps();
-  }, []);
+    void reloadOps();
+  }, [reloadOps]);
 
   const rows = useMemo(() => {
     return terrains.map((t) => {
@@ -115,31 +153,48 @@ export default function Dashboard() {
   };
   const visibleAlertes = showAllAlerts ? alertes : alertes.slice(0, 3);
 
-  function marquerEnvoye() {
-    if (!refModal) return;
-    upsertDemandeRetrait({
-      ...refModal,
-      statut: "envoye",
-      ref_manuelle: refInput,
-      traite_par: "Super Admin",
-      traite_at: new Date().toISOString(),
-    });
-    setRefModal(null);
-    setRefInput("");
-    reloadOps();
+  async function marquerEnvoye() {
+    if (!refModal || submitting) return;
+    setSubmitting(true);
+    try {
+      const result = (await superAdminApi.marquerRetraitEnvoye(refModal.id, refInput || undefined, {
+        mode_manuel: true,
+      })) as {
+        ok?: boolean;
+        pending?: boolean;
+        message_lisible?: string;
+        error?: string;
+      };
+      if (result.ok === false) {
+        toast.error(result.message_lisible || result.error || "Versement échoué");
+      } else if (result.pending) {
+        toast.success(result.message_lisible || "Versement initié — en attente prestataire");
+      } else {
+        toast.success(result.message_lisible || "Versement traité");
+      }
+      setRefModal(null);
+      setRefInput("");
+      await reloadOps();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Impossible d'envoyer le versement");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function rejeter() {
-    if (!rejectModal) return;
-    upsertDemandeRetrait({
-      ...rejectModal,
-      statut: "rejete",
-      motif_rejet: motif === "Autre" ? motifLibre : motif,
-      traite_par: "Super Admin",
-      traite_at: new Date().toISOString(),
-    });
-    setRejectModal(null);
-    reloadOps();
+  async function rejeter() {
+    if (!rejectModal || submitting) return;
+    setSubmitting(true);
+    try {
+      await superAdminApi.rejeterRetrait(rejectModal.id, motif === "Autre" ? motifLibre : motif);
+      toast.success("Demande rejetée — le dû reste disponible");
+      setRejectModal(null);
+      await reloadOps();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Rejet impossible");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -340,14 +395,13 @@ export default function Dashboard() {
         </div>
       </div>
 
-
       <ConfirmationModal
         ouvert={Boolean(refModal)}
         titre="Saisir la référence du virement"
         texte="Le solde gérant passera à 0 une fois le virement marqué envoyé."
-        labelConfirmer="Confirmer"
+        labelConfirmer={submitting ? "Traitement..." : "Confirmer"}
         variante="success"
-        onConfirmer={marquerEnvoye}
+        onConfirmer={() => void marquerEnvoye()}
         onAnnuler={() => setRefModal(null)}
       >
         <input
@@ -361,10 +415,10 @@ export default function Dashboard() {
       <ConfirmationModal
         ouvert={Boolean(rejectModal)}
         titre="Motif du rejet"
-        texte="Le dû reste. Une notification WhatsApp gérant sera prévue côté moteur."
-        labelConfirmer="Rejeter"
+        texte="Le dû reste disponible. Une notification WhatsApp pourra être envoyée côté moteur."
+        labelConfirmer={submitting ? "Traitement..." : "Rejeter"}
         variante="danger"
-        onConfirmer={rejeter}
+        onConfirmer={() => void rejeter()}
         onAnnuler={() => setRejectModal(null)}
       >
         <Select2

@@ -571,6 +571,11 @@ export const reservationsApi = {
     return await request(`/reservations/${id}`);
   },
 
+  /** Prévisualise la politique de remboursement avant confirmation d'annulation. */
+  async politiqueAnnulation(id: number | string) {
+    return await request(`/reservations/${id}/politique-annulation`);
+  },
+
   async createGerant(data: {
     terrain_id: number;
     date: string;
@@ -910,12 +915,54 @@ export const gerantApi = {
     });
   },
 
+  /** Alias UI pairing — délègue à /gerant/whatsapp/connect avec téléphone. */
+  async whatsappRequestPairing(opts: { telephone: string; force?: boolean }) {
+    const data = (await this.whatsappConnect({
+      force: opts.force !== false,
+      telephone: opts.telephone,
+      mode: 'pairing',
+    })) as Record<string, unknown>;
+    const raw = String(data.pairingCode || data.pairingCodeRaw || '').replace(/\s/g, '');
+    const display =
+      raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw || null;
+    return {
+      ...data,
+      pairingCode: raw || null,
+      pairingCodeRaw: raw || null,
+      pairingCodeDisplay: display,
+      pairingExpiresAt: data.pairingExpiresAt || (raw ? Date.now() + 110_000 : null),
+    };
+  },
+
   async whatsappQr() {
     return await request('/gerant/whatsapp/qr');
   },
 
   async whatsappDisconnect() {
     return await request('/gerant/whatsapp/disconnect', { method: 'POST' });
+  },
+
+  /**
+   * Créneaux du terrain actif du gérant (réutilise /terrains/:id/creneaux).
+   * `duree_minutes` est accepté pour compat UI ; les slots restent horaires terrain.
+   */
+  async disponibilites(date: string, opts?: { duree_minutes?: number }) {
+    let terrainId = getGerantTerrainActif();
+    if (!terrainId) {
+      const payload = await this.terrains();
+      terrainId =
+        payload?.terrain_actif != null
+          ? Number(payload.terrain_actif)
+          : payload?.terrains?.[0]?.id != null
+            ? Number(payload.terrains[0].id)
+            : null;
+    }
+    if (!terrainId) {
+      throw new Error('Aucun terrain actif pour charger les disponibilités');
+    }
+    const sp = new URLSearchParams({ date: String(date).slice(0, 10) });
+    if (opts?.duree_minutes != null) sp.set('duree_minutes', String(opts.duree_minutes));
+    return await request(`/terrains/${terrainId}/creneaux?${sp.toString()}`);
   },
 
   async terrainCommodites() {

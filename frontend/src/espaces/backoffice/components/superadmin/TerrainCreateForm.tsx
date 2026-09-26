@@ -239,6 +239,28 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
         }
         const w = formatTelAffichage(wave);
         const o = formatTelAffichage(om);
+        const contratPayload = {
+          wave_numero: w,
+          om_numero: o,
+          numeros_identiques_whatsapp: sameWhatsapp ? 1 : 0,
+          canal_reversement: canal,
+          wave_statut: statutCanalDepuisNumero(w),
+          om_statut: statutCanalDepuisNumero(o),
+          remboursement_autorise: remb && Number(delai) > 0 ? 1 : 0,
+          delai_remboursement_heures: remb ? Number(delai || 0) : 0,
+          payout_mode: mode,
+          payout_frais_politique: politique,
+          frais_payout_pct_gerant: Number(pctG) || 0,
+          frais_payout_pct_plateforme: Number(pctP) || 0,
+          pourcentage_avance: Number(pctAvance || 0),
+          commission_pourcentage: Number(pctCommission || 0),
+        };
+        try {
+          await superAdminApi.saveContrat(terrainId, contratPayload);
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Contrat Wave/OM non enregistré en base");
+        }
+        // Cache local aligné (affichage badges listes) — source de vérité = API ci-dessus
         saveContratOverlay(
           terrainId,
           {

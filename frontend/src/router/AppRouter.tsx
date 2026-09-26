@@ -98,9 +98,13 @@ export default function AppRouter() {
         <Route path="/" element={withSuspense(Accueil)} />
         <Route path="/explorer" element={withSuspense(RechercheTerrain)} />
         <Route path="/terrain/:id" element={withSuspense(FicheTerrain)} />
+        {import.meta.env.DEV || import.meta.env.VITE_ENABLE_MOCK_PAYMENT === "true" ? (
+          <>
+            <Route path="/paiement/mock" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
+            <Route path="/simulation/paiement" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
+          </>
+        ) : null}
         <Route path="/paiement/:id" element={<RequireJoueurAuth>{withSuspense(Reservation)}</RequireJoueurAuth>} />
-        <Route path="/paiement/mock" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
-        <Route path="/simulation/paiement" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
         <Route path="/reservations" element={<RequireJoueurAuth>{withSuspense(MesReservations)}</RequireJoueurAuth>} />
         <Route path="/reservation/confirmation" element={<RequireJoueurAuth>{withSuspense(Confirmation)}</RequireJoueurAuth>} />
         <Route path="/reservation/succes" element={<RequireJoueurAuth>{withSuspense(ReservationSuccess)}</RequireJoueurAuth>} />

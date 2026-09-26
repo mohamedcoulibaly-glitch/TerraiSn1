@@ -75,7 +75,8 @@ function FavoriteButton({
       type="button"
       onClick={onToggle}
       className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/40 text-white backdrop-blur-md transition-colors active:text-red-400"
-      aria-label={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
+      aria-label={fav ? "Retirer des favoris (cet appareil)" : "Ajouter aux favoris (cet appareil)"}
+      title={fav ? "Favori sur cet appareil" : "Enregistrer sur cet appareil"}
     >
       <Heart className={cn("h-3.5 w-3.5", fav && "fill-red-400 text-red-400")} />
     </button>

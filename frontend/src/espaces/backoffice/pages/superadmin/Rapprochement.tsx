@@ -14,28 +14,47 @@ export default function Rapprochement() {
   const [periode, setPeriode] = useState<Periode>("mois");
   const [terrainId, setTerrainId] = useState("tous");
   const [finances, setFinances] = useState<any>();
+  const [rappro, setRappro] = useState<any>();
+  const [revenusPaiements, setRevenusPaiements] = useState<any>();
   const [terrains, setTerrains] = useState<any[]>([]);
   const [sortKey, setSortKey] = useState<string>("du");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
-    superAdminApi.finances().then(setFinances).catch(console.error);
-    superAdminApi.terrains().then((t) => setTerrains(Array.isArray(t) ? t : [])).catch(console.error);
+    Promise.all([
+      superAdminApi.finances().catch(() => null),
+      superAdminApi.rapprochement().catch(() => null),
+      superAdminApi.revenusPaiements().catch(() => null),
+      superAdminApi.terrains().catch(() => []),
+    ]).then(([fin, rap, rp, t]) => {
+      setFinances(fin);
+      setRappro(rap);
+      setRevenusPaiements(rp);
+      setTerrains(Array.isArray(t) ? t : []);
+    });
   }, [periode]);
+
+  const fraisByTerrain = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const t of revenusPaiements?.terrains || []) {
+      map.set(Number(t.id), Number(t.frais_absorbes || 0));
+    }
+    return map;
+  }, [revenusPaiements]);
 
   const rows = useMemo(() => {
     const list = (finances?.terrains || []).filter((t: any) => terrainId === "tous" || String(t.id) === terrainId);
     return list.map((t: any) => {
       const c = getContratOverlay(t.id);
       const recu = Number(t.avances || t.acomptes || 0);
-      const rembourse = 0;
+      const rembourse = Number(t.rembourse || t.remboursements || 0);
       const commission = Number(t.commissions || 0);
-      const fraisDev = 0;
+      const fraisDev = fraisByTerrain.get(Number(t.id)) || Number(t.frais_plateforme || 0);
       const envoye = Number(t.reverse || 0);
       const du = Math.max(0, recu - rembourse - commission - fraisDev - envoye);
       return { ...t, recu, rembourse, commission, fraisDev, envoye, du, c };
     });
-  }, [finances, terrainId]);
+  }, [finances, terrainId, fraisByTerrain]);
 
   const sorted = [...rows].sort((a, b) => {
     const va = Number(a[sortKey] || 0);
@@ -43,25 +62,36 @@ export default function Rapprochement() {
     return sortDir === "asc" ? va - vb : vb - va;
   });
 
-  const tot = rows.reduce(
-    (acc, r) => ({
-      recu: acc.recu + r.recu,
-      rembourse: acc.rembourse + r.rembourse,
-      commission: acc.commission + r.commission,
-      fraisDev: acc.fraisDev + r.fraisDev,
-      envoye: acc.envoye + r.envoye,
-      du: acc.du + r.du,
-    }),
-    { recu: 0, rembourse: 0, commission: 0, fraisDev: 0, envoye: 0, du: 0 },
-  );
+  const tot = {
+    recu: Number(rappro?.recu ?? rows.reduce((s, r) => s + r.recu, 0)),
+    rembourse: Number(rappro?.rembourse ?? rows.reduce((s, r) => s + r.rembourse, 0)),
+    commission: Number(rappro?.commission ?? rows.reduce((s, r) => s + r.commission, 0)),
+    fraisDev: Number(
+      rappro?.frais_payout_plateforme_absorbes != null
+        ? Number(rappro.frais_payout_plateforme_absorbes) + Number(rappro.frais_payout_plateforme_en_attente || 0)
+        : rows.reduce((s, r) => s + r.fraisDev, 0),
+    ),
+    envoye: Number(rappro?.envoye ?? rows.reduce((s, r) => s + r.envoye, 0)),
+    du: Number(rappro?.encore_du ?? rows.reduce((s, r) => s + r.du, 0)),
+  };
 
-  const gauche = tot.recu - tot.rembourse;
-  const droite = tot.commission + tot.fraisDev + tot.envoye + tot.du;
+  const gauche = Number(rappro?.gauche ?? tot.recu - tot.rembourse);
+  const droite = Number(rappro?.droite ?? tot.commission + tot.fraisDev + tot.envoye + tot.du);
   const ecart = gauche - droite;
-  const equilibre = Math.abs(ecart) < 1;
+  const equilibre = rappro?.equilibre != null ? Boolean(rappro.equilibre) : Math.abs(ecart) < 1;
 
   const ventilation = useMemo(() => {
-    let fenetre = 0, auto = 0, retrait = 0, bloque = 0, echec = 0;
+    const v = rappro?.encore_du_ventile;
+    if (v) {
+      return [
+        { label: "En fenêtre de remboursement", value: Number(v.en_fenetre || 0), tone: "warning" as const },
+        { label: "Payable mode auto", value: Number(v.payable_auto || 0), tone: "info" as const },
+        { label: "Payable mode retrait", value: Number(v.payable_retrait || 0), tone: "info" as const },
+        { label: "Bloqué sans numéro", value: Number(v.bloque_sans_numero || 0), tone: "danger" as const },
+        { label: "En échec auto", value: Number(v.echec || 0), tone: "danger" as const },
+      ];
+    }
+    let fenetre = 0, auto = 0, retrait = 0, bloque = 0;
     for (const r of rows) {
       const sansNum = r.c.wave_statut === "absent" && r.c.om_statut === "absent";
       if (sansNum) bloque += r.du;
@@ -74,9 +104,9 @@ export default function Rapprochement() {
       { label: "Payable mode auto", value: auto, tone: "info" as const },
       { label: "Payable mode retrait", value: retrait, tone: "info" as const },
       { label: "Bloqué sans numéro", value: bloque, tone: "danger" as const },
-      { label: "En échec auto", value: echec, tone: "danger" as const },
+      { label: "En échec auto", value: 0, tone: "danger" as const },
     ];
-  }, [rows]);
+  }, [rappro, rows]);
 
   function exportCsv() {
     const header = "Terrain;Reçu;Remboursé;Commission;Frais dév;Envoyé;Dû";
@@ -201,25 +231,8 @@ export default function Rapprochement() {
                   <td className="font-semibold">{fcfa(r.du)}</td>
                 </tr>
               ))}
-              <tr>
-                <td className="font-bold">Total</td>
-                <td className="font-bold">{fcfa(tot.recu)}</td>
-                <td className="font-bold">{fcfa(tot.rembourse)}</td>
-                <td className="font-bold">{fcfa(tot.commission)}</td>
-                <td className="font-bold">{fcfa(tot.fraisDev)}</td>
-                <td className="font-bold">{fcfa(tot.envoye)}</td>
-                <td className="font-bold">{fcfa(tot.du)}</td>
-              </tr>
             </tbody>
           </table>
-        </div>
-        <div className="md:hidden p-3 space-y-2">
-          {sorted.map((r) => (
-            <article key={r.id} className="rounded-lg p-3" style={{ border: "1px solid var(--sa-border)" }} onClick={() => navigate(`/backoffice/superadmin/terrains/${r.id}?tab=contrat`)}>
-              <p className="font-semibold text-[13px]">{r.nom}</p>
-              <p className="text-[12px] mt-1" style={{ color: "var(--sa-muted)" }}>Reçu {fcfa(r.recu)} · Dû {fcfa(r.du)}</p>
-            </article>
-          ))}
         </div>
       </section>
     </div>

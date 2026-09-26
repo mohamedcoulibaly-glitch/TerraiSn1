@@ -3,7 +3,7 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recha
 import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
 import { superAdminApi } from "@/services/superAdminApi";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
-import { fcfa, getContratOverlay } from "@/lib/saContrat";
+import { fcfa } from "@/lib/saContrat";
 import Select2 from "@/components/Select2";
 
 const PERIODS = [
@@ -17,55 +17,70 @@ export default function Revenus() {
   const [periode, setPeriode] = useState("mois");
   const [terrainId, setTerrainId] = useState("tous");
   const [data, setData] = useState<any>();
-  const [finances, setFinances] = useState<any>();
+  const [revenusPaiements, setRevenusPaiements] = useState<any>();
+  const [caisseKpis, setCaisseKpis] = useState<any>();
+  const [terrainsList, setTerrainsList] = useState<any[]>([]);
 
   useEffect(() => {
     superAdminApi.revenus(periode).then(setData).catch(console.error);
   }, [periode]);
 
   useEffect(() => {
-    superAdminApi.finances().then(setFinances).catch(console.error);
-  }, []);
-
-  const rows = useMemo(() => {
-    const list = (finances?.terrains || []).filter((t: any) => terrainId === "tous" || String(t.id) === terrainId);
-    return list.map((t: any) => {
-      const c = getContratOverlay(t.id);
-      const commission = Number(t.commissions || 0);
-      const avances = Number(t.avances || t.acomptes || 0);
-      const frais = 0;
-      return {
-        id: t.id,
-        nom: t.nom,
-        pct: Number((data?.terrains || []).find((x: any) => x.id === t.id)?.commission_pourcentage) || c.frais_payout_pct_plateforme,
-        pctCom: undefined as number | undefined,
-        avances,
-        commission,
-        frais,
-        net: commission - frais,
-      };
+    Promise.all([
+      superAdminApi.revenusPaiements().catch(() => null),
+      superAdminApi.caisseDashboard().catch(() => null),
+      superAdminApi.terrains().catch(() => []),
+    ]).then(([rp, kpis, t]) => {
+      setRevenusPaiements(rp);
+      setCaisseKpis(kpis);
+      setTerrainsList(Array.isArray(t) ? t : []);
     });
-  }, [finances, terrainId, data]);
-
-  const terrainsApi = data?.terrains || [];
-  const merged = rows.map((r) => {
-    const api = terrainsApi.find((t: any) => Number(t.id) === Number(r.id));
-    return { ...r, pctCom: Number(api ? undefined : undefined) };
-  });
-
-  const [terrainsList, setTerrainsList] = useState<any[]>([]);
-  useEffect(() => {
-    superAdminApi.terrains().then((t) => setTerrainsList(Array.isArray(t) ? t : [])).catch(console.error);
   }, []);
 
-  const table = merged.map((r) => {
-    const t = terrainsList.find((x) => Number(x.id) === Number(r.id));
-    return { ...r, pctCom: Number(t?.commission_pourcentage || 0) };
-  });
+  const table = useMemo(() => {
+    const fromRp = Array.isArray(revenusPaiements?.terrains) ? revenusPaiements.terrains : [];
+    const list = fromRp.filter((t: any) => terrainId === "tous" || String(t.id) === terrainId);
+    if (list.length) {
+      return list.map((t: any) => {
+        const meta = terrainsList.find((x) => Number(x.id) === Number(t.id));
+        const commission = Number(t.commission_acquise || 0);
+        const frais = Number(t.frais_absorbes || 0);
+        return {
+          id: t.id,
+          nom: t.nom || meta?.nom || `Terrain #${t.id}`,
+          pctCom: Number(meta?.commission_pourcentage || 0),
+          avances: Number(t.avances || 0),
+          commission,
+          frais,
+          net: commission - frais,
+        };
+      });
+    }
+    // Fallback finances admin historiques
+    const finTerrains = Array.isArray(data?.terrains) ? data.terrains : [];
+    return finTerrains
+      .filter((t: any) => terrainId === "tous" || String(t.id) === terrainId)
+      .map((t: any) => {
+        const commission = Number(t.commissions || t.commission || 0);
+        return {
+          id: t.id,
+          nom: t.nom,
+          pctCom: Number(t.commission_pourcentage || 0),
+          avances: Number(t.avances || t.acomptes || 0),
+          commission,
+          frais: 0,
+          net: commission,
+        };
+      });
+  }, [revenusPaiements, data, terrainId, terrainsList]);
 
-  const commissionMois = table.reduce((s, r) => s + r.commission, 0);
-  const fenetre = 0;
-  const fraisAbsorbes = table.reduce((s, r) => s + r.frais, 0);
+  const commissionMois = Number(
+    revenusPaiements?.total_commission_acquise ?? table.reduce((s, r) => s + r.commission, 0),
+  );
+  const fenetre = Number(caisseKpis?.commission_en_fenetre ?? 0);
+  const fraisAbsorbes = Number(
+    revenusPaiements?.total_frais_absorbes ?? table.reduce((s, r) => s + r.frais, 0),
+  );
   const net = commissionMois - fraisAbsorbes;
 
   const chartData = table.map((t) => ({
@@ -110,12 +125,12 @@ export default function Revenus() {
       />
 
       <p className="text-[12px]" style={{ color: "var(--sa-muted)" }}>
-        Revenus de TerrainSN (commission + frais absorbés) — pas les revenus propriétaires ni gérants.
+        Revenus de TerrainSN (commission + frais absorbés) — source caisse / dus, pas les revenus propriétaires ni gérants.
       </p>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { label: "Commission acquise ce mois", value: fcfa(commissionMois), color: "var(--sa-success)" },
+          { label: "Commission acquise", value: fcfa(commissionMois), color: "var(--sa-success)" },
           { label: "Commission encore en fenêtre", value: fcfa(fenetre), color: "var(--sa-warning)" },
           { label: "Frais payout absorbés", value: fcfa(fraisAbsorbes), color: "var(--sa-warning)" },
           { label: "Revenu net", value: fcfa(net), color: "var(--sa-primary)" },
@@ -152,7 +167,6 @@ export default function Revenus() {
             <tr>
               <th>Terrain</th>
               <th>% com</th>
-              <th>Avances traitées</th>
               <th>Commission</th>
               <th>Frais absorbés</th>
               <th>Net</th>
@@ -163,7 +177,6 @@ export default function Revenus() {
               <tr key={t.id}>
                 <td className="font-medium">{t.nom}</td>
                 <td>{t.pctCom}%</td>
-                <td>{fcfa(t.avances)}</td>
                 <td>{fcfa(t.commission)}</td>
                 <td>{fcfa(t.frais)}</td>
                 <td className="font-semibold">{fcfa(t.net)}</td>
@@ -171,14 +184,6 @@ export default function Revenus() {
             ))}
           </tbody>
         </table>
-      </div>
-      <div className="md:hidden space-y-2">
-        {table.map((t) => (
-          <article key={t.id} className="rounded-xl p-4" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-            <p className="font-semibold text-[13px]">{t.nom}</p>
-            <p className="text-[12px] mt-1" style={{ color: "var(--sa-muted)" }}>Com. {fcfa(t.commission)} · Net {fcfa(t.net)}</p>
-          </article>
-        ))}
       </div>
     </div>
   );

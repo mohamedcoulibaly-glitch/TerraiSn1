@@ -26,6 +26,7 @@ const { mountPaymentRoutes } = require('./payments/routes');
 const { genererCodeReservation } = require('./payments/flow');
 const { mountGerantCheckinRoutes } = require('./gerantCheckin');
 const { mountGerantCrmRoutes } = require('./gerantCrm');
+const { mountGerantExtrasRoutes } = require('./gerantExtras');
 const {
   ensurePendingAbonnement,
   appliquerSuspensionsAbonnements: appliquerSuspensionsAbonnementsDb,
@@ -56,7 +57,7 @@ const {
   normalizeHourString,
 } = require('./reservationLockService');
 const { calculerPrixReservation, prixHoraireEffectif, calculerDevis, calculerMontantAvance } = require('./pricingService');
-const { executerAnnulation } = require('./services/annulationService');
+const { executerAnnulation, evaluerRemboursement } = require('./services/annulationService');
 const { traiterFenetresExpirees } = require('./services/payoutEngine');
 const {
   buildSlotsForOpenDay,
@@ -400,6 +401,7 @@ app.use('/api', roleRoutes);
 mountPaymentRoutes(app);
 mountGerantCheckinRoutes(app);
 mountGerantCrmRoutes(app);
+mountGerantExtrasRoutes(app);
 
 const rateLimitBuckets = new Map();
 function rateLimit({ windowMs, max, keyPrefix, countFailuresOnly = false }) {
@@ -2197,6 +2199,63 @@ app.get('/api/reservations/mes', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+/** Prévisualise la politique de remboursement (sans annuler). */
+app.get('/api/reservations/:id(\\d+)/politique-annulation', optionalAuth, async (req, res) => {
+  try {
+    const db = await getDb();
+    let reservation;
+    if (req.user?.role === 'joueur') {
+      reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND joueur_id = ?', [
+        Number(req.params.id),
+        req.user.id,
+      ]);
+    } else if (req.user?.role === 'gerant' && req.user.terrain_id) {
+      reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?', [
+        Number(req.params.id),
+        req.user.terrain_id,
+      ]);
+    } else if (req.user && ['proprietaire', 'super_admin', 'superadmin', 'admin'].includes(String(req.user.role))) {
+      reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [Number(req.params.id)]);
+    } else {
+      reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [Number(req.params.id)]);
+    }
+    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
+
+    const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [reservation.terrain_id]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
+
+    const payment = queryOne(
+      db,
+      `SELECT * FROM paiements
+        WHERE reservation_id = ? AND statut = 'paye' AND methode IN ('paytech', 'paydunya')
+        ORDER BY id DESC LIMIT 1`,
+      [reservation.id],
+    );
+    const evalResult = evaluerRemboursement({
+      terrain,
+      reservation,
+      confirmeAt: reservation.confirme_at || payment?.created_at,
+    });
+    const politique_remboursement = {
+      eligible: Boolean(evalResult.eligible),
+      delai_heures: Number(evalResult.delai_heures || 0),
+      message: evalResult.message,
+      raison: evalResult.raison,
+      texte_joueur: evalResult.texte_joueur,
+      type_annulation: evalResult.eligible ? 'avec_remboursement' : 'sans_remboursement',
+      titre: evalResult.eligible
+        ? 'Annulation avec remboursement'
+        : 'Annulation sans remboursement',
+      confirme_at: evalResult.confirme_at || null,
+      limite_at: evalResult.limite_at || null,
+    };
+    res.json({ politique_remboursement, politique: evalResult });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
