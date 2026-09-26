@@ -998,6 +998,17 @@ function initContratPaiementSchema(database) {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (terrain_id) REFERENCES terrains(id)
   )`);
+
+  // Favoris joueur (multi-appareils)
+  database.run(`CREATE TABLE IF NOT EXISTS user_favoris (
+    user_id INTEGER NOT NULL,
+    terrain_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, terrain_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_user_favoris_user ON user_favoris(user_id)');
 }
 
 function addColumnIfMissing(database, table, column, definition) {

@@ -10,7 +10,7 @@ import { terrainsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { resolveTerrainPhotos } from "@/espaces/joueur/components/FieldPhoto";
 import MapTerrain from "@/espaces/joueur/components/MapTerrain";
-import { favKey } from "@/espaces/joueur/components/FieldCard";
+import { isTerrainFavorite, loadFavoriteIds, toggleFavorite } from "@/lib/favoris";
 import { useTerrainEvents } from "@/hooks/useTerrainEvents";
 import { featureEnabled } from "@/lib/terrainFeatures";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
@@ -265,11 +265,14 @@ const FieldDetails = () => {
 
   useEffect(() => {
     if (!terrain?.id) return;
-    try {
-      setFav(localStorage.getItem(favKey(terrain.id)) === "1");
-    } catch {
-      setFav(false);
-    }
+    setFav(isTerrainFavorite(terrain.id));
+    let cancelled = false;
+    loadFavoriteIds().then((ids) => {
+      if (!cancelled) setFav(ids.includes(Number(terrain.id)));
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [terrain?.id]);
 
   useEffect(() => {
@@ -451,15 +454,14 @@ const FieldDetails = () => {
 
   const clearSlot = () => setSelectedSlot(null);
 
-  const toggleFav = () => {
+  const toggleFav = async () => {
     if (!terrain?.id) return;
-    const next = !fav;
-    setFav(next);
     try {
-      localStorage.setItem(favKey(terrain.id), next ? "1" : "0");
-      toast.success(next ? "Favori enregistré sur cet appareil" : "Retiré des favoris de cet appareil");
+      const next = await toggleFavorite(terrain.id);
+      setFav(next);
+      toast.success(next ? "Ajouté aux favoris" : "Retiré des favoris");
     } catch {
-      toast.error("Impossible d'enregistrer le favori sur cet appareil");
+      toast.error("Impossible d'enregistrer le favori");
     }
   };
 
@@ -561,8 +563,8 @@ const FieldDetails = () => {
             type="button"
             onClick={toggleFav}
             className="absolute right-4 w-11 h-11 rounded-full bg-white/85 backdrop-blur-md flex items-center justify-center top-[calc(1rem+env(safe-area-inset-top))]"
-            aria-label={fav ? "Retirer des favoris (cet appareil)" : "Ajouter aux favoris (cet appareil)"}
-            title={fav ? "Favori sur cet appareil" : "Enregistrer sur cet appareil"}
+            aria-label={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
+            title={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
           >
             <Heart className={`w-5 h-5 ${fav ? "fill-red-500 text-red-500" : "text-slate-600"}`} />
           </button>

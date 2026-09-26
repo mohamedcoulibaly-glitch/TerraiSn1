@@ -1175,6 +1175,31 @@ export const pushApi = {
 };
 
 // ============================================================
+// FAVORIS JOUEUR
+// ============================================================
+export const favorisApi = {
+  async list() {
+    return await request('/favoris');
+  },
+
+  async sync(ids: Array<number | string>) {
+    return await request('/favoris/sync', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+
+  async add(terrainId: number | string) {
+    return await request(`/favoris/${terrainId}`, { method: 'POST' });
+  },
+
+  async remove(terrainId: number | string) {
+    return await request(`/favoris/${terrainId}`, { method: 'DELETE' });
+  },
+
+  async toggle(terrainId: number | string) {
+    return await request(`/favoris/${terrainId}/toggle`, { method: 'PUT' });
+  },
+};
+
+// ============================================================
 // ADMIN
 // ============================================================
 export const adminApi = {

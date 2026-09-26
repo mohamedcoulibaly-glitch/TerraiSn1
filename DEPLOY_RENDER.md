@@ -32,8 +32,6 @@ Puis **Environment** → variables de base :
 
 ## Paiements en production (PayTech)
 
-Sans ces variables, le checkout reste en **page simulation locale** (aucun argent réel).
-
 | Key | Value |
 |-----|-------|
 | `PAYTECH_MOCK` | `false` |
@@ -43,67 +41,63 @@ Sans ces variables, le checkout reste en **page simulation locale** (aucun argen
 | `PAYTECH_API_KEY` | clé live PayTech |
 | `PAYTECH_API_SECRET` | secret live PayTech |
 
-`APP_DOMAIN` (ou `RENDER_EXTERNAL_URL`) sert aussi pour les URLs IPN / success / cancel :
-`/webhook/paytech`, `/paytech/success`, `/paytech/cancel`.
+`APP_DOMAIN` sert aussi pour IPN/success/cancel. Vérif : `GET /health` → `payment.readyForProd: true`.
 
-Vérif : `GET /health` → `payment.readyForProd: true`, `payment.simulationLocale: false`, `warnings: []`.
+## Retraits gérants (payouts)
 
-> Si `PAYMENT_MODE=simulation` ou `PAYTECH_MOCK=true` (ancienne config), les paiements « marchent » vers `/simulation/paiement` mais **aucun prestataire n’est appelé**.
+| Key | Value |
+|-----|-------|
+| `PAYTECH_PAYOUT_ENABLED` | `true` **uniquement** si PayTech a autorisé les payouts |
+| `WHATSAPP_DEV_NUMBER` | numéro SN équipe (alertes retraits manuels) |
 
-Sandbox PayDunya (tests uniquement) : `PAYMENT_PROVIDER=paydunya` + clés PayDunya + `PAYMENT_MODE=production`.
+Laisser `PAYTECH_PAYOUT_ENABLED=false` tant que les payouts ne sont pas autorisés (file manuelle + WhatsApp dév).
 
 ## WhatsApp en production
 
 | Key | Value |
 |-----|-------|
 | `WHATSAPP_MOCK` | `false` |
-| `OPENWA_API_KEY` | clé OpenWA (secret) |
+| `OPENWA_API_KEY` | clé OpenWA |
 | `OPENWA_BASE_URL` | `https://mywa.tickets-place.net` |
-| `OPENWA_SHARED_SESSION_ID` | UUID session OpenWA déjà connectée |
-| `APP_DOMAIN` | `https://<ton-service>.onrender.com` |
+| `OPENWA_SHARED_SESSION_ID` | UUID session déjà connectée |
+| `WHATSAPP_DEV_NUMBER` | numéro équipe (optionnel mais recommandé) |
 
-Vérif : `GET /api/whatsapp/status` → `config.readyForProd: true`.
+## Web Push (notifications navigateur)
 
-## Option B — Nouveau Blueprint (1 minute)
+| Key | Value |
+|-----|-------|
+| `VAPID_PUBLIC_KEY` | généré via `node backend/scripts/generate-vapid-keys.js` |
+| `VAPID_PRIVATE_KEY` | idem |
+| `VAPID_SUBJECT` | `mailto:contact@terrainsn.com` |
 
-1. Push à jour (branche `MOHAMED_COULIBALY`)
-2. **New** → **Blueprint** → repo `TerraiSn1` → branche `MOHAMED_COULIBALY`
-3. **Apply** (`render.yaml` configure build/start)
-4. Dans le dashboard, renseigner les secrets OpenWA + PayTech (`sync: false`)
+Sans clés env, le serveur **auto-génère** et persiste près de la DB — OK pour démarrer, mais **fixe les clés en env** pour survivre aux machines Render free.
+
+## Favoris
+
+API `/api/favoris` (joueur connecté) — sync multi-appareils. Hors connexion : cache localStorage.
+
+## Option B — Nouveau Blueprint
+
+1. Push branche `MOHAMED_COULIBALY`
+2. **New** → **Blueprint** → Apply
+3. Renseigner les secrets (`sync: false`)
 
 ## URLs
 
 | Surface | Chemin |
 |---------|--------|
-| App | `/` |
-| Login joueur | `/login` |
-| Backoffice | `/backoffice/login` |
-| Admin | `/admin` |
 | Health | `/health` |
 | WhatsApp status | `/api/whatsapp/status` |
 | WhatsApp QR | `/whatsapp-qr` |
+| Favoris | `/api/favoris` |
 | IPN PayTech | `/webhook/paytech` |
-
-## Comptes démo (mdp `password123`)
-
-| Rôle | Email |
-|------|-------|
-| Joueur | `abdou@email.com` |
-| Propriétaire | `diop@terrainsn.sn` |
-| Gérant | `sarr@terrainsn.sn` |
-| Super admin | `admin@terrainsn.sn` |
-| Mohamed joueur | `mohamed.joueur@gmail.com` |
-| Mohamed gérant | `mohamed.gerant@gmail.com` |
-| Mohamed proprio | `mohamed.proprietaire@gmail.com` |
-| Mohamed admin | `mohamed.admin@gmail.com` |
 
 ## Limites du plan gratuit
 
-- **Pas de disque persistant** : la DB SQLite peut être effacée à chaque redeploy / cold start machine → le seed se recharge si la base est vide.
-- Cold start ~30–60 s après inactivité.
-- Pour une DB durable : plan **Starter** + Docker (`Dockerfile`) + disque `/data`.
+- **Pas de disque** : SQLite + uploads + VAPID fichier peuvent être perdus au redeploy → plan **Starter** + Docker + volume `/data`.
+- Cold start ~30–60 s.
 - WhatsApp : préférer `OPENWA_SHARED_SESSION_ID`.
 
 ## Re-seed forcé
 
-Env `FORCE_SEED=true` → redeploy une fois → remettre `false`.
+`FORCE_SEED=true` → redeploy une fois → remettre `false`.

@@ -218,12 +218,14 @@ function verifierIpnPaytech(payload = {}, headers = {}) {
   return paymentService.paytechAdapter.verifyWebhook(payload, headers);
 }
 
-async function rembourser(reference) {
+async function rembourser(reference, options = {}) {
   if (estModeMock()) {
     console.log(`[PAYTECH MOCK] Remboursement simulé : ${reference}`);
     return { success: true, mock: true, reference };
   }
-  return paymentService.getAdapter().refund(reference);
+  const raw = String(options.provider || options.methode || '').toLowerCase();
+  const provider = raw === 'paydunya' || raw === 'paytech' ? raw : undefined;
+  return paymentService.getAdapter(provider).refund(reference);
 }
 
 function payoutEnabled() {

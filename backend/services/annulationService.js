@@ -137,9 +137,10 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
   });
 
   let rembourse = false;
+  let remboursementManuel = false;
   if (shouldRefund) {
     try {
-      await paytechService.rembourser(ref);
+      await paytechService.rembourser(ref, { methode: payment.methode });
       runSql(
         db,
         `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
@@ -154,15 +155,35 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
       );
       rembourse = true;
     } catch (error) {
-      logger.error('annulationService.js', 'Remboursement PayTech', error);
+      if (error.code === 'PAYDUNYA_REFUND_MANUAL') {
+        remboursementManuel = true;
+        runSql(
+          db,
+          `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
+           VALUES (?, ?, ?, 'remboursement_manuel', ?, ?)`,
+          [
+            reservation.id,
+            Number(reservation.montant_avance || reservation.acompte || payment.montant || 0),
+            payment.methode || 'paydunya',
+            ref,
+            `${ref}-REFUND-MANUAL`,
+          ],
+        );
+        logger.warn(
+          'annulationService.js',
+          `Remboursement PayDunya manuel requis (réf. ${ref}) — traiter dans le dashboard`,
+        );
+      } else {
+        logger.error('annulationService.js', 'Remboursement prestataire', error);
+      }
     }
   }
 
   await notificationService
-    .envoyerAnnulation(reservation.id, { rembourse, politique })
+    .envoyerAnnulation(reservation.id, { rembourse, politique, remboursementManuel })
     .catch((error) => logger.error('annulationService.js', 'Notification annulation', error));
 
-  return { rembourse, politique };
+  return { rembourse, politique, remboursementManuel };
 }
 
 module.exports = {

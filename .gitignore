@@ -17,6 +17,7 @@ dist-ssr
 server/terrainsn.db
 backend/*.db
 backend/*.db-*
+backend/vapid-keys.json
 backend/*.bak
 .vercel
 .lighthouseci

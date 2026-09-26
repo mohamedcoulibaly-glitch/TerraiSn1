@@ -5,11 +5,11 @@
 # Plan free : pas de disque persistant (SQLite + seed à chaque machine neuve).
 # Pour Docker + disque : voir Dockerfile (plan Starter).
 #
-# Secrets à renseigner dans le dashboard (sync: false) :
-# WhatsApp : WHATSAPP_MOCK=false, OPENWA_API_KEY, OPENWA_SHARED_SESSION_ID, APP_DOMAIN
-# Paiements prod : PAYTECH_MOCK=false, PAYMENT_MODE=production, PAYMENT_PROVIDER=paytech,
-#   PAYTECH_ENV=prod, PAYTECH_API_KEY, PAYTECH_API_SECRET
-# (APP_DOMAIN / RENDER_EXTERNAL_URL suffit pour IPN — plus besoin de ngrok)
+# Secrets dashboard (sync: false) :
+# WhatsApp : WHATSAPP_MOCK=false, OPENWA_*, APP_DOMAIN, WHATSAPP_DEV_NUMBER
+# Paiements : PAYTECH_MOCK=false, PAYMENT_MODE=production, PAYMENT_PROVIDER=paytech,
+#   PAYTECH_ENV=prod, PAYTECH_API_KEY/SECRET, PAYTECH_PAYOUT_ENABLED (true seulement si autorisé)
+# Web Push : VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY (sinon auto-générées, moins stables)
 
 services:
   - type: web
@@ -32,7 +32,6 @@ services:
         value: "false"
       - key: FORCE_SEED
         value: "false"
-      # WhatsApp — secrets dashboard
       - key: WHATSAPP_MOCK
         sync: false
       - key: OPENWA_API_KEY
@@ -45,9 +44,10 @@ services:
         sync: false
       - key: OPENWA_PLATFORM_SESSION_ID
         sync: false
+      - key: WHATSAPP_DEV_NUMBER
+        sync: false
       - key: APP_DOMAIN
         sync: false
-      # Paiements — ne plus forcer simulation (dashboard)
       - key: PAYTECH_MOCK
         sync: false
       - key: PAYMENT_MODE
@@ -60,7 +60,17 @@ services:
         sync: false
       - key: PAYTECH_API_SECRET
         sync: false
+      - key: PAYTECH_PAYOUT_ENABLED
+        sync: false
+      - key: PAYTECH_PAYOUT_URL
+        sync: false
       - key: PAYDUNYA_MODE
+        sync: false
+      - key: PAYDUNYA_PAYOUT_ENABLED
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
         sync: false
       - key: COOKIE_SAMESITE
         value: lax
