@@ -9,11 +9,14 @@ const { serializeQrPayload } = require('./services/qrPayload');
 const { calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
 
 function digitsPhone(telephone) {
+  // Aligne sur toWaIntlDigits (OpenWA) — uniquement SN mobile 7X
+  const intl = client.toWaIntlDigits(telephone);
+  if (intl) return intl;
   let numero = String(telephone || '').replace(/\D/g, '');
   if (numero.startsWith('00')) numero = numero.slice(2);
   if (numero.startsWith('0') && numero.length === 10) numero = numero.slice(1);
+  if (numero.length === 9 && numero.startsWith('7')) return `221${numero}`;
   if (numero.startsWith('221') && numero.length >= 12) return numero.slice(0, 12);
-  if (numero.length === 9) return `221${numero}`;
   return numero;
 }
 
@@ -73,23 +76,25 @@ async function envoyerMessage(telephone, message, sessionKey = 'platform', meta 
     return { ok: true };
   } catch (error) {
     // Paiement / flux métier restent valides : la notif part en file de rejeu.
-    try {
-      const retryQueue = require('./services/notificationRetryQueue');
-      await retryQueue.enfiler({
-        telephone,
-        message: String(message || ''),
-        session_key: key,
-        type: meta.type || 'message',
-        destinataire_type: meta.destinataire_type,
-        destinataire_id: meta.destinataire_id,
-        erreur: error.message || String(error),
-        http_status: error.statusCode || error.status || 500,
-        idempotency_key: meta.idempotency_key || null,
-      });
-    } catch {
-      // file best-effort
+    if (!meta.skipRetryQueue) {
+      try {
+        const retryQueue = require('./services/notificationRetryQueue');
+        await retryQueue.enfiler({
+          telephone,
+          message: String(message || ''),
+          session_key: key,
+          type: meta.type || 'message',
+          destinataire_type: meta.destinataire_type,
+          destinataire_id: meta.destinataire_id,
+          erreur: error.message || String(error),
+          http_status: error.statusCode || error.status || 500,
+          idempotency_key: meta.idempotency_key || null,
+        });
+      } catch {
+        // file best-effort
+      }
     }
-    return { ok: false, queued: true, error };
+    return { ok: false, queued: !meta.skipRetryQueue, error };
   }
 }
 
@@ -128,6 +133,10 @@ async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = '
 }
 
 function sessionKeyFromReservation(reservation = {}) {
+  // Une session OpenWA partagée (prod Render) → tout passe par platform.
+  if (String(process.env.OPENWA_SHARED_SESSION_ID || '').trim()) {
+    return 'platform';
+  }
   return client.gerantSessionKey(reservation.gerant_id) || 'platform';
 }
 
@@ -140,7 +149,12 @@ async function details(reservationId) {
       u.prenom AS joueur_prenom, u.telephone AS joueur_tel_user
      FROM reservations r
      JOIN terrains t ON t.id = r.terrain_id
-     LEFT JOIN employes e ON e.terrain_id = t.id AND e.is_active = 1
+     LEFT JOIN employes e ON e.id = COALESCE(
+       t.gerant_id,
+       (SELECT e2.id FROM employes e2
+         WHERE e2.terrain_id = t.id AND e2.is_active = 1
+         ORDER BY e2.id ASC LIMIT 1)
+     )
      LEFT JOIN users u ON u.id = r.joueur_id
      WHERE r.id = ?
      LIMIT 1`,
@@ -223,12 +237,14 @@ async function envoyerOTP({ telephone, prenom, code }) {
 /** Template 3 — Lien paiement réservation téléphone / gérant */
 async function envoyerLienPaiement(reservationId) {
   const data = await details(reservationId);
-  if (!data) return;
+  if (!data) return { ok: false, error: new Error('Réservation introuvable') };
   const prenom = prenomJoueur(data);
   const tel = telephoneJoueur(data);
+  if (!tel) return { ok: false, skipped: true, error: new Error('Téléphone joueur manquant') };
   const lien = data.lien_paiement || data.lien_paytech;
+  if (!lien) return { ok: false, error: new Error('Lien de paiement manquant') };
   const waKey = sessionKeyFromReservation(data);
-  await envoyerWhatsApp(
+  return envoyerWhatsApp(
     tel,
     `👋 Salut ${prenom} !\n\n` +
       `Le gérant de *${data.terrain_nom}* a enregistré ta résa ` +
@@ -240,7 +256,13 @@ async function envoyerLienPaiement(reservationId) {
       `Le reste (*${formaterMontant(data.montant_restant || data.reste_a_payer)}*) ` +
       `tu l'amènes le jour du match, pas de stress 😊\n\n` +
       `⚠️ Ce lien est valable *2 heures*. Après ça, la place repart.`,
-    waKey
+    waKey,
+    {
+      type: 'lien_paiement',
+      destinataire_type: 'joueur',
+      destinataire_id: data.joueur_id || 0,
+      idempotency_key: `lien_paiement:${reservationId}`,
+    },
   );
 }
 

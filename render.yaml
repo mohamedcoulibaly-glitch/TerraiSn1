@@ -4,6 +4,13 @@
 #
 # Plan free : pas de disque persistant (SQLite + seed à chaque machine neuve).
 # Pour Docker + disque : voir Dockerfile (plan Starter).
+#
+# WhatsApp prod : dans le dashboard Render, définir au minimum :
+#   WHATSAPP_MOCK=false
+#   OPENWA_API_KEY=… (secret)
+#   OPENWA_BASE_URL=https://mywa.tickets-place.net
+#   OPENWA_SHARED_SESSION_ID=… (UUID session OpenWA déjà connectée — recommandé)
+#   APP_DOMAIN=https://<ton-service>.onrender.com
 
 services:
   - type: web
@@ -26,8 +33,21 @@ services:
         value: "false"
       - key: FORCE_SEED
         value: "false"
+      # Ne pas forcer le mock : à renseigner dans le dashboard (false pour prod réelle)
       - key: WHATSAPP_MOCK
-        value: "true"
+        sync: false
+      - key: OPENWA_API_KEY
+        sync: false
+      - key: OPENWA_BASE_URL
+        sync: false
+      - key: OPENWA_SESSION_PREFIX
+        sync: false
+      - key: OPENWA_SHARED_SESSION_ID
+        sync: false
+      - key: OPENWA_PLATFORM_SESSION_ID
+        sync: false
+      - key: APP_DOMAIN
+        sync: false
       - key: PAYTECH_MOCK
         value: "true"
       - key: PAYMENT_MODE

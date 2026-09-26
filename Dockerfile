@@ -37,7 +37,7 @@ ENV NODE_ENV=production \
     PUBLIC_DIR=/app/public \
     ADMIN_PUBLIC_DIR=/app/public-admin \
     SKIP_SEED=false \
-    WHATSAPP_MOCK=true \
+    WHATSAPP_MOCK=false \
     PAYTECH_MOCK=true \
     PAYMENT_MODE=simulation
 

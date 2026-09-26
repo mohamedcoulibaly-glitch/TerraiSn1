@@ -349,6 +349,7 @@ app.use(express.urlencoded({ extended: true, limit: '8mb' }));
 app.get(['/health', '/api/health'], (_req, res) => {
   const paymentService = require('./services/payment');
   const { targetProvider, providerRole } = require('./lib/paymentGateway');
+  const whatsappMock = String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true';
   res.status(200).json({
     status: 'ok',
     service: 'terrainsn-api',
@@ -356,6 +357,11 @@ app.get(['/health', '/api/health'], (_req, res) => {
     payment_provider: targetProvider(),
     payment_role: providerRole(targetProvider()),
     payment: paymentService.describe(),
+    whatsapp: {
+      mock: whatsappMock,
+      hasApiKey: Boolean(String(process.env.OPENWA_API_KEY || '').trim()),
+      sharedSession: Boolean(String(process.env.OPENWA_SHARED_SESSION_ID || '').trim()),
+    },
     uptime: Math.round(process.uptime()),
   });
 });
@@ -1892,8 +1898,22 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
       let whatsapp_error = null;
       if (mode === 'paiement' && !anonyme) {
         try {
-          await notificationService.envoyerLienPaiement(reservation.id);
-          whatsapp_sent = true;
+          const waResult = await notificationService.envoyerLienPaiement(reservation.id);
+          whatsapp_sent = Boolean(waResult?.ok) && !waResult?.mocked;
+          if (!whatsapp_sent) {
+            whatsapp_error =
+              waResult?.error?.message ||
+              (waResult?.mocked
+                ? 'WhatsApp en mode mock (WHATSAPP_MOCK=true) — aucun message réel envoyé'
+                : waResult?.queued
+                  ? 'Envoi WhatsApp échoué — message mis en file de rejeu'
+                  : 'Envoi WhatsApp non confirmé');
+            if (waResult?.mocked) {
+              logger.warn('index.js', 'Lien paiement : WhatsApp mock actif');
+            } else {
+              logger.error('index.js', 'Lien paiement WhatsApp non envoyé', waResult?.error || whatsapp_error);
+            }
+          }
         } catch (error) {
           whatsapp_error = error.message || 'Envoi WhatsApp impossible';
           logger.error('index.js', 'Envoi lien paiement WhatsApp impossible', error);
@@ -1946,13 +1966,27 @@ app.post('/api/gerant/reservations', authMiddleware, requireRole('gerant'), asyn
 
 app.get('/api/whatsapp/status', async (req, res) => {
   const whatsappClient = require('./whatsappClient');
+  const mock = String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true';
+  const hasApiKey = Boolean(String(process.env.OPENWA_API_KEY || '').trim());
+  const sharedSession = Boolean(String(process.env.OPENWA_SHARED_SESSION_ID || '').trim());
+  let status = {
+    connected: Boolean(whatsappClient.isReady),
+    mock,
+    provider: 'openwa',
+  };
   if (typeof whatsappClient.getStatus === 'function') {
-    return res.json(await whatsappClient.getStatus());
+    status = await whatsappClient.getStatus();
   }
   res.json({
-    connected: Boolean(whatsappClient.isReady),
-    mock: String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true',
-    provider: 'openwa',
+    ...status,
+    mock,
+    config: {
+      hasApiKey,
+      sharedSessionConfigured: sharedSession,
+      baseUrl: process.env.OPENWA_BASE_URL || 'https://mywa.tickets-place.net',
+      appDomain: process.env.APP_DOMAIN || null,
+      readyForProd: !mock && hasApiKey && Boolean(status.connected),
+    },
   });
 });
 
@@ -1967,7 +2001,9 @@ app.get('/api/whatsapp/qr', async (req, res) => {
 app.get('/whatsapp-qr', async (req, res) => {
   const whatsappClient = require('./whatsappClient');
   if (typeof whatsappClient.ensureStarted === 'function') {
-    await whatsappClient.ensureStarted('platform').catch(() => {});
+    await whatsappClient.ensureStarted('platform').catch((err) => {
+      logger.error('index.js', 'Démarrage WhatsApp plateforme (QR)', err);
+    });
   }
   const payload = typeof whatsappClient.getQrPayload === 'function'
     ? await whatsappClient.getQrPayload()
@@ -3528,6 +3564,42 @@ async function start() {
       logger.error('index.js', 'Nettoyage des verrous', error);
     }
   }, 5 * 60 * 1000);
+
+  // Rejeu des notifications WhatsApp en échec (toutes les 2 min)
+  const RETRY_MS = Number(process.env.WHATSAPP_RETRY_INTERVAL_MS || 120000);
+  if (String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
+    setInterval(async () => {
+      try {
+        const retryQueue = require('./services/notificationRetryQueue');
+        const results = await retryQueue.rejouerPending(async (job) => {
+          const result = await notificationService.envoyerMessage(
+            job.telephone,
+            job.message,
+            job.session_key || 'platform',
+            {
+              type: job.type || 'retry',
+              destinataire_type: job.destinataire_type,
+              destinataire_id: job.destinataire_id,
+              skipRetryQueue: true,
+            },
+          );
+          if (!result?.ok || result?.mocked) {
+            const err = new Error(result?.error?.message || 'Rejeu WhatsApp échoué');
+            err.statusCode = 503;
+            throw err;
+          }
+        }, { limit: 25 });
+        const ok = results.filter((r) => r.ok).length;
+        const fail = results.length - ok;
+        if (results.length) {
+          logger.info('index.js', `WhatsApp retry queue : ${ok} envoyé(s), ${fail} en attente/dead`);
+        }
+      } catch (error) {
+        logger.error('index.js', 'WhatsApp retry queue', error);
+      }
+    }, Math.max(30000, RETRY_MS));
+  }
+
   app.listen(PORT, () => {
     logger.info('index.js', `TerrainSN API demarree sur le port ${PORT}`);
     if (process.env.APP_DOMAIN) {

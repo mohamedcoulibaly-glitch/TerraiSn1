@@ -503,14 +503,27 @@ async function getQrPayload(key = 'platform') {
 }
 
 async function sendTextForSession(key, chatId, text) {
+  try {
+    return await sendTextForSessionOnce(key, chatId, text);
+  } catch (err) {
+    // Notifs joueur ciblent souvent gerant:N — si non connecté, basculer sur la session plateforme.
+    if (key && key !== 'platform' && Number(err.statusCode) === 503) {
+      console.warn(`⚠️ WhatsApp [${key}] indisponible → fallback session platform`);
+      return sendTextForSessionOnce('platform', chatId, text);
+    }
+    throw err;
+  }
+}
+
+async function sendTextForSessionOnce(key, chatId, text) {
   const state = getOrCreateState(key);
   if (state.mock) return { mock: true };
   if (!state.ready) await ensureStarted(key);
   if (!state.ready || !state.openwaId) {
     const err = new Error(
       key === 'platform'
-        ? 'WhatsApp plateforme non connecté. Ouvrez /whatsapp-qr.'
-        : 'WhatsApp du gérant non connecté. Scannez le QR dans l’espace gérant.'
+        ? 'WhatsApp plateforme non connecté. Ouvrez /whatsapp-qr ou configurez OPENWA_SHARED_SESSION_ID.'
+        : 'WhatsApp du gérant non connecté. Scannez le QR dans l’espace gérant.',
     );
     err.statusCode = 503;
     throw err;
@@ -528,14 +541,26 @@ async function sendTextForSession(key, chatId, text) {
  * @param {{ url?: string, base64?: string, mimetype?: string, caption?: string, filePath?: string }} media
  */
 async function sendImageForSession(key, chatId, media = {}) {
+  try {
+    return await sendImageForSessionOnce(key, chatId, media);
+  } catch (err) {
+    if (key && key !== 'platform' && Number(err.statusCode) === 503) {
+      console.warn(`⚠️ WhatsApp image [${key}] indisponible → fallback session platform`);
+      return sendImageForSessionOnce('platform', chatId, media);
+    }
+    throw err;
+  }
+}
+
+async function sendImageForSessionOnce(key, chatId, media = {}) {
   const state = getOrCreateState(key);
   if (state.mock) return { mock: true };
   if (!state.ready) await ensureStarted(key);
   if (!state.ready || !state.openwaId) {
     const err = new Error(
       key === 'platform'
-        ? 'WhatsApp plateforme non connecté. Ouvrez /whatsapp-qr.'
-        : 'WhatsApp du gérant non connecté. Scannez le QR dans l’espace gérant.'
+        ? 'WhatsApp plateforme non connecté. Ouvrez /whatsapp-qr ou configurez OPENWA_SHARED_SESSION_ID.'
+        : 'WhatsApp du gérant non connecté. Scannez le QR dans l’espace gérant.',
     );
     err.statusCode = 503;
     throw err;
@@ -552,7 +577,13 @@ async function sendImageForSession(key, chatId, media = {}) {
     body.mimetype = media.mimetype || 'image/jpeg';
     if (media.filename) body.filename = media.filename;
   } else if (media.url) {
-    body.url = media.url;
+    // URL relative (Render free sans disque) → absolue via APP_DOMAIN
+    const raw = String(media.url);
+    if (raw.startsWith('/') && process.env.APP_DOMAIN) {
+      body.url = `${String(process.env.APP_DOMAIN).replace(/\/$/, '')}${raw}`;
+    } else {
+      body.url = raw;
+    }
   } else {
     throw new Error('Image WhatsApp: url, base64 ou filePath requis');
   }
