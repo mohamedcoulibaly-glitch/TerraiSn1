@@ -64,6 +64,8 @@ function installerPaytechFetchMock(options = {}) {
       u.includes('/payment/request-payment') ||
       u.includes('/payment/refund-payment') ||
       u.includes('/payment/payout') ||
+      u.includes('/transfer/transferFund') ||
+      u.includes('/transfer/get-account-info') ||
       (process.env.PAYTECH_API_URL && u.includes(String(process.env.PAYTECH_API_URL))) ||
       (process.env.PAYTECH_BASE_URL && u.includes(String(process.env.PAYTECH_BASE_URL).replace(/\/$/, '')));
 
@@ -125,14 +127,33 @@ function installerPaytechFetchMock(options = {}) {
       return jsonResponse(200, { success: 1, ref_command: body?.ref_command });
     }
 
-    if (u.includes('/payment/payout')) {
+    if (u.includes('/payment/payout') || u.includes('/transfer/transferFund')) {
       if (mode === 'payout_fail') {
-        return jsonResponse(502, { message: 'Payout rejected' }, false);
+        return jsonResponse(502, { success: 0, message: 'Payout rejected' }, false);
       }
+      const externalId = body?.external_id || body?.ref_command || `PO-${Date.now()}`;
+      const idTransfer = `PYT-DEPOT-MOCK-${Date.now()}`;
       return jsonResponse(200, {
         success: 1,
-        ref_command: body?.ref_command || `PO-${Date.now()}`,
-        reference: body?.ref_command,
+        message: 'Votre transfer est en cours de traitement',
+        transfer: {
+          id_transfer: idTransfer,
+          token_transfer: `tok_${Date.now()}`,
+          amount: body?.amount,
+          state: 'pending',
+          destination_number: body?.destination_number || body?.recipient,
+          service_name: body?.service || 'Wave Senegal',
+          external_id: externalId,
+        },
+        ref_command: externalId,
+        reference: externalId,
+      });
+    }
+
+    if (u.includes('/transfer/get-account-info')) {
+      return jsonResponse(200, {
+        success: 1,
+        accountInfo: { balance: 10000, transferable_amount: 9900 },
       });
     }
 

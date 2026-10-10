@@ -44,7 +44,7 @@ const MockPayment = () => {
       ? 'Paiement abonnement simulé'
       : kind === 'achat'
         ? 'Paiement achat définitif simulé'
-        : 'Paiement PayTech simulé';
+        : 'Paiement simulé';
 
   return (
     <div className="page-container flex items-center justify-center p-5">

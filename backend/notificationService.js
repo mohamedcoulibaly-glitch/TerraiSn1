@@ -510,6 +510,49 @@ async function envoyerAlerteSilencieuse({ telephone, prenom, gerant_prenom, terr
   );
 }
 
+/** Rappel match ~1h avant (WhatsApp). */
+async function envoyerRappelReservation(reservationId) {
+  const data = await details(reservationId);
+  if (!data) return { ok: false, skipped: true };
+  const { buildRappelWhatsAppMessage } = require('./services/reminderWindow');
+  const message = buildRappelWhatsAppMessage({
+    prenom: prenomJoueur(data),
+    terrain_nom: data.terrain_nom,
+    date: data.date,
+    heure_debut: data.heure_debut,
+    code_reservation: data.code_reservation,
+  });
+  return envoyerWhatsApp(telephoneJoueur(data), message, sessionKeyFromReservation(data), {
+    type: 'rappel',
+    destinataire_type: 'joueur',
+    destinataire_id: data.joueur_id || 0,
+    idempotency_key: `rappel:${reservationId}`,
+  });
+}
+
+/** Confirmation entrée après scan QR gérant. */
+async function envoyerCheckinValide(reservationId) {
+  const data = await details(reservationId);
+  if (!data) return { ok: false, skipped: true };
+  const tel = telephoneJoueur(data);
+  if (!tel) return { ok: false, skipped: true };
+  const prenom = prenomJoueur(data);
+  return envoyerWhatsApp(
+    tel,
+    `✅ Entrée validée ${prenom} !\n\n` +
+      `Bienvenue à *${data.terrain_nom}*.\n` +
+      `Créneau ${formaterHeure(data.heure_debut)} – ${formaterHeure(data.heure_fin)}.\n\n` +
+      `Bon match ⚽`,
+    sessionKeyFromReservation(data),
+    {
+      type: 'checkin',
+      destinataire_type: 'joueur',
+      destinataire_id: data.joueur_id || 0,
+      idempotency_key: `checkin:${reservationId}`,
+    },
+  );
+}
+
 module.exports = {
   formatNumero,
   normalizeTelephoneStore,
@@ -536,5 +579,7 @@ module.exports = {
   envoyerTest100,
   envoyerAnnulation,
   envoyerAlerteSilencieuse,
+  envoyerRappelReservation,
+  envoyerCheckinValide,
   sessionKeyFromReservation,
 };

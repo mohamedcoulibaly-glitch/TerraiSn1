@@ -91,6 +91,7 @@ describe("ROUTE_MAP — complétude par rôle", () => {
       "/backoffice/superadmin/abonnements",
       "/backoffice/superadmin/commodites",
       "/backoffice/superadmin/whatsapp",
+      "/backoffice/superadmin/integrations",
       "/profil/admin",
     ]);
     expect(ROUTE_MAP.super_admin.legacyRedirects["/admin"]).toBe("/backoffice/superadmin");

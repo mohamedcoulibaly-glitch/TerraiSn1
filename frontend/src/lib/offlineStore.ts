@@ -1,16 +1,30 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
+/** Réservation mise en cache pour consultation hors-ligne (entrée stade). */
 export interface CachedReservation {
   id: number;
   terrain_id: number;
   terrain_nom: string;
+  terrain_ville?: string;
+  adresse?: string;
   date: string;
   heure_debut: string;
   heure_fin: string;
   statut: string;
   prix_total?: number;
   montant?: number;
+  montant_avance?: number;
+  acompte?: number;
   reste_a_payer?: number;
+  montant_restant?: number;
+  code_reservation?: string | null;
+  /** PNG encodé en data URL — utilisable sans réseau */
+  qr_code_data_url?: string | null;
+  /** URL serveur (réseau requis) — fallback online */
+  qr_code_url?: string | null;
+  created_at?: string;
+  confirme_at?: string | null;
+  verrou_expire_at?: number | null;
   syncedAt: number;
 }
 
@@ -72,6 +86,8 @@ const DB_NAME = 'terrainsn-offline';
 const DB_VERSION = 2;
 const MAX_RECENT_TERRAINS = 20;
 
+const STATUTS_AVEC_ACCES = new Set(['confirme', 'acceptee']);
+
 let dbPromise: Promise<IDBPDatabase<TerrainSNDB>> | null = null;
 
 function getDb() {
@@ -99,11 +115,67 @@ function getDb() {
   return dbPromise;
 }
 
+export function reservationHasStadiumAccess(statut: string | undefined | null): boolean {
+  return STATUTS_AVEC_ACCES.has(String(statut || ''));
+}
+
+/** Normalise une réservation API vers le format cache hors-ligne. */
+export function toCachedReservation(
+  raw: Record<string, unknown>,
+  previous?: CachedReservation | null,
+): CachedReservation {
+  const id = Number(raw.id);
+  return {
+    id,
+    terrain_id: Number(raw.terrain_id),
+    terrain_nom: String(raw.terrain_nom || previous?.terrain_nom || 'Terrain'),
+    terrain_ville: (raw.terrain_ville as string) || previous?.terrain_ville,
+    adresse: (raw.adresse as string) || previous?.adresse,
+    date: String(raw.date || previous?.date || ''),
+    heure_debut: String(raw.heure_debut || previous?.heure_debut || ''),
+    heure_fin: String(raw.heure_fin || previous?.heure_fin || ''),
+    statut: String(raw.statut || previous?.statut || ''),
+    prix_total: numOrUndef(raw.prix_total) ?? previous?.prix_total,
+    montant: numOrUndef(raw.montant) ?? previous?.montant,
+    montant_avance: numOrUndef(raw.montant_avance) ?? previous?.montant_avance,
+    acompte: numOrUndef(raw.acompte) ?? previous?.acompte,
+    reste_a_payer: numOrUndef(raw.reste_a_payer) ?? previous?.reste_a_payer,
+    montant_restant: numOrUndef(raw.montant_restant) ?? previous?.montant_restant,
+    code_reservation:
+      (raw.code_reservation as string | null | undefined) ?? previous?.code_reservation ?? null,
+    qr_code_data_url:
+      (raw.qr_code_data_url as string | null | undefined) || previous?.qr_code_data_url || null,
+    qr_code_url: (raw.qr_code_url as string | null | undefined) ?? previous?.qr_code_url ?? null,
+    created_at: (raw.created_at as string) || previous?.created_at,
+    confirme_at: (raw.confirme_at as string | null) ?? previous?.confirme_at ?? null,
+    verrou_expire_at: numOrUndef(raw.verrou_expire_at) ?? previous?.verrou_expire_at ?? null,
+    syncedAt: Date.now(),
+  };
+}
+
+function numOrUndef(v: unknown): number | undefined {
+  if (v == null || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Remplace le cache réservations en préservant les QR déjà téléchargés. */
 export async function cacheReservations(items: CachedReservation[]) {
   const db = await getDb();
+  const existing = await db.getAll('reservations');
+  const byId = new Map(existing.map((row) => [row.id, row]));
+  const keepIds = new Set(items.map((item) => item.id));
+
   const tx = db.transaction('reservations', 'readwrite');
   await Promise.all([
-    ...items.map((item) => tx.store.put({ ...item, syncedAt: Date.now() })),
+    ...existing
+      .filter((row) => !keepIds.has(row.id))
+      .map((row) => tx.store.delete(row.id)),
+    ...items.map((item) => {
+      const prev = byId.get(item.id);
+      const merged = toCachedReservation(item as unknown as Record<string, unknown>, prev);
+      return tx.store.put(merged);
+    }),
     tx.done,
   ]);
 }
@@ -112,6 +184,30 @@ export async function getCachedReservations(): Promise<CachedReservation[]> {
   const db = await getDb();
   const all = await db.getAll('reservations');
   return all.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+export async function getCachedReservation(id: number): Promise<CachedReservation | null> {
+  const db = await getDb();
+  return (await db.get('reservations', id)) ?? null;
+}
+
+/** Met à jour le QR (data URL) d'une réservation déjà en cache, ou l'upsert. */
+export async function cacheReservationAccessPass(
+  reservation: Record<string, unknown>,
+  qrDataUrl?: string | null,
+) {
+  const db = await getDb();
+  const id = Number(reservation.id);
+  if (!Number.isFinite(id)) return;
+  const previous = (await db.get('reservations', id)) ?? null;
+  const merged = toCachedReservation(
+    {
+      ...reservation,
+      qr_code_data_url: qrDataUrl || reservation.qr_code_data_url || previous?.qr_code_data_url,
+    },
+    previous,
+  );
+  await db.put('reservations', merged);
 }
 
 export async function queuePendingReservation(
@@ -193,4 +289,13 @@ export async function getCachedRecentTerrain(id: number | string): Promise<unkno
 
 export function isOnline(): boolean {
   return typeof navigator !== 'undefined' ? navigator.onLine : true;
+}
+
+/** Retire les data URL lourdes avant persistance localStorage. */
+export function stripQrDataUrls<T extends { qr_code_data_url?: string | null }>(list: T[]): T[] {
+  return list.map((row) => {
+    if (!row?.qr_code_data_url) return row;
+    const { qr_code_data_url: _drop, ...rest } = row;
+    return rest as T;
+  });
 }

@@ -1,4 +1,4 @@
-﻿import { ArrowLeft, Lock, Shield, AlertTriangle, Eye, EyeOff, MessageCircle } from "lucide-react";
+﻿import { ArrowLeft, Lock, Shield, AlertTriangle, Eye, EyeOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
@@ -13,21 +13,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { profilApi } from "@/lib/api";
-
-function supportWhatsAppHref(message: string) {
-  const raw = String(import.meta.env.VITE_SUPPORT_WHATSAPP || "221770000000").replace(/\D/g, "");
-  const phone = raw.startsWith("221") ? raw : raw.length === 9 ? `221${raw}` : raw;
-  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-}
+import { authApi, profilApi } from "@/lib/api";
 
 const ProfilSecurite = () => {
   const navigate = useNavigate();
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, logout } = useAuth();
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [passwords, setPasswords] = useState({
     current: "",
     new: "",
@@ -73,12 +68,23 @@ const ProfilSecurite = () => {
     }
   };
 
-  const deleteAccountHref = supportWhatsAppHref(
-    `Bonjour, je souhaite supprimer mon compte TerrainSN.\n` +
-      `Nom : ${[user.prenom, user.nom].filter(Boolean).join(" ") || "—"}\n` +
-      `Téléphone : ${user.telephone || "—"}\n` +
-      `Merci de me confirmer la procédure.`,
-  );
+  const handleDeleteAccount = async () => {
+    const ok = window.confirm(
+      "Supprimer ton compte ? Tes données personnelles seront anonymisées. L’historique des matchs côté terrain est conservé pour la comptabilité. Cette action est définitive.",
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await authApi.deleteAccount();
+      toast.success("Compte désactivé — données personnelles anonymisées");
+      await logout();
+      navigate("/");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Impossible de supprimer le compte");
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="page-container">
@@ -216,17 +222,20 @@ const ProfilSecurite = () => {
               <div className="flex-1">
                 <p className="text-sm font-medium">Supprimer le compte</p>
                 <p className="text-[10px] text-muted-foreground mt-1">
-                  La suppression définitive est traitée par le support pour éviter toute perte accidentelle
-                  de réservations. Contactez-nous via WhatsApp pour lancer la procédure.
+                  Anonymise ton téléphone, email et nom. Les réservations futures en attente sont
+                  annulées. L’historique financier des terrains partenaires est conservé.
                 </p>
               </div>
             </div>
             <div className="px-4 pb-4">
-              <Button variant="outline" className="w-full text-destructive border-destructive/20 hover:bg-destructive/5" asChild>
-                <a href={deleteAccountHref} target="_blank" rel="noreferrer">
-                  <MessageCircle className="w-4 h-4 mr-2" />
-                  Demander la suppression via WhatsApp
-                </a>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full text-destructive border-destructive/20 hover:bg-destructive/5"
+                disabled={deleting}
+                onClick={() => void handleDeleteAccount()}
+              >
+                {deleting ? "Suppression…" : "Supprimer mon compte"}
               </Button>
             </div>
           </div>

@@ -53,6 +53,7 @@ const RapprochementAdmin = lazy(() => import("@/espaces/backoffice/pages/superad
 const AbonnementsAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Abonnements"));
 const CommoditesAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Commodites"));
 const WhatsAppPlateforme = lazy(() => import("@/espaces/backoffice/pages/superadmin/WhatsAppPlateforme"));
+const IntegrationsAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Integrations"));
 const AuditAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Audit"));
 const GerantDashboard = lazy(() => import("@/espaces/backoffice/pages/gerant/Dashboard"));
 const GerantJoueurs = lazy(() => import("@/espaces/backoffice/pages/gerant/JoueursReservations"));
@@ -139,6 +140,7 @@ export default function AppRouter() {
         <Route path="superadmin/abonnements" element={<RoleGuard roles={["super_admin"]}>{withSuspense(AbonnementsAdmin)}</RoleGuard>} />
         <Route path="superadmin/commodites" element={<RoleGuard roles={["super_admin"]}>{withSuspense(CommoditesAdmin)}</RoleGuard>} />
         <Route path="superadmin/whatsapp" element={<RoleGuard roles={["super_admin"]}>{withSuspense(WhatsAppPlateforme)}</RoleGuard>} />
+        <Route path="superadmin/integrations" element={<RoleGuard roles={["super_admin"]}>{withSuspense(IntegrationsAdmin)}</RoleGuard>} />
         <Route path="admin" element={<Navigate to="/backoffice/superadmin" replace />} />
         <Route path="admin/terrains" element={<Navigate to="/backoffice/superadmin/terrains" replace />} />
         <Route path="admin/utilisateurs" element={<Navigate to="/backoffice/superadmin/utilisateurs" replace />} />

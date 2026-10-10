@@ -77,7 +77,7 @@ export default function PreviewContrat(props: Props) {
             { label: "Frais TerrainSN", value: `−${fcfa(p.auto.fraisPlateforme)}` },
           ]}
           net={fcfa(p.auto.net)}
-          via="PayTech automatique"
+          via="Virement automatique"
         />
         <Colonne
           titre="Mode Retrait (0 frais)"

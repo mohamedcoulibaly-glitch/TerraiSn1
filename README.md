@@ -85,11 +85,14 @@ docker compose up --build   # API locale prod-like → http://localhost:3001/hea
 | Dossier | Rôle |
 |--------|------|
 | `frontend/` | App joueur + backoffice (Vite/React) |
-| `backend/` | API Express + SQLite |
+| `admin-frontend/` | Supervision Super Admin |
+| `backend/` | API Express + SQLite (`sql.js` — fichier unique, sans binaire natif ; adapté au déploiement Docker/Render à 2 devs) |
 
 ## Rôles
 
-- **Joueur** : réserver, payer, voir ses matchs (hors-ligne possible)
-- **Gérant** : créneaux + réservations du terrain
-- **Propriétaire** : terrains + revenus
-- **Super admin** : toute la plateforme
+- **Joueur** : réserver, payer, voir ses matchs (hors-ligne possible), supprimer/anonymiser son compte
+- **Gérant** : créneaux + réservations du terrain, demander un retrait
+- **Propriétaire** : terrains + revenus ; voit les retraits (lecture seule)
+- **Super admin** : plateforme + **validation des retraits** (caisse)
+
+Voir aussi `ROLES.md`.

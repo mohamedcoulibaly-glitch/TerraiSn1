@@ -247,7 +247,7 @@ export default function GerantLayout() {
         <WhatsAppInfraBanner visible={waDown} tone="gerant" />
         <WhatsAppGerantSessionBanner />
 
-        <main className="flex-1 p-3 md:p-6 overflow-auto">
+        <main className="flex-1 p-3 md:p-6">
           <div className="max-w-5xl mx-auto" key={terrainActif ?? "default"}>
             <Outlet context={{ terrainActif, terrains }} />
           </div>

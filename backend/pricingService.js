@@ -3,12 +3,47 @@ const { hourlySlots, parseHour, veilleJour, jourDepuisDate } = require('./schedu
 const { bornesHorairesSemaine } = require('./scheduleService');
 
 const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+const JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi'];
+const JOURS_WEEKEND = ['samedi', 'dimanche'];
 
 function prixBaseTerrain(terrain, format = 'entier') {
   if (format === 'moitie') {
     return Number(terrain.prix_moitie || Math.round(Number(terrain.prix_entier || terrain.prix_heure || 0) * 0.6));
   }
   return Number(terrain.prix_entier || terrain.prix_heure || 0);
+}
+
+function hhmm(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.slice(0, 5);
+}
+
+function joursDeRegle(raw, type) {
+  const listed = String(raw || '')
+    .split(',')
+    .map((j) => j.trim().toLowerCase())
+    .filter((j) => JOURS.includes(j));
+  if (listed.length) return listed;
+  if (type === 'weekend') return [...JOURS_WEEKEND];
+  if (type === 'semaine') return [...JOURS_SEMAINE];
+  return [...JOURS];
+}
+
+function heureCorrespondRegle(tarif, heureDebut) {
+  const debut = hhmm(tarif.heure_debut);
+  const fin = hhmm(tarif.heure_fin);
+  if (!debut || !fin) return true;
+  const h = hhmm(heureDebut) || '00:00';
+  return h >= debut && h < fin;
+}
+
+function friendlyNomRegle(nom) {
+  const raw = String(nom || '').trim();
+  if (!raw) return 'Tarif';
+  if (/^CORR\s+Soir[ée]e$/i.test(raw) || /^soiree$/i.test(raw)) return 'Soirée (après 18h)';
+  if (/^CORR\s+/i.test(raw)) return raw.replace(/^CORR\s+/i, '');
+  return raw;
 }
 
 function overridePour(database, terrainId, jour, heure) {
@@ -19,18 +54,72 @@ function overridePour(database, terrainId, jour, heure) {
   );
 }
 
-function prixHoraireEffectif(database, terrain, date, heureDebut, format = 'entier', jourOverride = null) {
+/** Première règle active (priorité DESC) applicable au créneau. */
+function findMatchingRegle(database, terrainId, heureDebut, jour) {
+  const tarifs = queryAll(
+    database,
+    `SELECT * FROM regles_tarifs
+      WHERE terrain_id = ? AND actif = 1
+      ORDER BY priorite DESC, id DESC`,
+    [terrainId],
+  );
+  for (const tarif of tarifs) {
+    if (joursDeRegle(tarif.jours, tarif.type).includes(String(jour || '').toLowerCase())
+      && heureCorrespondRegle(tarif, heureDebut)) {
+      return tarif;
+    }
+  }
+  return null;
+}
+
+/**
+ * Résout le prix d'une heure : cellule personnalisée > règle semaine/weekend/soirée > base.
+ * Source unique pour devis, réservation et aperçu admin.
+ */
+function resolvePrixHoraire(database, terrain, date, heureDebut, jourOverride = null) {
   const heure = parseHour(heureDebut);
   let jour = jourOverride || jourDepuisDate(date);
   // Vendredi 00h (= Jeudi minuit) → grille tarifaire de la veille
   if (jourOverride == null && (heure === 0 || heure === 24)) {
     jour = veilleJour(jourDepuisDate(date));
   }
-  const override = overridePour(database, terrain.id, jour, heure === 24 ? 0 : heure);
+  const hourKey = heure === 24 ? 0 : heure;
+
+  const override = overridePour(database, terrain.id, jour, hourKey);
   if (override) {
-    return format === 'moitie' ? Number(override.prix_moitie) : Number(override.prix_entier);
+    return {
+      prix_demi_terrain: Number(override.prix_moitie || 0),
+      prix_terrain_entier: Number(override.prix_entier || 0),
+      nom_tarif: 'Tarif horaire',
+      source: 'cellule',
+      jour,
+    };
   }
-  return prixBaseTerrain(terrain, format);
+
+  const regle = findMatchingRegle(database, terrain.id, heureDebut, jour);
+  if (regle) {
+    return {
+      prix_demi_terrain: Number(regle.prix_demi_terrain || 0),
+      prix_terrain_entier: Number(regle.prix_terrain_entier || 0),
+      nom_tarif: friendlyNomRegle(regle.nom),
+      source: 'regle',
+      regle_id: Number(regle.id),
+      jour,
+    };
+  }
+
+  return {
+    prix_demi_terrain: prixBaseTerrain(terrain, 'moitie'),
+    prix_terrain_entier: prixBaseTerrain(terrain, 'entier'),
+    nom_tarif: 'Tarif de base',
+    source: 'base',
+    jour,
+  };
+}
+
+function prixHoraireEffectif(database, terrain, date, heureDebut, format = 'entier', jourOverride = null) {
+  const resolved = resolvePrixHoraire(database, terrain, date, heureDebut, jourOverride);
+  return format === 'moitie' ? Number(resolved.prix_demi_terrain) : Number(resolved.prix_terrain_entier);
 }
 
 function calculerPrixReservation(database, terrain, date, heureDebut, heureFin, format = 'entier') {
@@ -58,13 +147,20 @@ function calculerDevis(database, terrain, { date, heure_debut, heure_fin, format
     err.statusCode = 400;
     throw err;
   }
-  const detail = slots.map((slot) => ({
-    heure: slot.heure_debut,
-    heure_fin: slot.heure_fin,
-    prix: prixHoraireEffectif(database, terrain, date, slot.heure_debut, format),
-  }));
+  const detail = slots.map((slot) => {
+    const resolved = resolvePrixHoraire(database, terrain, date, slot.heure_debut);
+    const prix = format === 'moitie' ? resolved.prix_demi_terrain : resolved.prix_terrain_entier;
+    return {
+      heure: slot.heure_debut,
+      heure_fin: slot.heure_fin,
+      prix,
+      nom_tarif: resolved.nom_tarif,
+      source: resolved.source,
+    };
+  });
   const montant = detail.reduce((sum, row) => sum + Number(row.prix || 0), 0);
   const montant_avance = calculerMontantAvance(terrain, montant);
+  const sources = [...new Set(detail.map((d) => d.source))];
   return {
     terrain_id: terrain.id,
     date,
@@ -75,6 +171,8 @@ function calculerDevis(database, terrain, { date, heure_debut, heure_fin, format
     montant_avance,
     montant_restant: Math.max(0, montant - montant_avance),
     pourcentage_avance: Number(terrain.pourcentage_avance || 12.5),
+    nom_tarif: detail.length === 1 ? detail[0].nom_tarif : (sources.length === 1 ? detail[0].nom_tarif : 'Tarif mixte'),
+    source_prix: sources.length === 1 ? sources[0] : 'mixte',
     detail,
   };
 }
@@ -188,6 +286,8 @@ module.exports = {
   jourDepuisDate,
   prixBaseTerrain,
   prixHoraireEffectif,
+  resolvePrixHoraire,
+  findMatchingRegle,
   calculerPrixReservation,
   calculerDevis,
   calculerMontantAvance,

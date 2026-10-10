@@ -46,16 +46,21 @@ export default function Caisse() {
   const [verserBusyId, setVerserBusyId] = useState<number | null>(null);
   const [terrains, setTerrains] = useState<any[]>([]);
   const [finances, setFinances] = useState<any>();
+  const [paytechWallet, setPaytechWallet] = useState<{
+    balance?: number;
+    transferable?: number;
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [f, p, r, h, t, fin] = await Promise.all([
+      const [f, p, r, h, t, fin, dash] = await Promise.all([
         superAdminApi.caisseFenetre(),
         superAdminApi.caissePayable(),
         superAdminApi.caisseRetraits("tous"),
         superAdminApi.caisseHistorique().catch(() => []),
         superAdminApi.terrains().catch(() => []),
         superAdminApi.finances().catch(() => null),
+        superAdminApi.caisseDashboard().catch(() => null),
       ]);
       setFenetre(asList(f));
       setPayable(asList(p));
@@ -63,6 +68,9 @@ export default function Caisse() {
       setHistorique(asList(h));
       setTerrains(Array.isArray(t) ? t : []);
       setFinances(fin);
+      const wallet = (dash as { paytech_wallet?: { balance?: number; transferable?: number } } | null)
+        ?.paytech_wallet;
+      setPaytechWallet(wallet || null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Caisse indisponible");
     } finally {
@@ -167,6 +175,13 @@ export default function Caisse() {
   return (
     <div className="space-y-5 max-w-[1200px]">
       <SaPageHeader titre="Caisse & Reversements" sousTitre="Payouts dynamiques : auto, retraits API, compensation dettes commission" />
+
+      {paytechWallet ? (
+        <AlerteBandeau
+          type={Number(paytechWallet.transferable || 0) < 5000 ? "warning" : "info"}
+          message={`Wallet PayTech : ${fcfa(paytechWallet.transferable)} transférables (solde ${fcfa(paytechWallet.balance)}). Un dû supérieur à ce plafond sera refusé — Wave/OM OK, c’est le solde marchand qui manque.`}
+        />
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {tabs.map((t) => {

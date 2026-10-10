@@ -43,6 +43,9 @@ function humaniserErreurPayout(error) {
   const lower = raw.toLowerCase();
   if (error?.code === 'PAYOUT_DISABLED') return 'Payout non autorisé sur ce prestataire';
   if (error?.code === 'PAYOUT_INVALID') return 'Numéro bénéficiaire ou montant invalide';
+  if (error?.code === 'PAYTECH_WALLET_INSUFFICIENT' || /maximum dispo|montant non autoris/.test(lower)) {
+    return raw.slice(0, 500);
+  }
   if (/iban|alias|numéro|numero|invalid|invalide/.test(lower)) return `IBAN / numéro invalide — ${raw}`.slice(0, 400);
   if (/insufficient|insuffisant|balance|solde/.test(lower)) return `Solde insuffisant — ${raw}`.slice(0, 400);
   if (/timeout|network|econn|fetch failed/.test(lower)) return `Prestataire injoignable — ${raw}`.slice(0, 400);

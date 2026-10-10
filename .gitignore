@@ -46,3 +46,7 @@ backend/.wwebjs_cache
 *.sw?
 
 backend/uploads/
+
+# Contenu LinkedIn personnel (non partagé / non versionné)
+linkedin_posts_architecture.md
+

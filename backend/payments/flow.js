@@ -555,8 +555,14 @@ async function handlePayoutWebhookPaydunya(body = {}) {
 async function handlePayoutWebhookPaytech(body = {}, headers = {}) {
   const { appliquerStatutPayoutWebhook } = require('../services/payoutEngine');
   const type = String(body.type_event || body.type || body.event || '').toLowerCase();
-  const ref = body.ref_command || body.reference || body.ref_paytech;
-  const isPayout = /^PO-/i.test(String(ref || '')) || /payout|disburse|transfer/.test(type);
+  const externalId = body.external_id || body.externalId;
+  const idTransfer = body.id_transfer || body.idTransfer;
+  const ref = body.ref_command || body.reference || body.ref_paytech || externalId || idTransfer;
+  const isPayout =
+    /^PO-/i.test(String(ref || ''))
+    || /^PO-/i.test(String(externalId || ''))
+    || /payout|disburse|transfer/.test(type)
+    || Boolean(idTransfer);
   if (!isPayout) return null;
 
   if (!paymentService.verifyWebhook(body, headers, { provider: 'paytech' })) {
@@ -570,14 +576,22 @@ async function handlePayoutWebhookPaytech(body = {}, headers = {}) {
 
   const db = await getDb();
   let status = 'pending';
-  if (/success|completed|sale_complete|paid/.test(type) || body.success === true) status = 'success';
-  if (/fail|error|reject/.test(type) || body.success === false) status = 'failed';
+  if (/success|completed|sale_complete|paid|transfer_success/.test(type) || body.success === true) {
+    status = 'success';
+  }
+  if (/fail|error|reject|transfer_failed/.test(type) || body.success === false) status = 'failed';
   if (/cancel/.test(type)) status = 'cancelled';
+  const state = String(body.state || '').toLowerCase();
+  if (['success', 'completed', 'successful'].includes(state)) status = 'success';
+  if (['failed', 'rejected', 'error'].includes(state)) status = 'failed';
 
   const result = appliquerStatutPayoutWebhook(db, {
-    ref,
+    // matching : id_transfer (ref_paytech) OU external_id PO-* OU token_transfer
+    ref: idTransfer || ref,
+    disburseToken: body.token_transfer || body.tokenTransfer,
+    disburseId: externalId,
     status,
-    motif: body.message || body.motif || body.reason,
+    motif: body.message || body.motif || body.reason || body.service_name,
   });
   logger.info('payments/flow.js', `Webhook payout PayTech type=${type} status=${status}`);
   return { received: true, provider: 'paytech', kind: 'payout', ...result };

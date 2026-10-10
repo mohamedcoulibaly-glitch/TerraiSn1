@@ -1,13 +1,12 @@
 /**
  * Sélection du prestataire de paiement.
  *
- * Convention TerrainSN :
- * - PayDunya  → Sandbox / Dev / Tests uniquement
- * - PayTech   → Production officielle
+ * Prestataire actif : paytech (Wave / Orange Money via target_payment).
+ * PayDunya n’est plus le défaut (legacy / tests seulement si forcé en env).
  *
  * Variables (synonymes) :
- * - PAYMENT_PROVIDER=paydunya|paytech  (recommandé)
- * - PAYMENT_GATEWAY=paydunya|paytech   (alias historique)
+ * - PAYMENT_PROVIDER=paytech|paydunya  (recommandé)
+ * - PAYMENT_GATEWAY=paytech|paydunya   (alias historique)
  *
  * PAYMENT_MODE=simulation → page locale (aucun appel prestataire au checkout).
  */
@@ -46,32 +45,22 @@ function providerExplicite() {
 
 /**
  * Prestataire actif pour les appels API (checkout, payout, refund, IPN routing).
- * sandbox / tests → PayDunya
- * production réelle → PayTech
- * PAYMENT_MODE=simulation → page locale (aucun prestataire)
+ * Défaut : paytech. PAYMENT_MODE=simulation → page locale.
  */
 function activeGateway() {
   if (estSimulation()) return PROVIDERS.SIMULATION;
   const explicit = providerExplicite();
   if (explicit) return explicit;
-  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
-    return PROVIDERS.PAYTECH;
-  }
-  return PROVIDERS.PAYDUNYA;
+  return PROVIDERS.PAYTECH;
 }
 
 /**
  * Prestataire « réel » cible (ignore la page simulation locale).
- * Utile pour savoir si le code est câblé PayTech ou PayDunya
- * même quand PAYMENT_MODE=simulation pour les fixtures BDD.
  */
 function targetProvider() {
   const explicit = providerExplicite();
   if (explicit) return explicit;
-  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
-    return PROVIDERS.PAYTECH;
-  }
-  return PROVIDERS.PAYDUNYA;
+  return PROVIDERS.PAYTECH;
 }
 
 function estPaydunya() {

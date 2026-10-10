@@ -188,6 +188,14 @@ async function traiterScanQrReservation(req, res) {
     await scoreService.recalculerScore(req.user.id, reservation.terrain_id)
       .catch((error) => logger.error('gerantCheckin.js', 'Recalcul score scan QR', error));
 
+    try {
+      const notificationService = require('./notificationService');
+      await notificationService.envoyerCheckinValide(reservation.id);
+      logger.event('checkin_whatsapp', { reservation_id: reservation.id });
+    } catch (notifErr) {
+      logger.warn('gerantCheckin.js', `Notif check-in WhatsApp #${reservation.id} : ${notifErr.message}`);
+    }
+
     const updated = queryOne(db, `
       SELECT r.*, t.nom AS terrain_nom,
              COALESCE(r.joueur_nom, u.nom) AS joueur_nom,

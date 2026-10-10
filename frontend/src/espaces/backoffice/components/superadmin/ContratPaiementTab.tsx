@@ -546,7 +546,7 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange 
             <Zap size={18} style={{ color: "var(--sa-primary)" }} />
             <p className="mt-2 text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Reversement automatique</p>
             <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
-              PayTech envoie automatiquement le dû sur le numéro du gérant. Des frais de payout s'appliquent selon la politique ci-dessous.
+              Le dû est envoyé automatiquement sur le numéro du gérant. Des frais de payout s'appliquent selon la politique ci-dessous.
             </p>
             <span className="mt-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: "var(--sa-warning-bg)", color: "var(--sa-warning)" }}>
               Frais de payout
@@ -685,7 +685,7 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange 
       <ConfirmationModal
         ouvert={confirmProd}
         titre="Activer la production paiement"
-        texte="Ce terrain sera actif en production PayTech. Les joueurs pourront payer l'avance en ligne."
+        texte="Ce terrain sera actif en production. Les joueurs pourront payer l'avance en ligne."
         labelConfirmer="Confirmer"
         variante="success"
         onConfirmer={activerProduction}

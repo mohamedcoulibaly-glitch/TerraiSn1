@@ -74,6 +74,7 @@ export const ROUTE_MAP = {
       "/backoffice/superadmin/abonnements",
       "/backoffice/superadmin/commodites",
       "/backoffice/superadmin/whatsapp",
+      "/backoffice/superadmin/integrations",
       "/profil/admin",
     ],
     legacyRedirects: {

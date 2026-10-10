@@ -11,9 +11,18 @@ if (!process.env.CORS_ORIGINS && process.env.APP_DOMAIN) {
 require('./whatsappClient');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const { rateLimit } = require('./middleware/rateLimit');
+const {
+  validateBody,
+  validateRegisterBody,
+  validateVerifyOtpBody,
+} = require('./middleware/validate');
+const { anonymiserCompteJoueur } = require('./services/anonymisationService');
+const { fileRetraits } = require('./services/retraitService');
 const { getDb, queryAll, queryOne, runSql, saveDb, transaction } = require('./database');
 const paytechService = require('./paytechService');
 const { activeGateway } = require('./lib/paymentGateway');
@@ -335,6 +344,10 @@ const allowedOrigins = (
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
@@ -356,6 +369,7 @@ app.get(['/health', '/api/health'], (_req, res) => {
   const hasDevWa = Boolean(
     String(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV || '').trim(),
   );
+  const metrics = logger.getMetrics();
   res.status(200).json({
     status: 'ok',
     service: 'terrainsn-api',
@@ -375,6 +389,13 @@ app.get(['/health', '/api/health'], (_req, res) => {
       sharedSession: Boolean(String(process.env.OPENWA_SHARED_SESSION_ID || '').trim()),
       devNumberConfigured: hasDevWa,
     },
+    metrics: {
+      'event.rappel_match': metrics['event.rappel_match'] || 0,
+      'event.checkin_whatsapp': metrics['event.checkin_whatsapp'] || 0,
+      'log.error': metrics['log.error'] || 0,
+      'log.warn': metrics['log.warn'] || 0,
+    },
+    sqlite_engine: 'sql.js',
     warnings: [
       ...(estSimulation() && process.env.NODE_ENV === 'production'
         ? ['PAYMENT_MODE=simulation / PAYTECH_MOCK=true — aucun paiement réel']
@@ -441,45 +462,9 @@ mountGerantCheckinRoutes(app);
 mountGerantCrmRoutes(app);
 mountGerantExtrasRoutes(app);
 
-const rateLimitBuckets = new Map();
-function rateLimit({ windowMs, max, keyPrefix, countFailuresOnly = false }) {
-  return (req, res, next) => {
-    if (process.env.NODE_ENV !== 'production' && process.env.AUTH_RATE_LIMIT !== '1') {
-      return next();
-    }
-    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
-    const rawId = String(req.body?.telephone || req.body?.identifier || req.body?.email || '');
-    const idKey = rawId.includes('@') ? rawId.trim().toLowerCase() : String(rawId).replace(/\D/g, '');
-    const key = `${keyPrefix}:${ip}:${idKey}`;
-    const now = Date.now();
-    const bucket = rateLimitBuckets.get(key) || { count: 0, resetAt: now + windowMs };
-    if (bucket.resetAt <= now) {
-      bucket.count = 0;
-      bucket.resetAt = now + windowMs;
-    }
-    if (bucket.count >= max) {
-      return res.status(429).json({ error: 'Trop de tentatives. Veuillez reessayer plus tard.' });
-    }
-    if (!countFailuresOnly) {
-      bucket.count += 1;
-      rateLimitBuckets.set(key, bucket);
-      return next();
-    }
-    res.on('finish', () => {
-      if (res.statusCode === 401 || res.statusCode === 403) {
-        const current = rateLimitBuckets.get(key) || { count: 0, resetAt: now + windowMs };
-        current.count += 1;
-        rateLimitBuckets.set(key, current);
-      } else if (res.statusCode < 400) {
-        rateLimitBuckets.delete(key);
-      }
-    });
-    return next();
-  };
-}
-
 const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 12, keyPrefix: 'auth', countFailuresOnly: true });
 const otpRateLimit = rateLimit({ windowMs: 10 * 60 * 1000, max: 5, keyPrefix: 'otp' });
+const reservationRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, keyPrefix: 'resa' });
 
 // ============================================================
 // MIDDLEWARE AUTH (voir backend/middleware/auth.js)
@@ -506,17 +491,11 @@ function optionalAuth(req, res, next) {
 // ============================================================
 
 // Inscription joueur → envoi OTP WhatsApp (pas de JWT tant que non vérifié)
-app.post('/api/auth/register', otpRateLimit, async (req, res) => {
+app.post('/api/auth/register', otpRateLimit, validateBody(validateRegisterBody), async (req, res) => {
   try {
     const db = await getDb();
     const { prenom, nom, telephone, password, email } = req.body;
 
-    if (!nom || !telephone || !password) {
-      return res.status(400).json({ error: 'Prénom/nom, téléphone et mot de passe obligatoires' });
-    }
-    if (String(password).length < 6) {
-      return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 6 caractères' });
-    }
     if (!otpService.isValidSenegalMobile(telephone)) {
       return res.status(400).json({ error: 'Numéro invalide. Format attendu : 7X XXX XX XX' });
     }
@@ -571,13 +550,10 @@ app.post('/api/auth/register', otpRateLimit, async (req, res) => {
 });
 
 // Vérification OTP → JWT joueur
-app.post('/api/auth/verify-otp', async (req, res) => {
+app.post('/api/auth/verify-otp', otpRateLimit, validateBody(validateVerifyOtpBody), async (req, res) => {
   try {
     const db = await getDb();
     const { telephone, code } = req.body;
-    if (!telephone || !code) {
-      return res.status(400).json({ error: 'Téléphone et code obligatoires' });
-    }
 
     const { otp, telephoneDigits, error } = otpService.findValidOtp(db, telephone, code);
     if (error) return res.status(400).json({ error });
@@ -983,6 +959,28 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
     res.json({ message: 'Mot de passe modifié' });
   } catch {
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+/** Soft-delete + anonymisation PII joueur (historique financier terrains conservé). */
+app.post('/api/auth/delete-account', authMiddleware, requireRole('joueur'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const result = anonymiserCompteJoueur(db, req.user.id, { reason: 'user_request' });
+    try {
+      res.clearCookie('refresh_token');
+    } catch {
+      /* ignore */
+    }
+    logger.event('compte_anonymise', { user_id: req.user.id });
+    res.json({
+      success: true,
+      message: 'Compte désactivé et données personnelles anonymisées',
+      ...result,
+    });
+  } catch (err) {
+    logger.error('index.js', 'delete-account', err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -1982,7 +1980,13 @@ async function creerReservationAvecPaiement(req, res, creePar, lockDurationMs, t
   }
 }
 
-app.post('/api/reservations', authMiddleware, requireRole('joueur'), (req, res) => creerReservationAvecPaiement(req, res, 'joueur', 10 * 60 * 1000));
+app.post(
+  '/api/reservations',
+  authMiddleware,
+  requireRole('joueur'),
+  reservationRateLimit,
+  (req, res) => creerReservationAvecPaiement(req, res, 'joueur', 10 * 60 * 1000),
+);
 
 app.post('/api/reservations/gerant', authMiddleware, requireRole('gerant'), async (req, res) => {
   if (Number(req.body.terrain_id || req.user.terrain_id) !== Number(req.user.terrain_id)) {
@@ -2555,6 +2559,25 @@ app.get('/api/proprietaire/terrains', authMiddleware, requireRole('proprietaire'
     }));
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+/**
+ * Visibilité propriétaire des demandes de retrait (lecture seule).
+ * Validation / envoi = super_admin (caisse plateforme) — pas le propriétaire.
+ */
+app.get('/api/proprietaire/retraits', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainIds = queryAll(db, 'SELECT id FROM terrains WHERE proprietaire_id = ?', [req.user.id]).map(
+      (t) => Number(t.id),
+    );
+    if (!terrainIds.length) return res.json([]);
+    const all = fileRetraits(db, null);
+    res.json(all.filter((d) => terrainIds.includes(Number(d.terrain_id))));
+  } catch (err) {
+    logger.error('index.js', 'proprietaire/retraits', err);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -3605,6 +3628,20 @@ async function ensureSeedData(db) {
 
 async function start() {
   const db = await getDb(); // Initialize DB + migrations
+  try {
+    const runtimeIntegrations = require('./services/runtimeIntegrations');
+    const { applied, seeded } = runtimeIntegrations.hydrateFromDb(db);
+    const wa = require('./whatsappClient');
+    if (typeof wa.reloadConfig === 'function') wa.reloadConfig();
+    if (applied > 0 || seeded > 0) {
+      logger.info(
+        'index.js',
+        `Integrations : ${applied} cle(s) actives, ${seeded} initialisee(s) depuis .env`,
+      );
+    }
+  } catch (error) {
+    logger.warn('index.js', `Integrations hydrate: ${error.message}`);
+  }
   const skipSeed = String(process.env.SKIP_SEED || '').toLowerCase() === 'true' || process.env.SKIP_SEED === '1';
   const forceSeed = String(process.env.FORCE_SEED || '').toLowerCase() === 'true' || process.env.FORCE_SEED === '1';
   if (forceSeed) {

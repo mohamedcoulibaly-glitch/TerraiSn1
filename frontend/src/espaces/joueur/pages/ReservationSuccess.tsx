@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Check, Download, Loader2, XCircle } from "lucide-react";
-import { reservationsApi } from "@/lib/api";
-
-const API_URL = import.meta.env.VITE_API_URL || "/api";
+import { fetchReservationQrDataUrl, reservationsApi } from "@/lib/api";
+import { cacheReservationAccessPass } from "@/lib/offlineStore";
 
 type PaymentPhase = "loading" | "pending" | "confirmed" | "cancelled" | "error";
 
@@ -38,6 +37,7 @@ const ReservationSuccess = () => {
         if (data?.statut === "confirme") {
           setPhase("confirmed");
           setShowAnim(true);
+          void cacheReservationAccessPass(data);
           return;
         }
         if (data?.statut === "annule") {
@@ -73,30 +73,63 @@ const ReservationSuccess = () => {
   }, [showAnim]);
 
   useEffect(() => {
-    let objectUrl: string | null = null;
+    let cancelled = false;
+    const reservationId = reservation?.id;
+    const code = reservation?.code_reservation;
     const loadQr = async () => {
-      if (!reservation?.id || !reservation?.code_reservation || phase !== "confirmed") {
+      if (!reservationId || !code || phase !== "confirmed") {
         setQrFetched(null);
         return;
       }
       try {
-        const token = localStorage.getItem("terrainsn_token");
-        const res = await fetch(`${API_URL}/reservations/${reservation.id}/qr.png`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!res.ok) throw new Error("QR indisponible");
-        const blob = await res.blob();
-        objectUrl = URL.createObjectURL(blob);
-        setQrFetched(objectUrl);
+        const dataUrl = await fetchReservationQrDataUrl(Number(reservationId));
+        if (cancelled) return;
+        if (!dataUrl) {
+          setQrFetched(null);
+          return;
+        }
+        setQrFetched(dataUrl);
+        await cacheReservationAccessPass(
+          {
+            id: reservationId,
+            terrain_id: reservation?.terrain_id,
+            terrain_nom: reservation?.terrain_nom,
+            terrain_ville: reservation?.terrain_ville,
+            date: reservation?.date,
+            heure_debut: reservation?.heure_debut,
+            heure_fin: reservation?.heure_fin,
+            statut: reservation?.statut,
+            code_reservation: code,
+            montant_avance: reservation?.montant_avance,
+            acompte: reservation?.acompte,
+            reste_a_payer: reservation?.reste_a_payer ?? reservation?.montant_restant,
+          },
+          dataUrl,
+        );
       } catch {
-        setQrFetched(null);
+        if (!cancelled) setQrFetched(null);
       }
     };
-    loadQr();
+    void loadQr();
     return () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      cancelled = true;
     };
-  }, [reservation?.id, reservation?.code_reservation, phase]);
+  }, [
+    reservation?.id,
+    reservation?.code_reservation,
+    reservation?.terrain_id,
+    reservation?.terrain_nom,
+    reservation?.terrain_ville,
+    reservation?.date,
+    reservation?.heure_debut,
+    reservation?.heure_fin,
+    reservation?.statut,
+    reservation?.montant_avance,
+    reservation?.acompte,
+    reservation?.reste_a_payer,
+    reservation?.montant_restant,
+    phase,
+  ]);
 
   if (phase === "error" || error) {
     return (

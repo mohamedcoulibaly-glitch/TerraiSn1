@@ -271,19 +271,12 @@ async function envoyerConfirmationPush(reservationId) {
   ]);
 }
 
-function parseReservationDateTime(dateStr, timeStr) {
-  const date = String(dateStr).slice(0, 10);
-  const time = String(timeStr).slice(0, 5);
-  return new Date(`${date}T${time}:00`);
-}
-
 async function envoyerRappelsReservations() {
-  if (!ensureConfigured()) return { processed: 0 };
-
   const db = await getDb();
   const now = new Date();
-  const windowStart = new Date(now.getTime() + 45 * 60 * 1000);
-  const windowEnd = new Date(now.getTime() + 75 * 60 * 1000);
+  const pushReady = ensureConfigured();
+  const { parseReservationDateTime, isInReminderWindow } = require('./services/reminderWindow');
+  const notificationService = require('./notificationService');
 
   const reservations = queryAll(db, `
     SELECT r.*, t.nom AS terrain_nom
@@ -291,41 +284,61 @@ async function envoyerRappelsReservations() {
     JOIN terrains t ON t.id = r.terrain_id
     LEFT JOIN reservation_reminders rr ON rr.reservation_id = r.id
     WHERE r.statut IN ('confirme', 'acceptee')
-      AND r.joueur_id IS NOT NULL
       AND rr.id IS NULL
       AND r.date >= date('now')
   `);
 
   let processed = 0;
+  let pushCount = 0;
+  let waCount = 0;
 
   for (const reservation of reservations) {
     const startAt = parseReservationDateTime(reservation.date, reservation.heure_debut);
-    if (Number.isNaN(startAt.getTime())) continue;
-    if (startAt < windowStart || startAt > windowEnd) continue;
+    if (!isInReminderWindow(startAt, now)) continue;
 
-    const prefs = await getPreferences(reservation.joueur_id);
-    if (!prefs.rappel_reservation) continue;
+    let pushSent = false;
+    let waSent = false;
 
-    const result = await sendToUser(reservation.joueur_id, {
-      title: 'Rappel — match dans 1h ⏰',
-      body: `${reservation.terrain_nom} — ${reservation.date} à ${reservation.heure_debut}. Préparez-vous !`,
-      url: '/reservations',
-      tag: `reminder-${reservation.id}`,
-      type: 'rappel_reservation',
-    }, 'rappel_reservation');
+    if (pushReady && reservation.joueur_id) {
+      const prefs = await getPreferences(reservation.joueur_id);
+      if (prefs.rappel_reservation) {
+        const result = await sendToUser(reservation.joueur_id, {
+          title: 'Rappel — match dans 1h ⏰',
+          body: `${reservation.terrain_nom} — ${reservation.date} à ${reservation.heure_debut}. Préparez-vous !`,
+          url: '/reservations',
+          tag: `reminder-${reservation.id}`,
+          type: 'rappel_reservation',
+        }, 'rappel_reservation');
+        pushSent = result.sent > 0;
+      }
+    }
 
-    if (result.sent > 0) {
-      runSql(db, 'INSERT INTO reservation_reminders (reservation_id) VALUES (?)', [reservation.id]);
+    try {
+      const wa = await notificationService.envoyerRappelReservation(reservation.id);
+      waSent = Boolean(wa && (wa.ok || wa.mocked) && !wa.skipped);
+    } catch (err) {
+      logger.warn('pushService', `Rappel WhatsApp #${reservation.id} : ${err.message}`);
+    }
+
+    if (!pushSent && !waSent) continue;
+
+    runSql(db, 'INSERT INTO reservation_reminders (reservation_id) VALUES (?)', [reservation.id]);
+    if (reservation.joueur_id) {
+      const canal = pushSent && waSent ? 'push+whatsapp' : pushSent ? 'push' : 'whatsapp';
       runSql(db, `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
-        VALUES ('user', ?, 'rappel', 'push', ?, 0)`, [
+        VALUES ('user', ?, 'rappel', ?, ?, 0)`, [
         reservation.joueur_id,
+        canal,
         `Rappel : match au ${reservation.terrain_nom} dans 1h`,
       ]);
-      processed++;
     }
+    if (pushSent) pushCount += 1;
+    if (waSent) waCount += 1;
+    processed += 1;
+    logger.event('rappel_match', { reservation_id: reservation.id, push: pushSent, whatsapp: waSent });
   }
 
-  return { processed };
+  return { processed, push: pushCount, whatsapp: waCount };
 }
 
 module.exports = {

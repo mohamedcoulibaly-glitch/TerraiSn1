@@ -48,6 +48,10 @@ jobs:
       - name: Tests métier (paiements, gérant, kanban, check-in)
         run: npm test
 
+      # Gate explicite argent — doit rester rouge si CDC / liens / commissions cassent
+      - name: Tests argent critiques (CDC + paiement)
+        run: npm run test:money
+
       - name: Démarrer l'API (smoke)
         run: |
           node index.js > /tmp/api.log 2>&1 &

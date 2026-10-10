@@ -33,6 +33,7 @@ const { listAuditCommodites } = require('../services/auditCommodites');
 const essaiService = require('../services/essaiService');
 const terrainFeaturesService = require('../services/terrainFeaturesService');
 const modeRevenuService = require('../services/modeRevenuService');
+const runtimeIntegrations = require('../services/runtimeIntegrations');
 
 const photoUpload = multer({
   storage: multer.memoryStorage(),
@@ -1137,6 +1138,21 @@ router.put('/terrains/:id/features', async (req, res) => {
   res.json(list);
 });
 
+router.get('/integrations', async (req, res) => {
+  const db = await getDb();
+  res.json(runtimeIntegrations.describe(db));
+});
+
+router.put('/integrations', async (req, res) => {
+  const db = await getDb();
+  try {
+    const result = transaction(db, () => runtimeIntegrations.save(db, req.body || {}));
+    res.json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Enregistrement impossible' });
+  }
+});
+
 router.get('/whatsapp/status', async (req, res) => {
   const whatsappClient = require('../whatsappClient');
   res.json(await whatsappClient.getStatus('platform'));
@@ -1149,9 +1165,39 @@ router.get('/whatsapp/qr', async (req, res) => {
 
 router.post('/whatsapp/connect', async (req, res) => {
   const whatsappClient = require('../whatsappClient');
-  const started = await whatsappClient.ensureStarted('platform', { force: Boolean(req.body?.force) });
-  const qr = await whatsappClient.getQrPayload('platform');
-  res.json({ ...started, ...qr });
+  const force = Boolean(req.body?.force);
+  const changeNumber = Boolean(req.body?.changeNumber ?? force);
+  const phoneRaw = req.body?.telephone || req.body?.phoneNumber || req.body?.phone || '';
+  const phoneNumber = whatsappClient.toWaIntlDigits?.(phoneRaw) || null;
+  try {
+    const started = await whatsappClient.ensureStarted('platform', {
+      force: changeNumber || force,
+      changeNumber,
+      phoneNumber: phoneNumber || undefined,
+    });
+    const qr = await whatsappClient.getQrPayload('platform');
+    const payload = { ...started, ...qr, connected: Boolean(started.ready || qr.connected) };
+    if (started.mock || qr.mock) {
+      return res.status(503).json({
+        error: 'WhatsApp est en mode mock (WHATSAPP_MOCK=true). Désactivez-le dans Intégrations.',
+        mock: true,
+        ...payload,
+      });
+    }
+    if (changeNumber && !payload.connected && !payload.dataUrl && !payload.pairingCode) {
+      return res.status(503).json({
+        error:
+          payload.error ||
+          'Impossible de préparer un nouveau QR / code. Vérifiez OpenWA puis réessayez.',
+        ...payload,
+      });
+    }
+    res.json(payload);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      error: error.message || 'Connexion WhatsApp impossible',
+    });
+  }
 });
 
 router.post('/whatsapp/disconnect', async (req, res) => {

@@ -267,13 +267,23 @@ export default function FinancesPage() {
               type="button"
               disabled={!data.bouton_retirer || retiring || Boolean(data.solde_demande_retrait)}
               onClick={() => setConfirmRetrait(true)}
-              className="mt-4 min-h-[44px] px-4 rounded-xl text-sm font-semibold border border-white/70 disabled:opacity-50"
+              className="mt-4 w-full min-h-[48px] px-4 rounded-xl text-base font-bold disabled:opacity-60 inline-flex items-center justify-center gap-2"
+              style={{ background: "#fff", color: "var(--g-primary)" }}
             >
-              {data.solde_demande_retrait ? "Demande déjà envoyée" : retiring ? "Envoi…" : "Retirer"}
+              <ArrowDownToLine className="w-5 h-5" aria-hidden />
+              {data.solde_demande_retrait
+                ? "Demande déjà envoyée"
+                : retiring
+                  ? "Envoi…"
+                  : `Retirer ${formatFcfa(soldeNet)}`}
             </button>
             {!data.contrat?.canal_verifie ? (
               <p className="mt-2 text-xs text-white/80">
                 Aucun Wave/OM vérifié : le dû s’accumule, le retrait ne pourra pas aboutir tant que le superadmin n’a pas validé tes numéros.
+              </p>
+            ) : !data.bouton_retirer && !data.solde_demande_retrait ? (
+              <p className="mt-2 text-xs text-white/80">
+                Aucun montant retirable pour le moment (solde à 0 ou dû encore en fenêtre).
               </p>
             ) : null}
           </>

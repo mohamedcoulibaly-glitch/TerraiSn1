@@ -154,9 +154,8 @@ async function resoudreUrlsPaiement(reservationId, gateway = activeGateway(), op
   }
 
   if (!isPublicHttps(ipnUrl) || !isPublicHttps(successUrl) || !isPublicHttps(cancelUrl)) {
-    const prestataire = resolvedGateway === 'paydunya' ? 'PayDunya' : 'PayTech';
     const error = new Error(
-      `${prestataire} exige des URLs HTTPS publiques. ` +
+      `Le paiement en ligne exige des URLs HTTPS publiques. ` +
         `Définis APP_DOMAIN=https://<ton-service>.onrender.com ` +
         `(ou ${paths.envIpn} / ${paths.envSuccess} / ${paths.envCancel}), ` +
         `ou lance ngrok (ngrok http 3001) en local.`,

@@ -1,5 +1,4 @@
 const { queryAll, queryOne, runSql } = require('../database');
-const { jourDepuisDate } = require('../scheduleService');
 
 const TYPES = ['semaine', 'weekend', 'soiree', 'special'];
 const JOURS = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
@@ -77,42 +76,11 @@ function listRegles(db, terrainId, { actifsUniquement = false } = {}) {
 function getPrixActif(db, terrainId, date, heureDebut, jourOverride = null) {
   const terrain = queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) {
-    return { prix_demi_terrain: 0, prix_terrain_entier: 0, nom_tarif: 'Tarif de base' };
+    return { prix_demi_terrain: 0, prix_terrain_entier: 0, nom_tarif: 'Tarif de base', source: 'base' };
   }
-
-  const jour = jourOverride || jourDepuisDate(date);
-  const tarifs = queryAll(
-    db,
-    `SELECT * FROM regles_tarifs
-      WHERE terrain_id = ? AND actif = 1
-      ORDER BY priorite DESC, id DESC`,
-    [terrainId],
-  );
-
-  for (const tarif of tarifs) {
-    if (joursCorrespondent(tarif, jour) && heureCorrespond(tarif, heureDebut)) {
-      return {
-        prix_demi_terrain: Number(tarif.prix_demi_terrain || 0),
-        prix_terrain_entier: Number(tarif.prix_terrain_entier || 0),
-        nom_tarif: friendlyNom(tarif.nom),
-        source: 'regle',
-        regle_id: Number(tarif.id),
-      };
-    }
-  }
-
-  const { prixHoraireEffectif, prixBaseTerrain } = require('../pricingService');
-  const prixEntier = prixHoraireEffectif(db, terrain, date, heureDebut, 'entier', jourOverride);
-  const prixMoitie = prixHoraireEffectif(db, terrain, date, heureDebut, 'moitie', jourOverride);
-  const baseEntier = prixBaseTerrain(terrain, 'entier');
-  const baseMoitie = prixBaseTerrain(terrain, 'moitie');
-  const personnalise = Number(prixEntier) !== Number(baseEntier) || Number(prixMoitie) !== Number(baseMoitie);
-  return {
-    prix_demi_terrain: Number(prixMoitie || 0),
-    prix_terrain_entier: Number(prixEntier || 0),
-    nom_tarif: personnalise ? 'Tarif horaire' : 'Tarif de base',
-    source: personnalise ? 'cellule' : 'base',
-  };
+  // Même moteur que devis / réservation : cellule > règle peak/weekend > base
+  const { resolvePrixHoraire } = require('../pricingService');
+  return resolvePrixHoraire(db, terrain, date, heureDebut, jourOverride);
 }
 
 function nextDateForWeekday(weekdayName) {

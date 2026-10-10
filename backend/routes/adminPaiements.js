@@ -120,7 +120,26 @@ router.post('/terrains/:id/canaux/:canal/verifier', async (req, res) => {
 
 router.get('/caisse/dashboard', async (_req, res) => {
   const db = await getDb();
-  res.json(kpisCaisse(db));
+  const kpis = kpisCaisse(db);
+  let paytech_wallet = null;
+  try {
+    const paymentService = require('../services/payment');
+    if (typeof paymentService.getAdapter === 'function') {
+      const adapter = paymentService.getAdapter('paytech');
+      if (adapter && typeof adapter.getAccountInfo === 'function') {
+        const info = await adapter.getAccountInfo();
+        paytech_wallet = {
+          balance: info.balance,
+          transferable: info.transferable,
+          hold: info.hold,
+          fee: info.fee,
+        };
+      }
+    }
+  } catch {
+    paytech_wallet = null;
+  }
+  res.json({ ...kpis, paytech_wallet });
 });
 
 router.get('/caisse/fenetre', async (_req, res) => {

@@ -7,6 +7,8 @@ import {
   cacheRecentTerrain,
   getCachedRecentTerrain,
   isOnline,
+  reservationHasStadiumAccess,
+  toCachedReservation,
   type CachedReservation,
 } from './offlineStore';
 import type { OperationalStage } from './kanbanRules';
@@ -14,6 +16,59 @@ import { WHATSAPP_INFRA_MESSAGE } from './whatsappMessages';
 import { registerBackgroundSync } from './pwaRegister';
 
 const API_URL = import.meta.env.VITE_API_URL || '/api';
+const MAX_QR_PREFETCH = 12;
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Lecture QR impossible'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** Télécharge le PNG QR et le convertit en data URL (cache hors-ligne). */
+export async function fetchReservationQrDataUrl(reservationId: number): Promise<string | null> {
+  try {
+    const token = getToken();
+    const res = await fetch(`${API_URL}/reservations/${reservationId}/qr.png`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) return null;
+    const dataUrl = await blobToDataUrl(await res.blob());
+    return dataUrl.startsWith('data:image') ? dataUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+async function enrichReservationsForOffline(
+  list: Record<string, unknown>[],
+): Promise<CachedReservation[]> {
+  const previous = await getCachedReservations();
+  const prevById = new Map(previous.map((row) => [row.id, row]));
+  const mapped = list.map((raw) =>
+    toCachedReservation(raw, prevById.get(Number(raw.id)) || null),
+  );
+
+  const needQr = mapped
+    .filter(
+      (row) =>
+        reservationHasStadiumAccess(row.statut) &&
+        Boolean(row.code_reservation) &&
+        !row.qr_code_data_url,
+    )
+    .slice(0, MAX_QR_PREFETCH);
+
+  await Promise.all(
+    needQr.map(async (row) => {
+      const dataUrl = await fetchReservationQrDataUrl(row.id);
+      if (dataUrl) row.qr_code_data_url = dataUrl;
+    }),
+  );
+
+  return mapped;
+}
 
 // Récupérer le token depuis le localStorage
 function getToken(): string | null {
@@ -327,6 +382,11 @@ export const authApi = {
     return await request('/auth/change-password', { method: 'POST', body: JSON.stringify({ password }) });
   },
 
+  /** Soft-delete + anonymisation PII (joueur). */
+  async deleteAccount() {
+    return await request('/auth/delete-account', { method: 'POST', body: JSON.stringify({}) });
+  },
+
   async refresh() {
     return refreshAccessToken();
   },
@@ -552,10 +612,10 @@ export const reservationsApi = {
   async mes() {
     try {
       const data = await request('/reservations/mes');
-      if (Array.isArray(data) && data.length > 0) {
-        await cacheReservations(data as CachedReservation[]);
-      }
-      return data;
+      const list = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
+      const enriched = await enrichReservationsForOffline(list);
+      await cacheReservations(enriched);
+      return enriched;
     } catch (err) {
       const cached = await getCachedReservations();
       if (cached.length > 0) return cached;

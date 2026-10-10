@@ -269,7 +269,8 @@
 
   html {
     width: 100%;
-    overflow-x: hidden;
+    /* Pas d'overflow ici : overflow-x:hidden sur html+body crée 2 scrollports
+       imbriqués et casse le scroll vertical (Chrome/Safari/Android). */
     -webkit-text-size-adjust: 100%;
   }
 
@@ -282,8 +283,10 @@
     width: 100%;
     min-height: 100dvh;
     overflow-x: hidden;
+    overflow-y: auto;
     overscroll-behavior-x: none;
-    overscroll-behavior-y: none; /* Désactive le pull-to-refresh natif */
+    /* contain (pas none) : limite le pull-to-refresh sans tuer le scroll */
+    overscroll-behavior-y: contain;
     background-color: var(--bg);
     color: var(--text-primary);
     transition: background-color 0.2s ease, color 0.2s ease;
@@ -1583,6 +1586,10 @@
 .login-backoffice {
   display: flex;
   flex-direction: column;
+  /* height (pas seulement min-height) : sinon overflow:hidden coupe le contenu
+     sans jamais contraindre .login-sheet → overflow-y:auto ne s'active pas. */
+  height: 100dvh;
+  max-height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
   isolation: isolate;

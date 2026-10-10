@@ -559,7 +559,7 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
           >
             <Zap size={18} style={{ color: "var(--sa-primary)" }} />
             <p className="mt-2 text-[14px] font-semibold">Reversement automatique</p>
-            <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>PayTech envoie le dû. Frais de payout selon la politique.</p>
+            <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>Le dû est envoyé automatiquement. Frais de payout selon la politique.</p>
           </button>
           <button
             type="button"

@@ -191,10 +191,20 @@ export const superAdminApi = {
   getNuitProlongeeSettings: () => adminRequest("/admin/nuit-prolongee"),
   saveNuitProlongeeSettings: (body: { heure_fermeture_maximale: string }) =>
     adminRequest("/admin/nuit-prolongee", { method: "PUT", body: JSON.stringify(body) }),
+  getIntegrations: () => adminRequest("/admin/integrations"),
+  saveIntegrations: (body: Record<string, string>) =>
+    adminRequest("/admin/integrations", { method: "PUT", body: JSON.stringify(body) }),
   whatsappStatus: () => adminRequest("/admin/whatsapp/status"),
   whatsappQr: () => adminRequest("/admin/whatsapp/qr"),
-  whatsappConnect: (force = false) =>
-    adminRequest("/admin/whatsapp/connect", { method: "POST", body: JSON.stringify({ force }) }),
+  whatsappConnect: (force = false, opts?: { telephone?: string; changeNumber?: boolean }) =>
+    adminRequest("/admin/whatsapp/connect", {
+      method: "POST",
+      body: JSON.stringify({
+        force,
+        changeNumber: opts?.changeNumber ?? force,
+        telephone: opts?.telephone,
+      }),
+    }),
   whatsappDisconnect: () => adminRequest("/admin/whatsapp/disconnect", { method: "POST" }),
   whatsappTest: (telephone: string) =>
     adminRequest("/admin/whatsapp/test", { method: "POST", body: JSON.stringify({ telephone }) }),

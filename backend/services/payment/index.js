@@ -77,7 +77,7 @@ function describe() {
     appDomain: appDomain || null,
     publicHttps,
     readyForProd: !simulationLocale && keysOk && publicHttps && active !== PROVIDERS.SIMULATION,
-    switchHint: 'PAYMENT_PROVIDER=paytech pour la production ; PAYMENT_PROVIDER=paydunya pour la sandbox',
+    switchHint: 'PAYMENT_PROVIDER=paytech (défaut). Canal Wave/OM via preferredChannel / target_payment.',
   };
 }
 

@@ -1,6 +1,6 @@
-import { ArrowLeft, MessageSquare, Star } from "lucide-react";
+import { ArrowLeft, MessageSquare, QrCode, Star, WifiOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { reservationsApi, avisApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -9,9 +9,13 @@ import SkeletonMesReservations from "@/components/skeletons/SkeletonMesReservati
 import SilentSyncDot from "@/components/SilentSyncDot";
 import PaymentLockGauge from "@/components/PaymentLockGauge";
 import ReservationDatesBlock from "@/components/ReservationDatesBlock";
+import AccesTerrainPass, {
+  type AccesTerrainReservation,
+} from "@/espaces/joueur/components/AccesTerrainPass";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
 import { useMesReservations, joueurKeys } from "@/hooks/useJoueurData";
 import { writeSwrCache } from "@/lib/swrCache";
+import { isOnline, reservationHasStadiumAccess, stripQrDataUrls } from "@/lib/offlineStore";
 import {
   Dialog,
   DialogContent,
@@ -145,6 +149,19 @@ const Reservations = () => {
   const [reviewNote, setReviewNote] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [accessPass, setAccessPass] = useState<AccesTerrainReservation | null>(null);
+  const [offline, setOffline] = useState(!isOnline());
+
+  useEffect(() => {
+    const goOffline = () => setOffline(true);
+    const goOnline = () => setOffline(false);
+    window.addEventListener("offline", goOffline);
+    window.addEventListener("online", goOnline);
+    return () => {
+      window.removeEventListener("offline", goOffline);
+      window.removeEventListener("online", goOnline);
+    };
+  }, []);
 
   const patchReservationsCache = useCallback(
     (updater: (list: any[]) => any[]) => {
@@ -152,7 +169,7 @@ const Reservations = () => {
       queryClient.setQueryData(key, (prev: any[] | undefined) => {
         const base = Array.isArray(prev) ? prev : [];
         const next = updater(base);
-        writeSwrCache(key, next);
+        writeSwrCache(key, stripQrDataUrls(next));
         return next;
       });
     },
@@ -299,6 +316,18 @@ const Reservations = () => {
         </h1>
       </div>
 
+      {offline ? (
+        <div className="responsive-padding mb-2">
+          <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--color-warning)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_12%,white)] px-3 py-2.5 text-[12px] text-[var(--color-text-secondary)]">
+            <WifiOff className="w-4 h-4 mt-0.5 flex-shrink-0 text-[var(--color-warning)]" />
+            <span>
+              Hors-ligne : tes réservations confirmées et leur QR restent disponibles pour l’entrée
+              du terrain.
+            </span>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex gap-2 responsive-padding overflow-x-auto scrollbar-hide">
         {filterTabs.map((tab) => (
           <button
@@ -412,16 +441,17 @@ const Reservations = () => {
                       )}
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-3">
-                          {r.statut === "confirme" && r.qr_code_url && (
-                            <a
-                              href={r.qr_code_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-[12px] font-medium text-[var(--color-primary)] border border-[var(--color-primary)] rounded-[var(--radius-md)] px-3 min-h-10 inline-flex items-center"
-                            >
-                              Voir le QR code
-                            </a>
-                          )}
+                          {reservationHasStadiumAccess(r.statut) &&
+                            (r.code_reservation || r.qr_code_data_url || r.qr_code_url) && (
+                              <button
+                                type="button"
+                                onClick={() => setAccessPass(r)}
+                                className="text-[12px] font-medium text-[var(--color-primary)] border border-[var(--color-primary)] rounded-[var(--radius-md)] px-3 min-h-10 inline-flex items-center gap-1.5"
+                              >
+                                <QrCode className="w-3.5 h-3.5" />
+                                Accès terrain
+                              </button>
+                            )}
                           {canCancel && (
                             <button
                               type="button"
@@ -516,6 +546,13 @@ const Reservations = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AccesTerrainPass
+        reservation={accessPass}
+        open={!!accessPass}
+        onOpenChange={(open) => !open && setAccessPass(null)}
+        offline={offline}
+      />
 
       <Dialog open={!!reviewReservation} onOpenChange={() => setReviewReservation(null)}>
         <DialogContent className="max-w-md mx-4">

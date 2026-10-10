@@ -176,7 +176,7 @@ export default function Rapprochement() {
           )}
         </div>
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <Terme value={tot.recu} label="Reçu PayTech" />
+          <Terme value={tot.recu} label="Reçu en ligne" />
           <span className="text-2xl font-light" style={{ color: "var(--sa-muted)" }}>−</span>
           <Terme value={tot.rembourse} label="Remboursé joueurs" />
           <span className="text-2xl font-light" style={{ color: "var(--sa-muted)" }}>=</span>

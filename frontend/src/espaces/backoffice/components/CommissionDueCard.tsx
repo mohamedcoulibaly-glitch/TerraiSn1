@@ -237,7 +237,7 @@ export default function CommissionDueCard({ enabled = true }: { enabled?: boolea
               Commission due — {moisLabel(periode)}
             </h3>
             <p className="mt-1 text-[12px]" style={{ color: "var(--g-muted)" }}>
-              Ces réservations ont été confirmées hors PayTech. La commission est due à TerrainSN.
+              Ces réservations ont été confirmées hors paiement en ligne. La commission est due à TerrainSN.
             </p>
             <ul className="mt-3 space-y-2">
               {(data?.detail || []).map((row: any) => (

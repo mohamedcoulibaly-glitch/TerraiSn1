@@ -171,6 +171,60 @@ async function main() {
     40000,
   );
 
+  // --- Règles semaine / weekend / soirée branchées sur le booking ---
+  // 2026-09-19 = samedi
+  runSql(
+    db,
+    `INSERT INTO regles_tarifs
+      (terrain_id, nom, prix_demi_terrain, prix_terrain_entier, type, jours, heure_debut, heure_fin, priorite, actif, source)
+     VALUES (?, 'Week-end — à partir de 18h', 35000, 60000, 'weekend', 'samedi,dimanche', '18:00', '24:00', 7, 1, 'grille_standard')`,
+    [terrainId],
+  );
+  runSql(
+    db,
+    `INSERT INTO regles_tarifs
+      (terrain_id, nom, prix_demi_terrain, prix_terrain_entier, type, jours, heure_debut, heure_fin, priorite, actif, source)
+     VALUES (?, 'Semaine — avant 18h', 20000, 35000, 'semaine', 'lundi,mardi,mercredi,jeudi,vendredi', '00:00', '18:00', 4, 1, 'grille_standard')`,
+    [terrainId],
+  );
+
+  // Recharger terrain après sauvegarderGrille plus bas — ici encore base 40k avant maj grille
+  h.assertEqual(
+    'règle weekend samedi 20h appliquée au booking',
+    prixHoraireEffectif(db, terrain, '2026-09-19', '20:00', 'entier'),
+    60000,
+  );
+  const devisWeekend = calculerDevis(db, terrain, {
+    date: '2026-09-19',
+    heure_debut: '20:00',
+    heure_fin: '21:00',
+    format_terrain: 'entier',
+  });
+  h.assertEqual('devis weekend = règle', devisWeekend.montant, 60000);
+  h.assertEqual('devis source règle', devisWeekend.source_prix, 'regle');
+  h.assert(
+    'devis nom tarif weekend',
+    String(devisWeekend.nom_tarif || '').toLowerCase().includes('week'),
+  );
+
+  // Cellule personnalisée reste prioritaire sur la règle (lundi 18h = 50k cellule)
+  h.assertEqual(
+    'cellule prioritaire sur règle semaine',
+    prixHoraireEffectif(db, terrain, '2026-09-14', '18:00', 'entier'),
+    50000,
+  );
+  // Mardi 10h sans cellule → règle semaine 35k (pas 40k base)
+  h.assertEqual(
+    'règle semaine mardi 10h',
+    prixHoraireEffectif(db, terrain, '2026-09-15', '10:00', 'entier'),
+    35000,
+  );
+  h.assertEqual(
+    'calculerPrixReservation applique règle semaine',
+    calculerPrixReservation(db, terrain, '2026-09-15', '10:00', '11:00', 'entier'),
+    35000,
+  );
+
   const grille = grilleTarifs(db, terrain);
   h.assert('grille contient cellules', grille.cellules.length > 0);
   h.assertEqual('grille % avance', grille.pourcentage_avance, 12.5);

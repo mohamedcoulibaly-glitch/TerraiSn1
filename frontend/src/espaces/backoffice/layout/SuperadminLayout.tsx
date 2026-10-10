@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Sparkles,
   MessageCircle,
+  KeyRound,
   CircleDot,
   ClipboardList,
   UserCog,
@@ -70,6 +71,7 @@ const FALLBACK_CRUMBS: Record<string, string> = {
   abonnements: "Abonnements",
   commodites: "Commodités",
   whatsapp: "WhatsApp",
+  integrations: "Intégrations",
   audit: "Audit",
 };
 
@@ -120,7 +122,8 @@ const SECTIONS: { title: string; items: NavEntry[] }[] = [
     items: [
       { kind: "link", to: "/backoffice/superadmin/commodites", label: "Commodités", icon: Sparkles },
       { kind: "link", to: "/backoffice/superadmin/audit", label: "Audit", icon: ClipboardList },
-      { kind: "link", to: "/backoffice/superadmin/whatsapp", label: "Paramètres", icon: MessageCircle },
+      { kind: "link", to: "/backoffice/superadmin/integrations", label: "Intégrations", icon: KeyRound },
+      { kind: "link", to: "/backoffice/superadmin/whatsapp", label: "WhatsApp", icon: MessageCircle },
     ],
   },
 ];
