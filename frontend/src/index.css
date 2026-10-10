@@ -282,8 +282,10 @@
     width: 100%;
     min-height: 100dvh;
     overflow-x: hidden;
+    overflow-y: auto;
     overscroll-behavior-x: none;
-    overscroll-behavior-y: none; /* Désactive le pull-to-refresh natif */
+    /* contain (pas none) : conserve le scroll trackpad 2 doigts */
+    overscroll-behavior-y: contain;
     background-color: var(--bg);
     color: var(--text-primary);
     transition: background-color 0.2s ease, color 0.2s ease;
@@ -1052,6 +1054,24 @@
   font-family: var(--sa-font), 'Outfit', sans-serif;
   color: var(--sa-text);
   background-color: var(--sa-bg);
+  overflow: visible; /* ne pas bloquer le scroll principal */
+}
+
+/* Zone de contenu scrollable superadmin (trackpad 2 doigts) */
+.superadmin-content {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+.superadmin-sidebar {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .dark .superadmin-app {

@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+/** Fix icônes Leaflet obligatoire en bundler React (sinon marqueurs invisibles). */
+delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
 
 type MapTerrainProps = {
   latitude?: number | null;
@@ -10,10 +20,9 @@ type MapTerrainProps = {
   active?: boolean;
 };
 
-/** Tuiles Carto Voyager (lisibilité labels + retina). */
-const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-const TILE_ATTR =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+/** Tuiles OpenStreetMap gratuites — aucune clé API. */
+const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const TILE_ATTR = "© OpenStreetMap contributors";
 
 export default function MapTerrain({
   latitude,
@@ -33,61 +42,58 @@ export default function MapTerrain({
       setReady(false);
       return;
     }
-    let cancelled = false;
-    let map: { remove: () => void } | null = null;
-    async function boot() {
-      const leafletMod = await import("leaflet");
-      await import("leaflet/dist/leaflet.css");
-      const L = leafletMod.default;
-      if (cancelled || !mapElRef.current) return;
-      const instance = L.map(mapElRef.current, {
-        zoomControl: true,
-        dragging: true,
-        scrollWheelZoom: false,
-        preferCanvas: true,
-      }).setView([lat, lng], 16);
-      L.tileLayer(TILE_URL, {
-        maxZoom: 20,
-        maxNativeZoom: 20,
-        attribution: TILE_ATTR,
-        subdomains: "abcd",
-        detectRetina: true,
-      }).addTo(instance);
-      const success =
-        getComputedStyle(document.documentElement).getPropertyValue("--color-success").trim() ||
-        getComputedStyle(document.documentElement).getPropertyValue("--primary").trim() ||
-        "#059669";
-      const icon = L.divIcon({
-        className: "map-terrain-marker",
-        html: `<div class="map-terrain-pin" style="--pin:${success}"><span></span></div>`,
-        iconSize: [40, 48],
-        iconAnchor: [20, 46],
+    if (!mapElRef.current) return;
+
+    const instance = L.map(mapElRef.current, {
+      zoomControl: true,
+      dragging: true,
+      scrollWheelZoom: false,
+      preferCanvas: true,
+    }).setView([lat, lng], 16);
+
+    L.tileLayer(TILE_URL, {
+      maxZoom: 19,
+      attribution: TILE_ATTR,
+    }).addTo(instance);
+
+    const success =
+      getComputedStyle(document.documentElement).getPropertyValue("--color-success").trim() ||
+      getComputedStyle(document.documentElement).getPropertyValue("--primary").trim() ||
+      "#059669";
+
+    const icon = L.divIcon({
+      className: "map-terrain-marker",
+      html: `<div class="map-terrain-pin" style="--pin:${success}"><span></span></div>`,
+      iconSize: [40, 48],
+      iconAnchor: [20, 46],
+    });
+
+    const marker = L.marker([lat, lng], { icon, draggable: false }).addTo(instance);
+    const label = [nom, quartier].filter(Boolean).join(" · ");
+    if (label) {
+      marker.bindTooltip(label, {
+        direction: "top",
+        offset: [0, -40],
+        className: "map-terrain-tooltip",
+        opacity: 1,
       });
-      const marker = L.marker([lat, lng], { icon, draggable: false }).addTo(instance);
-      const label = [nom, quartier].filter(Boolean).join(" · ");
-      if (label) {
-        marker.bindTooltip(label, {
-          direction: "top",
-          offset: [0, -40],
-          className: "map-terrain-tooltip",
-          opacity: 1,
-        });
-      }
-      L.circle([lat, lng], {
-        radius: 45,
-        color: success,
-        fillColor: success,
-        fillOpacity: 0.12,
-        weight: 1.5,
-      }).addTo(instance);
-      map = instance;
-      setTimeout(() => instance.invalidateSize(), 100);
-      setReady(true);
     }
-    void boot();
+
+    L.circle([lat, lng], {
+      radius: 45,
+      color: success,
+      fillColor: success,
+      fillOpacity: 0.12,
+      weight: 1.5,
+    }).addTo(instance);
+
+    const t = window.setTimeout(() => instance.invalidateSize(), 100);
+    setReady(true);
+
     return () => {
-      cancelled = true;
-      map?.remove();
+      window.clearTimeout(t);
+      instance.remove();
+      setReady(false);
     };
   }, [hasCoords, lat, lng, nom, quartier, active]);
 

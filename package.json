@@ -10,7 +10,13 @@
     "accounts": "node dev.js --accounts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "db:logs": "docker compose logs -f postgres"
+    "db:logs": "docker compose logs -f postgres",
+    "test": "npm --prefix backend run test && npm --prefix frontend run test",
+    "test:backend": "npm --prefix backend run test",
+    "test:frontend": "npm --prefix frontend run test",
+    "test:unit": "npm --prefix backend run test:unit",
+    "test:parcours": "npm --prefix backend run test:parcours",
+    "test:mohamed:full": "npm --prefix backend run test:mohamed:full"
   },
   "engines": {
     "node": ">=18"

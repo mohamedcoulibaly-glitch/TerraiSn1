@@ -13,6 +13,7 @@ export const gerantLiveKeys = {
 export type GerantTodayPayload = {
   date: string;
   reservations: any[];
+  ferme?: boolean;
 };
 
 function sortByHeure(reservations: any[]) {
@@ -74,10 +75,13 @@ export function useGerantToday(date?: string | null, enabled = true) {
     queryKey: key,
     enabled,
     queryFn: async () => {
-      const data = (await gerantApi.reservationsToday(dateKey)) as GerantTodayPayload;
+      const data = (await gerantApi.reservationsToday(dateKey)) as GerantTodayPayload & {
+        ferme?: boolean;
+      };
       const payload: GerantTodayPayload = {
         date: data.date || dateKey || localYmd(),
         reservations: sortByHeure(data.reservations || []),
+        ferme: Boolean(data.ferme),
       };
       writeSwrCache(key, payload);
       // Aussi écrire la clé "auto" pour le retour PWA sans date figée

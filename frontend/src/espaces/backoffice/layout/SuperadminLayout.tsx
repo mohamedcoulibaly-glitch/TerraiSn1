@@ -14,7 +14,6 @@ import {
   LogOut,
   ExternalLink,
   Sparkles,
-  MessageCircle,
   CircleDot,
   ClipboardList,
   UserCog,
@@ -22,6 +21,8 @@ import {
   Shield,
   ChevronDown,
 } from "lucide-react";
+import { WhatsAppLucideIcon } from "@/components/WhatsAppIcon";
+import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
@@ -120,7 +121,7 @@ const SECTIONS: { title: string; items: NavEntry[] }[] = [
     items: [
       { kind: "link", to: "/backoffice/superadmin/commodites", label: "Commodités", icon: Sparkles },
       { kind: "link", to: "/backoffice/superadmin/audit", label: "Audit", icon: ClipboardList },
-      { kind: "link", to: "/backoffice/superadmin/whatsapp", label: "Paramètres", icon: MessageCircle },
+      { kind: "link", to: "/backoffice/superadmin/whatsapp", label: "WhatsApp", icon: WhatsAppLucideIcon as LucideIcon },
     ],
   },
 ];
@@ -154,7 +155,7 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
 
   return (
     <aside
-      className="sa-sidebar flex flex-col h-full shrink-0 overflow-x-hidden overflow-y-auto"
+      className="sa-sidebar superadmin-sidebar flex flex-col h-full shrink-0"
       style={{
         width: "var(--sa-sidebar-width)",
         minWidth: "var(--sa-sidebar-width)",
@@ -384,9 +385,9 @@ export default function SuperadminLayout() {
           </div>
         ) : null}
 
-        <div className="sa-shell-main min-h-screen flex flex-col">
+        <div className="sa-shell-main h-screen flex flex-col overflow-hidden">
           <header
-            className="sticky top-0 z-30 flex items-center justify-between gap-3 px-5 md:px-8"
+            className="shrink-0 z-30 flex items-center justify-between gap-3 px-5 md:px-8"
             style={{
               height: "var(--sa-header-height)",
               background: "var(--sa-surface)",
@@ -455,7 +456,7 @@ export default function SuperadminLayout() {
             </div>
           </header>
           <WhatsAppInfraBanner visible={waDown} tone="superadmin" />
-          <main className="flex-1 min-w-0 px-5 py-6 md:px-8 md:py-8">
+          <main className="superadmin-content flex-1 min-w-0 px-5 py-6 md:px-8 md:py-8">
             <div className="max-w-[1280px] mx-auto w-full min-w-0">
               <Outlet />
             </div>

@@ -11,7 +11,7 @@ type HeroVideoProps = {
  */
 export default function HeroVideo({
   className = "",
-  fallbackClassName = "bg-[#0B1F17]",
+  fallbackClassName = "",
 }: HeroVideoProps) {
   const ref = useRef<HTMLVideoElement>(null);
   const [ready, setReady] = useState(false);
@@ -40,7 +40,11 @@ export default function HeroVideo({
   }, []);
 
   return (
-    <div className={`absolute inset-0 overflow-hidden ${fallbackClassName}`} aria-hidden="true">
+    <div
+      className={`absolute inset-0 overflow-hidden ${fallbackClassName}`.trim()}
+      style={{ background: "var(--color-primary-dark, #063D24)" }}
+      aria-hidden="true"
+    >
       <video
         ref={ref}
         autoPlay
@@ -48,9 +52,11 @@ export default function HeroVideo({
         muted
         playsInline
         preload="auto"
-        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
-          ready ? "opacity-100" : "opacity-0"
-        } ${className}`.trim()}
+        className={`absolute inset-0 h-full w-full object-cover ${className}`.trim()}
+        style={{
+          opacity: ready ? 1 : 0,
+          transition: "opacity 0.4s ease",
+        }}
       >
         <source src="/videos/terrainsn-hero.mp4" type="video/mp4" />
       </video>

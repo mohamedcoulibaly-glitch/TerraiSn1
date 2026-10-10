@@ -1,5 +1,5 @@
 import { calculerMontantAvance } from "@/lib/avance";
-import { ArrowLeft, ShieldCheck, MessageCircle, Check, Handshake, Phone } from "lucide-react";
+import { ArrowLeft, ShieldCheck, Handshake, Phone, CreditCard, Loader2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { reservationsApi } from "@/lib/api";
@@ -17,7 +17,6 @@ import omIcon from "@/assets/images.png";
 import waveIcon from "@/assets/wave-banque-en-ligne-au-senegal-pour-paiement-transfert-argents.jpg";
 
 type PaymentDraft = {
-  selected: "wave" | "orange_money" | "";
   name: string;
   phone: string;
 };
@@ -41,13 +40,10 @@ const Payment = () => {
   const payDraftKey = `joueur:paiement:${id || "x"}:${date}:${slot}:${fieldFormat}`;
   const [payDraft, setPayDraft, { clear: clearPayDraft }] = usePersistedState<PaymentDraft>(
     payDraftKey,
-    { selected: "wave", name: "", phone: "" },
+    { name: "", phone: "" },
   );
-  const selected = payDraft.selected;
   const name = payDraft.name;
   const phone = payDraft.phone;
-  const setSelected = (v: "wave" | "orange_money" | "") =>
-    setPayDraft((d) => ({ ...d, selected: v }));
   const setName = (v: string) => setPayDraft((d) => ({ ...d, name: v }));
   const setPhone = (v: string) => setPayDraft((d) => ({ ...d, phone: v }));
   const [processing, setProcessing] = useState(false);
@@ -81,15 +77,6 @@ const Payment = () => {
       })()
     : "";
 
-  const getWhatsAppLink = () => {
-    if (!terrain?.employe?.whatsapp_number) return null;
-    const numero = terrain.employe.whatsapp_number.replace(/[^0-9]/g, "");
-    const message = encodeURIComponent(
-      `Bonjour, je souhaite réserver le terrain ${terrain.nom} le ${date} de ${slot} à ${endTime}. Montant : ${montant.toLocaleString()} FCFA. Merci de confirmer.`
-    );
-    return `https://wa.me/${numero}?text=${message}`;
-  };
-
   const handlePay = async () => {
     if (processing) return;
     if (enLigneIndispo) {
@@ -99,7 +86,6 @@ const Payment = () => {
       );
       return;
     }
-    if (!sansAvance && !selected) return;
     const phoneErr = phoneError(phone);
     if (!name.trim() || phoneErr) {
       toast.error(phoneErr || "Veuillez saisir votre nom et numéro de téléphone");
@@ -128,7 +114,7 @@ const Payment = () => {
         return;
       }
 
-      if (!reservation.redirect_url) throw new Error("Lien PayTech indisponible");
+      if (!reservation.redirect_url) throw new Error("Lien de paiement indisponible");
       window.location.assign(reservation.redirect_url);
     } catch (err: unknown) {
       const error = err as Error & {
@@ -150,22 +136,6 @@ const Payment = () => {
     }
   };
 
-  const payLabel = sansAvance
-    ? "Confirmer ma réservation"
-    : selected === "wave"
-      ? `Payer ${deposit.toLocaleString()} FCFA avec Wave`
-      : selected === "orange_money"
-        ? `Payer ${deposit.toLocaleString()} FCFA avec Orange Money`
-        : "Choisis un mode de paiement";
-
-  const payBg = sansAvance
-    ? "bg-[var(--color-primary)] hover:opacity-90"
-    : selected === "wave"
-      ? "bg-[var(--color-wave)] hover:bg-[var(--color-wave-dark)]"
-      : selected === "orange_money"
-        ? "bg-[var(--color-orange-money)] hover:opacity-90"
-        : "bg-[var(--color-text-muted)]";
-
   if (isInitialLoading && !terrain) {
     return (
       <div className="page-container page-enter pb-32">
@@ -180,7 +150,7 @@ const Payment = () => {
   }
 
   return (
-    <div className="page-container page-enter pb-32">
+    <div className="page-container page-enter pb-40">
       <SilentSyncDot active={isRefetching && Boolean(terrain)} label="Mise à jour" />
       <div className="flex items-center gap-3 responsive-padding py-4">
         <button
@@ -192,7 +162,10 @@ const Payment = () => {
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div>
-          <p className="font-semibold text-sm text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
+          <p
+            className="font-semibold text-sm text-[var(--color-primary)]"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
             {sansAvance ? "Confirmation" : "Paiement"}
           </p>
           <p className="text-[11px] text-[var(--color-text-muted)]">
@@ -219,6 +192,7 @@ const Payment = () => {
             ) : null}
           </div>
         ) : null}
+
         {terrain && (
           <div className="bg-[var(--surface)] rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] border border-[var(--color-border)] p-4">
             <div className="flex items-center gap-3">
@@ -228,12 +202,16 @@ const Payment = () => {
                 className="w-[60px] h-[60px] rounded-[var(--radius-md)] object-cover"
               />
               <div className="min-w-0 flex-1">
-                <h3 className="font-semibold text-sm truncate" style={{ fontFamily: "var(--font-display)" }}>
+                <h3
+                  className="font-semibold text-sm truncate"
+                  style={{ fontFamily: "var(--font-display)" }}
+                >
                   {terrain.nom}
                 </h3>
                 {slot && (
                   <p className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
                     {date} · {slot} – {endTime}
+                    {dureeHours ? ` · ${dureeHours}h` : ""}
                   </p>
                 )}
               </div>
@@ -250,9 +228,13 @@ const Payment = () => {
                   </p>
                 </div>
                 <p className="text-[13px] text-[var(--color-text-secondary)]">
-                  Ce terrain fonctionne sans paiement en ligne. Tu régleras directement sur place le jour du match.
+                  Ce terrain fonctionne sans paiement en ligne. Tu régleras directement sur place le
+                  jour du match.
                 </p>
-                <p className="text-[18px] font-bold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
+                <p
+                  className="text-[18px] font-bold text-[var(--color-primary)]"
+                  style={{ fontFamily: "var(--font-display)" }}
+                >
                   {montant.toLocaleString()} FCFA sur place
                 </p>
               </div>
@@ -260,84 +242,36 @@ const Payment = () => {
               <div className="space-y-3">
                 <div className="flex justify-between text-sm">
                   <span className="text-[var(--color-text-muted)]">Prix total</span>
-                  <span className="text-[var(--color-text-secondary)]">{montant.toLocaleString()} FCFA</span>
+                  <span className="text-[var(--color-text-secondary)]">
+                    {montant.toLocaleString()} FCFA
+                  </span>
                 </div>
                 <div className="rounded-[var(--radius-md)] bg-[var(--color-primary-glow)] p-3 flex justify-between items-center">
-                  <span className="text-sm text-[var(--color-text-primary)]">Avance à payer maintenant</span>
-                  <span className="text-[18px] font-bold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
+                  <span className="text-sm text-[var(--color-text-primary)]">
+                    Avance à payer maintenant
+                  </span>
+                  <span
+                    className="text-[18px] font-bold text-[var(--color-primary)]"
+                    style={{ fontFamily: "var(--font-display)" }}
+                  >
                     {deposit.toLocaleString()} FCFA
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <div>
-                    <span className="text-[var(--color-text-secondary)]">Reste le jour du match</span>
-                    <p className="text-[12px] text-[var(--color-text-muted)]">À payer directement au gérant</p>
+                    <span className="text-[var(--color-text-secondary)]">Reste sur place</span>
+                    <p className="text-[12px] text-[var(--color-text-muted)]">
+                      À payer directement au gérant
+                    </p>
                   </div>
-                  <span className="text-[var(--color-text-secondary)] font-medium">{reste.toLocaleString()} FCFA</span>
+                  <span className="text-[var(--color-text-secondary)] font-medium">
+                    {reste.toLocaleString()} FCFA
+                  </span>
                 </div>
               </div>
             )}
           </div>
         )}
-
-        {!sansAvance ? (
-          <div>
-            <h2 className="text-[15px] font-semibold mb-3">Comment tu veux payer ?</h2>
-            <div className="flex flex-col gap-3">
-              <button
-                type="button"
-                onClick={() => setSelected("wave")}
-                className={`flex items-center gap-3 p-4 rounded-[var(--radius-lg)] border-2 text-left ${
-                  selected === "wave"
-                    ? "border-[var(--color-wave)] bg-[#E0F7FD]"
-                    : "border-[var(--color-border)] bg-[var(--surface)]"
-                }`}
-              >
-                <div className="w-11 h-11 rounded-full bg-[var(--color-wave)] overflow-hidden flex items-center justify-center">
-                  <img src={waveIcon} alt="" className="w-full h-full object-cover" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm">Wave</p>
-                  <p className="text-[12px] text-[var(--color-text-muted)]">Paiement instantané</p>
-                </div>
-                <span
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                    selected === "wave" ? "border-[var(--color-wave)] bg-[var(--color-wave)] text-white" : "border-[var(--color-border-strong)]"
-                  }`}
-                >
-                  {selected === "wave" && <Check className="w-3 h-3" />}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSelected("orange_money")}
-                className={`flex items-center gap-3 p-4 rounded-[var(--radius-lg)] border-2 text-left ${
-                  selected === "orange_money"
-                    ? "border-[var(--color-orange-money)] bg-[#FFF3E0]"
-                    : "border-[var(--color-border)] bg-[var(--surface)]"
-                }`}
-              >
-                <div className="w-11 h-11 rounded-full bg-[var(--color-orange-money)] overflow-hidden flex items-center justify-center">
-                  <img src={omIcon} alt="" className="w-full h-full object-cover" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm">Orange Money</p>
-                  <p className="text-[12px] text-[var(--color-text-muted)]">Paiement mobile</p>
-                </div>
-                <span
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                    selected === "orange_money"
-                      ? "border-[var(--color-orange-money)] bg-[var(--color-orange-money)] text-white"
-                      : "border-[var(--color-border-strong)]"
-                  }`}
-                >
-                  {selected === "orange_money" && <Check className="w-3 h-3" />}
-                </span>
-              </button>
-            </div>
-          </div>
-        ) : null}
 
         <div className="space-y-3">
           <div>
@@ -369,36 +303,56 @@ const Payment = () => {
             </div>
           </div>
         </div>
-
-        {terrain?.employe?.whatsapp_number && (
-          <a
-            href={getWhatsAppLink() || "#"}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center gap-2 w-full h-12 rounded-[var(--radius-md)] text-white text-sm font-medium"
-            style={{ backgroundColor: "#25D366" }}
-          >
-            <MessageCircle className="w-5 h-5" />
-            Confirmer via WhatsApp
-          </a>
-        )}
       </div>
 
       <div className="fixed bottom-16 inset-x-0 z-30 border-t border-[var(--color-border)] bg-[var(--surface)] px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-        <div className="max-w-lg mx-auto">
-          <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] mb-2 justify-center">
+        <div className="max-w-lg mx-auto space-y-2">
+          <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] justify-center">
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--color-primary)]" />
             {sansAvance ? "Confirmation directe" : "Paiement sécurisé"}
           </div>
           <button
             type="button"
             onClick={handlePay}
-            disabled={processing || enLigneIndispo || (!sansAvance && !selected)}
-            className={`w-full h-14 rounded-[var(--radius-lg)] text-white text-sm font-semibold disabled:opacity-50 ${payBg}`}
+            disabled={processing || enLigneIndispo}
+            className="w-full h-[52px] rounded-[14px] bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
             style={{ fontFamily: "var(--font-display)" }}
           >
-            {processing ? (sansAvance ? "Confirmation en cours..." : "Traitement...") : payLabel}
+            {processing ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin text-white" />
+                {sansAvance ? "Confirmation en cours..." : "Redirection en cours..."}
+              </>
+            ) : sansAvance ? (
+              "Confirmer ma réservation"
+            ) : (
+              <>
+                <CreditCard className="w-5 h-5" />
+                {`Payer ${deposit.toLocaleString()} FCFA`}
+              </>
+            )}
           </button>
+          {!sansAvance ? (
+            <p className="flex items-center justify-center gap-2 text-[12px] text-[var(--color-text-muted)] text-center pointer-events-none select-none">
+              <img
+                src={waveIcon}
+                alt=""
+                width={16}
+                height={16}
+                className="w-4 h-4 rounded-sm object-cover grayscale opacity-60"
+                aria-hidden
+              />
+              <img
+                src={omIcon}
+                alt=""
+                width={16}
+                height={16}
+                className="w-4 h-4 rounded-sm object-cover grayscale opacity-60"
+                aria-hidden
+              />
+              <span>Paiement sécurisé via Wave ou Orange Money</span>
+            </p>
+          ) : null}
         </div>
       </div>
     </div>

@@ -67,6 +67,9 @@ export default function TerrainFiche() {
   const [auditPhotos, setAuditPhotos] = useState<AuditPhotoRow[]>([]);
   const [auditCommodites, setAuditCommodites] = useState<AuditCommoditeRow[]>([]);
   const [features, setFeatures] = useState<TerrainFeature[]>([]);
+  const [typesLocation, setTypesLocation] = useState<"demi_terrain" | "entier" | "les_deux">("les_deux");
+  const [dureeMinMinutes, setDureeMinMinutes] = useState(60);
+  const [savingLocationCfg, setSavingLocationCfg] = useState(false);
 
   useSaCrumbs([
     { label: "Terrains", to: "/backoffice/superadmin/terrains" },
@@ -96,6 +99,12 @@ export default function TerrainFiche() {
         setAdresseNominatim(found.adresse_nominatim || "");
         setLatitude(toCoord(found.latitude));
         setLongitude(toCoord(found.longitude));
+        const tl = String(found.types_location || "les_deux");
+        setTypesLocation(
+          tl === "demi_terrain" || tl === "entier" || tl === "les_deux" ? tl : "les_deux",
+        );
+        const dm = Number(found.duree_min_minutes);
+        setDureeMinMinutes([60, 90, 120, 180].includes(dm) ? dm : 60);
       }
     });
 
@@ -269,6 +278,7 @@ export default function TerrainFiche() {
       ) : null}
 
       {tab === "infos" ? (
+        <div className="space-y-4">
         <section className="rounded-xl p-5 space-y-3" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
           <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[13px]">
             <div>
@@ -310,6 +320,85 @@ export default function TerrainFiche() {
             />
           </div>
         </section>
+
+        <section className="rounded-xl p-5 space-y-4" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
+          <div>
+            <h2 className="text-sm font-semibold" style={{ color: "var(--sa-text)" }}>
+              Configuration location
+            </h2>
+            <p className="text-[12px] mt-1" style={{ color: "var(--sa-muted)" }}>
+              Répercussion immédiate sur les interfaces joueur et gérant.
+            </p>
+          </div>
+
+          <fieldset className="space-y-2">
+            <legend className="text-[12px] font-semibold mb-1" style={{ color: "var(--sa-text-2)" }}>
+              Type de location autorisé
+            </legend>
+            {(
+              [
+                { value: "les_deux", label: "Les deux" },
+                { value: "demi_terrain", label: "Demi-terrain seulement" },
+                { value: "entier", label: "Terrain entier seulement" },
+              ] as const
+            ).map((opt) => (
+              <label key={opt.value} className="flex items-center gap-2 text-[13px] cursor-pointer">
+                <input
+                  type="radio"
+                  name="types_location"
+                  checked={typesLocation === opt.value}
+                  onChange={() => setTypesLocation(opt.value)}
+                />
+                <span style={{ color: "var(--sa-text)" }}>{opt.label}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <div>
+            <label className="block text-[12px] font-semibold mb-1.5" style={{ color: "var(--sa-text-2)" }}>
+              Durée de réservation
+            </label>
+            <p
+              className="inline-flex h-10 items-center rounded-lg px-3 text-[13px] font-semibold"
+              style={{ background: "var(--sa-surface-2)", color: "var(--sa-text)", border: "1px solid var(--sa-border)" }}
+            >
+              1h
+            </p>
+            <p className="mt-1.5 text-[11px]" style={{ color: "var(--sa-muted)" }}>
+              Seule durée proposée en ligne (joueur &amp; express gérant). Au-delà : appel gérant /
+              tournoi / tarif négocié.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            disabled={savingLocationCfg}
+            onClick={() => {
+              void (async () => {
+                setSavingLocationCfg(true);
+                try {
+                  const updated = await superAdminApi.locationConfig(terrainId, {
+                    types_location: typesLocation,
+                    duree_min_minutes: 60,
+                  });
+                  setDureeMinMinutes(60);
+                  setTerrain((prev: any) => (prev ? { ...prev, ...updated } : prev));
+                  toast.success("Configuration mise à jour ✓");
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
+                } finally {
+                  setSavingLocationCfg(false);
+                }
+              })();
+            }}
+            className="min-h-[44px] px-5 rounded-lg text-[13px] font-semibold text-white inline-flex items-center gap-2"
+            style={{ background: "var(--sa-primary)", opacity: savingLocationCfg ? 0.6 : 1 }}
+          >
+            {savingLocationCfg ? <Loader2 size={14} className="animate-spin" /> : null}
+            Enregistrer
+          </button>
+        </section>
+        </div>
       ) : null}
 
       {tab === "localisation" ? (

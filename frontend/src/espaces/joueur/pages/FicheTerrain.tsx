@@ -2,9 +2,9 @@ import { calculerMontantAvance } from "@/lib/avance";
 import SkeletonFicheTerrain from "@/components/skeletons/SkeletonFicheTerrain";
 import SilentSyncDot from "@/components/SilentSyncDot";
 import CommoditesSection from "@/components/CommoditesSection";
-import { ArrowLeft, MapPin, Star, Clock, Heart, Info, MessageCircle, X, ChevronDown, Navigation, Phone } from "lucide-react";
+import { ArrowLeft, MapPin, Star, Clock, Heart, Info, X, ChevronDown, Navigation, Phone, Calendar } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { terrainsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
@@ -15,13 +15,16 @@ import { useTerrainEvents } from "@/hooks/useTerrainEvents";
 import { featureEnabled } from "@/lib/terrainFeatures";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
 import { useTerrainFullDetails } from "@/hooks/useJoueurData";
-import { localYmd } from "@/lib/localDate";
+import { addDaysYmd, localYmd } from "@/lib/localDate";
 import { hapticSelection, hapticSuccess } from "@/lib/haptics";
 import SkeletonCreneaux from "@/components/skeletons/SkeletonCreneaux";
 import { usePersistedState } from "@/hooks/usePersistedState";
+import DatePickerSheet from "@/espaces/backoffice/components/DatePickerSheet";
 
 type FicheDraft = {
   selectedDate: number;
+  /** Date hors des 7 chips (calendrier). */
+  customIsoDate?: string | null;
   selectedSlot: string | null;
   selectedDuration: number;
   fieldFormat: string;
@@ -89,12 +92,8 @@ function getEndTime(startSlot: string, durationHours: number) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-const DUREES_FALLBACK = [
-  { label: "1h", hours: 1, minutes: 60 },
-  { label: "1h30", hours: 1.5, minutes: 90 },
-  { label: "2h", hours: 2, minutes: 120 },
-  { label: "3h", hours: 3, minutes: 180 },
-] as const;
+/** Réservation en ligne = 1 h uniquement. Au-delà → appeler le gérant. */
+const DUREES_FALLBACK = [{ label: "1h", hours: 1, minutes: 60 }] as const;
 
 type FormatOption = { cle: string; label: string; prix_heure: number; map_grille?: string | null };
 type DureeOption = { label: string; hours: number; minutes: number };
@@ -108,12 +107,14 @@ const FieldDetails = () => {
     draftKey,
     {
       selectedDate: 1,
+      customIsoDate: null,
       selectedSlot: null,
       selectedDuration: 1,
       fieldFormat: "moitie",
     },
   );
   const selectedDate = draft.selectedDate;
+  const customIsoDate = draft.customIsoDate || null;
   const selectedSlot = draft.selectedSlot;
   const selectedDuration = draft.selectedDuration;
   const fieldFormat = draft.fieldFormat;
@@ -150,24 +151,87 @@ const FieldDetails = () => {
   const [fav, setFav] = useState(false);
   const [carouselPaused, setCarouselPaused] = useState(false);
   const [avisOpen, setAvisOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const slotsSectionRef = useRef<HTMLDivElement | null>(null);
+  const reserveCtaRef = useRef<HTMLDivElement | null>(null);
   const carouselRef = useRef<HTMLDivElement | null>(null);
   const pauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const dates = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setHours(12, 0, 0, 0);
-    d.setDate(d.getDate() + i);
-    return {
-      day: d.getDate(),
-      weekday: ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"][d.getDay()],
-      month: ["Jan", "Fév", "Mar", "Avr", "Mai", "Jun", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"][d.getMonth()],
-      isToday: i === 0,
-      isTomorrow: i === 1,
-      isoDate: toLocalISO(d),
-      shortLabel: i === 0 ? "Auj." : i === 1 ? "Demain" : null,
-    };
-  });
+  const baseDates = useMemo(
+    () =>
+      Array.from({ length: 7 }, (_, i) => {
+        const d = new Date();
+        d.setHours(12, 0, 0, 0);
+        d.setDate(d.getDate() + i);
+        return {
+          day: d.getDate(),
+          weekday: ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"][d.getDay()],
+          month: ["Jan", "Fév", "Mar", "Avr", "Mai", "Jun", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"][
+            d.getMonth()
+          ],
+          isToday: i === 0,
+          isTomorrow: i === 1,
+          isoDate: toLocalISO(d),
+          shortLabel: i === 0 ? "Auj." : i === 1 ? "Demain" : null,
+          fromCalendar: false,
+        };
+      }),
+    [],
+  );
+
+  const dates = useMemo(() => {
+    if (!customIsoDate || baseDates.some((d) => d.isoDate === customIsoDate)) {
+      return baseDates;
+    }
+    const d = new Date(`${customIsoDate}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return baseDates;
+    return [
+      ...baseDates,
+      {
+        day: d.getDate(),
+        weekday: ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"][d.getDay()],
+        month: ["Jan", "Fév", "Mar", "Avr", "Mai", "Jun", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"][
+          d.getMonth()
+        ],
+        isToday: false,
+        isTomorrow: false,
+        isoDate: customIsoDate,
+        shortLabel: null as string | null,
+        fromCalendar: true,
+      },
+    ];
+  }, [baseDates, customIsoDate]);
+
+  const choisirDateCalendrier = (ymd: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
+    const today = localYmd();
+    if (ymd < today) {
+      toast.error("Impossible de sélectionner une date passée");
+      return;
+    }
+    const idx = baseDates.findIndex((d) => d.isoDate === ymd);
+    if (idx >= 0) {
+      setDraft((d) => ({
+        ...d,
+        customIsoDate: null,
+        selectedDate: idx,
+        selectedSlot: null,
+      }));
+      return;
+    }
+    setDraft((d) => ({
+      ...d,
+      customIsoDate: ymd,
+      selectedDate: baseDates.length,
+      selectedSlot: null,
+    }));
+  };
+
+  // Garde l'index valide si la date custom disparaît / draft legacy
+  useEffect(() => {
+    if (selectedDate >= 0 && selectedDate < dates.length) return;
+    setSelectedDate(Math.min(1, Math.max(0, dates.length - 1)));
+  }, [selectedDate, dates.length]);
 
   useEffect(() => {
     if (!galleryOpen) return;
@@ -220,7 +284,9 @@ const FieldDetails = () => {
 
   useEffect(() => {
     if (!terrain) return;
-    const formats: FormatOption[] =
+    const typesLoc = String(terrain.types_location || "les_deux");
+
+    let formats: FormatOption[] =
       Array.isArray(terrain.formats) && terrain.formats.length
         ? terrain.formats.map((f: any) => ({
             cle: String(f.cle),
@@ -242,23 +308,47 @@ const FieldDetails = () => {
               map_grille: "entier",
             },
           ];
+
+    // 6a — types_location : filtrer demi / entier / les deux
+    if (typesLoc === "demi_terrain") {
+      formats = formats.filter(
+        (f) => f.map_grille === "demi" || f.cle === "moitie" || /demi/i.test(f.label),
+      );
+    } else if (typesLoc === "entier") {
+      formats = formats.filter(
+        (f) => f.map_grille === "entier" || f.cle === "entier" || /entier/i.test(f.label),
+      );
+    }
+    if (!formats.length) {
+      formats =
+        typesLoc === "entier"
+          ? [
+              {
+                cle: "entier",
+                label: "Terrain entier",
+                prix_heure: Number(terrain.prix_entier || terrain.prix_heure || 0),
+                map_grille: "entier",
+              },
+            ]
+          : [
+              {
+                cle: "moitie",
+                label: "Demi-terrain",
+                prix_heure: Number(terrain.prix_moitie || 0),
+                map_grille: "demi",
+              },
+            ];
+    }
     setFormatsOpts(formats);
 
-    const durees: DureeOption[] =
-      Array.isArray(terrain.durees) && terrain.durees.length
-        ? terrain.durees.map((d: any) => ({
-            minutes: Number(d.minutes),
-            label: String(d.label || `${d.minutes} min`),
-            hours: Number(d.minutes) / 60,
-          }))
-        : [...DUREES_FALLBACK];
+    // Durée fixe 1 h — pas de sélecteur multi-durées
+    const durees: DureeOption[] = [{ label: "1h", hours: 1, minutes: 60 }];
     setDureesOpts(durees);
+    setSelectedDuration(1);
 
     if (!optionsBootstrapped) {
       const preferred = formats.find((f) => f.cle === "moitie") || formats[0];
       if (preferred) setFieldFormat(preferred.cle);
-      const preferredD = durees.find((d) => d.minutes === 60) || durees[0];
-      if (preferredD) setSelectedDuration(preferredD.hours);
       setOptionsBootstrapped(true);
     }
   }, [terrain, optionsBootstrapped]);
@@ -394,6 +484,9 @@ const FieldDetails = () => {
 
   const selectedDateMeta = dates[selectedDate];
   const slotEnd = selectedSlot ? getEndTime(selectedSlot, selectedDuration) : null;
+  const sansAvanceTerrain = ["sans_avance", "sans_acompte"].includes(
+    String(terrain?.politique_paiement || "").trim(),
+  );
   const stickyRecap = (() => {
     if (!hasSlot || !selectedSlot || !slotEnd) return null;
     const dayLabel = selectedDateMeta.isTomorrow
@@ -403,12 +496,17 @@ const FieldDetails = () => {
         : `${selectedDateMeta.weekday} ${selectedDateMeta.day}`;
     const dureeTxt =
       selectedDuration === 1.5 ? "1h30" : selectedDuration === 1 ? "1 heure" : `${selectedDuration} heures`;
+    const totalLabel = total.toLocaleString("fr-SN");
+    const avanceLabel = deposit.toLocaleString("fr-SN");
+    const resteLabel = Math.max(0, total - deposit).toLocaleString("fr-SN");
+    const paiementNote = sansAvanceTerrain
+      ? `Total ${totalLabel} FCFA — tu paies tout sur place le jour du match.`
+      : `${totalLabel} FCFA au total : tu paies l'avance de ${avanceLabel} FCFA maintenant, le reste (${resteLabel} FCFA) tu l'amènes le jour du match.`;
     return {
-      primary: `${total.toLocaleString("fr-SN")} FCFA`,
-      secondary: `${dayLabel} ${formatHourLabel(selectedSlot)} → ${formatHourLabel(slotEnd)} · ${dureeTxt} · ${
-        formatMeta?.label || fieldFormat
-      }`,
-      longNote: `Avance ${deposit.toLocaleString("fr-SN")} FCFA · Reste sur place ${Math.max(0, total - deposit).toLocaleString("fr-SN")} FCFA`,
+      creneau: `${dayLabel} · ${formatHourLabel(selectedSlot)} → ${formatHourLabel(slotEnd)} · ${dureeTxt}`,
+      format: formatMeta?.label || fieldFormat,
+      paiementNote,
+      avanceLabel,
     };
   })();
 
@@ -449,8 +547,6 @@ const FieldDetails = () => {
     navigate(path);
   };
 
-  const clearSlot = () => setSelectedSlot(null);
-
   const toggleFav = () => {
     if (!terrain?.id) return;
     const next = !fav;
@@ -460,16 +556,6 @@ const FieldDetails = () => {
     } catch {
       /* ignore */
     }
-  };
-
-  const getWhatsAppLink = () => {
-    if (!terrain?.employe?.whatsapp_number) return null;
-    const numero = terrain.employe.whatsapp_number.replace(/[^0-9]/g, "");
-    const dateStr = dates[selectedDate];
-    const message = encodeURIComponent(
-      `Bonjour, je souhaite réserver le terrain ${terrain.nom} le ${dateStr.day} ${dateStr.month} de ${selectedSlot || "..."} à ${selectedSlot ? getEndTime(selectedSlot, selectedDuration) : "..."}. Montant : ${total.toLocaleString()} FCFA.`
-    );
-    return `https://wa.me/${numero}?text=${message}`;
   };
 
   if (isInitialLoading) return <SkeletonFicheTerrain />;
@@ -515,9 +601,7 @@ const FieldDetails = () => {
 
   return (
     <div
-      className={`min-h-screen bg-[var(--bg)] page-enter transition-[padding] duration-300 ease-in-out ${
-        hasSlot ? "pb-[140px]" : "pb-[120px]"
-      }`}
+      className="min-h-screen bg-[var(--bg)] page-enter pb-[120px]"
     >
       <SilentSyncDot active={isRefetching} label="Mise à jour terrain" />
       {/* ═══ 1. HEADER VISUEL ═══ */}
@@ -698,33 +782,60 @@ const FieldDetails = () => {
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
               1 · Date
             </p>
-            <div className="flex gap-2 overflow-x-auto scrollbar-none snap-x">
-              {dates.map((d, i) => (
-                <button
-                  key={d.isoDate}
-                  type="button"
-                  onClick={() => {
-                    hapticSelection();
-                    setSelectedDate(i);
-                    setSelectedSlot(null);
-                  }}
-                  className={`flex flex-col items-center justify-center w-[58px] min-w-[58px] min-h-[70px] py-2 rounded-xl text-[11px] font-medium snap-start transition-colors ${
-                    selectedDate === i
-                      ? "bg-[var(--primary)] text-white shadow-sm"
-                      : "bg-white dark:bg-[var(--surface)] border border-gray-200 dark:border-[var(--border)] text-[var(--color-text-secondary)]"
-                  }`}
-                >
-                  <span className="opacity-80">
-                    {d.shortLabel || d.weekday}
-                  </span>
-                  <span className="text-[18px] font-bold mt-0.5">{d.day}</span>
-                </button>
-              ))}
+            <div className="flex gap-2 items-stretch">
+              <div className="flex flex-1 gap-2 overflow-x-auto scrollbar-none snap-x min-w-0">
+                {dates.map((d, i) => (
+                  <button
+                    key={d.isoDate}
+                    type="button"
+                    onClick={() => {
+                      hapticSelection();
+                      setDraft((prev) => ({
+                        ...prev,
+                        selectedDate: i,
+                        selectedSlot: null,
+                        customIsoDate: d.fromCalendar ? prev.customIsoDate : null,
+                      }));
+                    }}
+                    className={`flex flex-col items-center justify-center w-[58px] min-w-[58px] min-h-[70px] py-2 rounded-xl text-[11px] font-medium snap-start transition-colors ${
+                      selectedDate === i
+                        ? "bg-[var(--primary)] text-white shadow-sm"
+                        : "bg-white dark:bg-[var(--surface)] border border-gray-200 dark:border-[var(--border)] text-[var(--color-text-secondary)]"
+                    }`}
+                  >
+                    <span className="opacity-80">
+                      {d.shortLabel || d.weekday}
+                    </span>
+                    <span className="text-[18px] font-bold mt-0.5">{d.day}</span>
+                    {d.fromCalendar ? (
+                      <span className="text-[9px] mt-0.5 opacity-80">{d.month}</span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  hapticSelection();
+                  setCalendarOpen(true);
+                }}
+                className={`shrink-0 w-[52px] min-w-[52px] min-h-[70px] rounded-xl inline-flex flex-col items-center justify-center gap-0.5 text-[10px] font-semibold active:scale-95 transition-transform ${
+                  customIsoDate && selectedDate >= baseDates.length
+                    ? "bg-[var(--primary)] text-white shadow-sm"
+                    : "bg-white dark:bg-[var(--surface)] border border-gray-200 dark:border-[var(--border)] text-[var(--color-text-secondary)]"
+                }`}
+                aria-label="Choisir une date"
+                aria-expanded={calendarOpen}
+              >
+                <Calendar className="w-5 h-5" />
+                <span>Date</span>
+              </button>
             </div>
           </div>
 
           {/* Étape B — Format & Durée */}
           <div className={`py-4 border-b border-gray-100 dark:border-[var(--border)] space-y-4 ${!canBrowseSlots ? "opacity-50 pointer-events-none" : ""}`}>
+            {formatsOpts.length > 1 ? (
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
                 2 · Format
@@ -762,35 +873,32 @@ const FieldDetails = () => {
                 </p>
               ) : null}
             </div>
+            ) : formatsOpts[0] ? (
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Format : <span className="font-semibold text-[var(--color-text-primary)]">{formatsOpts[0].label}</span>
+              </p>
+            ) : null}
 
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
                 Durée
               </p>
-              <div className="flex flex-wrap gap-2">
-                {dureesOpts.map((d) => (
-                  <button
-                    key={d.label}
-                    type="button"
-                    onClick={() => {
-                      setSelectedDuration(d.hours);
-                      setSelectedSlot(null);
-                    }}
-                    className={`min-h-[44px] min-w-[64px] flex-1 rounded-xl text-sm font-semibold transition-colors ${
-                      selectedDuration === d.hours
-                        ? "bg-[var(--primary)] text-white"
-                        : "bg-white dark:bg-[var(--surface)] border border-gray-200 dark:border-[var(--border)] text-[var(--color-text-secondary)]"
-                    }`}
-                  >
-                    {d.label}
-                  </button>
-                ))}
+              <div className="flex items-center gap-2">
+                <span className="inline-flex min-h-[44px] min-w-[64px] items-center justify-center rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-white">
+                  1h
+                </span>
               </div>
-              {Math.abs(selectedDuration - 1) > 0.01 ? (
-                <p className="mt-2 text-[11px] text-amber-800 dark:text-amber-200">
-                  Durée différente de 1 h — le prix ci-dessous en tient compte.
-                </p>
-              ) : null}
+              <p className="mt-2 text-[11px] text-[var(--color-text-secondary)]">
+                Besoin de plus d&apos;heures (tournoi, séance longue…) ?{" "}
+                {gerantCallHref ? (
+                  <a href={gerantCallHref} className="font-semibold text-[var(--primary)] underline">
+                    Appelle le gérant
+                  </a>
+                ) : (
+                  <span className="font-semibold">Contacte le gérant</span>
+                )}{" "}
+                pour un tarif négocié.
+              </p>
             </div>
           </div>
 
@@ -836,6 +944,11 @@ const FieldDetails = () => {
                         onClick={() => {
                           hapticSelection();
                           setSelectedSlot(heure);
+                          window.setTimeout(() => {
+                            document
+                              .getElementById("cta-reserver-inline")
+                              ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                          }, 50);
                         }}
                         title={title}
                         className={`min-h-[52px] rounded-xl text-sm font-semibold transition-[transform,opacity] duration-200 border will-change-transform ${
@@ -888,6 +1001,43 @@ const FieldDetails = () => {
                 <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
                   Bleu = disponible · Gris = indisponible
                 </p>
+                {hasSlot && stickyRecap && canBrowseSlots ? (
+                  <div
+                    id="cta-reserver-inline"
+                    className="mt-4 rounded-2xl border border-[var(--color-border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-sm)] scroll-mt-24 space-y-3"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+                        {stickyRecap.creneau}
+                      </p>
+                      <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                        {stickyRecap.format}
+                      </p>
+                    </div>
+                    <p className="text-[13px] leading-snug text-[var(--color-text-secondary)]">
+                      {stickyRecap.paiementNote}
+                    </p>
+                    {canBookOnline ? (
+                      <button
+                        type="button"
+                        onClick={goToPayment}
+                        className="w-full min-h-[52px] rounded-xl bg-[var(--primary)] text-white text-sm font-semibold"
+                      >
+                        {sansAvanceTerrain
+                          ? "Réserver"
+                          : `Réserver · payer ${stickyRecap.avanceLabel} FCFA`}
+                      </button>
+                    ) : gerantCallHref ? (
+                      <a
+                        href={gerantCallHref}
+                        className="w-full min-h-[52px] rounded-xl bg-[var(--primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2"
+                      >
+                        <Phone className="w-4 h-4" />
+                        Appeler le gérant
+                      </a>
+                    ) : null}
+                  </div>
+                ) : null}
               </>
             )}
           </div>
@@ -926,31 +1076,10 @@ const FieldDetails = () => {
             )}
           </ul>
 
-          {terrain.employe?.whatsapp_number && !enLigneIndispo && (
-            <a
-              href={getWhatsAppLink() || "#"}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => {
-                if (!isAuthenticated) {
-                  e.preventDefault();
-                  toast.message("Connectez-vous pour réserver");
-                  navigate("/login", {
-                    state: { from: { pathname: `/terrain/${terrain.id}`, search: "" } },
-                  });
-                }
-              }}
-              className="mt-4 flex items-center justify-center gap-2 w-full min-h-[44px] rounded-xl text-white text-sm font-medium"
-              style={{ backgroundColor: "#25D366" }}
-            >
-              <MessageCircle className="w-4 h-4" />
-              Contacter le gérant
-            </a>
-          )}
-          {enLigneIndispo && gerantCallHref ? (
+          {gerantCallHref ? (
             <a
               href={gerantCallHref}
-              className="mt-4 flex items-center justify-center gap-2 w-full min-h-[44px] rounded-xl text-sm font-semibold bg-[var(--primary)] text-white"
+              className="mt-4 flex items-center justify-center gap-2 w-full min-h-[48px] rounded-xl text-sm font-semibold bg-[var(--primary)] text-white"
             >
               <Phone className="w-4 h-4" />
               Appeler le gérant
@@ -1013,51 +1142,20 @@ const FieldDetails = () => {
         )}
       </div>
 
-      {/* Barre sticky : réserver en ligne OU appeler si WA gérant down */}
-      {hasSlot && stickyRecap && canBrowseSlots && (
-        <div
-          className="fixed inset-x-0 bottom-16 md:bottom-0 z-50 px-4 py-3 native-sheet-enter md:pb-[max(0.75rem,env(safe-area-inset-bottom))]"
-          style={{
-            background: "color-mix(in srgb, var(--surface, #fff) 94%, transparent)",
-            backdropFilter: "blur(14px)",
-            WebkitBackdropFilter: "blur(14px)",
-            boxShadow: "0 -4px 16px rgba(0,0,0,0.08)",
-            borderTop: "1px solid rgba(0,0,0,0.06)",
-          }}
-        >
-          <div className="max-w-3xl mx-auto flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={clearSlot}
-              className="shrink-0 w-9 h-9 rounded-full bg-gray-100 dark:bg-[var(--surface-2)] text-[var(--color-text-muted)] flex items-center justify-center hover:bg-gray-200 transition-colors"
-              aria-label="Annuler la sélection"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-bold text-[var(--color-text-primary)] truncate">{stickyRecap.primary}</p>
-              <p className="text-[11px] text-[var(--color-text-muted)] truncate">{stickyRecap.secondary}</p>
-            </div>
-            {canBookOnline ? (
-              <button
-                type="button"
-                onClick={goToPayment}
-                className="shrink-0 min-h-[48px] px-4 rounded-xl bg-[var(--primary)] text-white text-sm font-semibold"
-              >
-                Réserver
-              </button>
-            ) : gerantCallHref ? (
-              <a
-                href={gerantCallHref}
-                className="shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[48px] px-4 rounded-xl bg-[var(--primary)] text-white text-sm font-semibold"
-              >
-                <Phone className="w-4 h-4" />
-                Appeler
-              </a>
-            ) : null}
-          </div>
-        </div>
-      )}
+      <DatePickerSheet
+        open={calendarOpen}
+        onClose={() => setCalendarOpen(false)}
+        value={dates[selectedDate]?.isoDate || localYmd()}
+        min={localYmd()}
+        max={addDaysYmd(localYmd(), 90)}
+        onSelect={(ymd) => {
+          hapticSelection();
+          choisirDateCalendrier(ymd);
+        }}
+        title="Date de réservation"
+        appClass="joueur-app"
+      />
+
       {galleryOpen ? (
         <div className="fiche-terrain-gallery fixed inset-0 bg-black/92 flex flex-col" style={{ zIndex: 10050 }}>
           <div className="flex items-center justify-between px-4 py-3 text-white shrink-0">

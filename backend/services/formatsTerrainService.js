@@ -1,11 +1,11 @@
 const { queryAll, queryOne, runSql, transaction } = require('../database');
 
+/** Politique produit : réservation en ligne = 1 h uniquement.
+ *  Au-delà → le joueur appelle le gérant (tarif négocié / tournoi…). */
 const DEFAULT_DUREES = [
   { minutes: 60, label: '1h', ordre: 0 },
-  { minutes: 90, label: '1h30', ordre: 1 },
-  { minutes: 120, label: '2h', ordre: 2 },
-  { minutes: 180, label: '3h', ordre: 3 },
 ];
+const DUREE_STANDARD_MINUTES = 60;
 
 function slugify(raw) {
   return String(raw || '')
@@ -92,14 +92,48 @@ async function listDurees(db, terrainId, { actifsUniquement = false } = {}) {
   const terrain = await queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) return [];
   await ensureDefaults(db, terrain);
+
+  // Désactive les anciennes durées > 1 h encore en base
+  await runSql(
+    db,
+    `UPDATE terrain_durees SET actif = 0
+     WHERE terrain_id = ? AND minutes <> ?`,
+    [terrainId, DUREE_STANDARD_MINUTES],
+  ).catch(() => undefined);
+
+  // Garantit la présence de la durée 1 h active
+  const oneHour = await queryOne(
+    db,
+    `SELECT id FROM terrain_durees WHERE terrain_id = ? AND minutes = ? LIMIT 1`,
+    [terrainId, DUREE_STANDARD_MINUTES],
+  );
+  if (!oneHour) {
+    await runSql(
+      db,
+      `INSERT INTO terrain_durees (terrain_id, minutes, label, ordre, actif) VALUES (?, ?, '1h', 0, 1)`,
+      [terrainId, DUREE_STANDARD_MINUTES],
+    );
+  } else {
+    await runSql(
+      db,
+      `UPDATE terrain_durees SET actif = 1, label = '1h' WHERE id = ?`,
+      [oneHour.id],
+    );
+  }
+
   const rows = await queryAll(
     db,
     `SELECT * FROM terrain_durees WHERE terrain_id = ?
+       AND minutes = ?
      ${actifsUniquement ? 'AND actif = 1' : ''}
      ORDER BY ordre ASC, minutes ASC`,
-    [terrainId],
+    [terrainId, DUREE_STANDARD_MINUTES],
   );
-  return rows.map(mapDureeRow);
+  const mapped = rows.map(mapDureeRow).filter(Boolean);
+  if (!mapped.length) {
+    return [{ minutes: DUREE_STANDARD_MINUTES, label: '1h', ordre: 0, actif: true, terrain_id: terrainId }];
+  }
+  return mapped;
 }
 
 async function getFormatByCle(db, terrainId, cle) {
@@ -162,24 +196,15 @@ async function replaceFormatsEtDurees(db, terrainId, { formats = [], durees = []
     seen.add(f.cle);
   }
 
-  const normalizedDurees = (Array.isArray(durees) ? durees : [])
-    .map((d, i) => {
-      const minutes = Math.round(Number(d.minutes) || 0);
-      if (!(minutes > 0) || minutes > 12 * 60) return null;
-      return {
-        minutes,
-        label: String(d.label || `${minutes} min`).trim(),
-        ordre: Number.isFinite(Number(d.ordre)) ? Number(d.ordre) : i,
-        actif: d.actif === false || d.actif === 0 ? 0 : 1,
-      };
-    })
-    .filter(Boolean);
-
-  if (!normalizedDurees.length) {
-    const err = new Error('Au moins une durée est requise');
-    err.statusCode = 400;
-    throw err;
-  }
+  // Politique : seule la durée 1 h est proposée en réservation
+  const normalizedDurees = [
+    {
+      minutes: DUREE_STANDARD_MINUTES,
+      label: '1h',
+      ordre: 0,
+      actif: 1,
+    },
+  ];
 
   await transaction(db, async () => {
     await runSql(db, 'DELETE FROM terrain_formats WHERE terrain_id = ?', [terrainId]);
@@ -234,6 +259,7 @@ async function attachFormatsToTerrainPayload(db, terrain) {
 
 module.exports = {
   DEFAULT_DUREES,
+  DUREE_STANDARD_MINUTES,
   ensureDefaults,
   listFormats,
   listDurees,

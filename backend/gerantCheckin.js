@@ -8,6 +8,7 @@ const { assertStageTransition, playerGate, resolveOperationalStage } = require('
 const { encaisserSoldeSurPlace } = require('./services/portefeuilleService');
 const { evaluerRemboursement } = require('./services/annulationService');
 const { notifyTerrain } = require('./realtimeHub');
+const { jourDepuisDate } = require('./scheduleService');
 const logger = require('./logger');
 
 function localDateYmd(d = new Date()) {
@@ -376,6 +377,24 @@ function reservationsGerantListSql() {
   `;
 }
 
+/** Fenêtre glissante de 7 jours perçus à partir d'aujourd'hui (y compris week-end). */
+function next7DaysBoundsYmd(from = new Date()) {
+  const d = new Date(from);
+  d.setHours(12, 0, 0, 0);
+  const start = new Date(d);
+  const endPerçu = new Date(d);
+  endPerçu.setDate(d.getDate() + 6);
+  // +1 jour technique pour inclure la nuit prolongée (00h–05h) du 7ᵉ jour
+  const endTech = new Date(d);
+  endTech.setDate(d.getDate() + 7);
+  return {
+    from: localDateYmd(start),
+    to: localDateYmd(endPerçu),
+    toTech: localDateYmd(endTech),
+  };
+}
+
+/** @deprecated alias — calendrier lun–dim (finances / anciens scripts) */
 function weekBoundsYmd(from = new Date()) {
   const d = new Date(from);
   d.setHours(12, 0, 0, 0);
@@ -625,7 +644,32 @@ function mountGerantCheckinRoutes(app) {
       const terrain = await queryOne(db, 'SELECT id, nom FROM terrains WHERE id = ?', [terrainId]);
       if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
-  // Journée gérant = aujourd'hui + créneaux nuit prolongée (00h–04h59) de demain
+      // Horaires du jour (table `horaires` : jour texte + est_ouvert)
+      const jour = jourDepuisDate(date);
+      const horaire = await queryOne(
+        db,
+        'SELECT heure_debut, heure_fin, est_ouvert FROM horaires WHERE terrain_id = ? AND jour = ?',
+        [terrainId, jour],
+      );
+      if (!horaire || !Number(horaire.est_ouvert)) {
+        return res.json({
+          date,
+          terrain_id: terrain.id,
+          terrain_nom: terrain.nom,
+          ferme: true,
+          message: "Terrain fermé aujourd'hui selon vos horaires",
+          imminents: [],
+          en_cours: [],
+          libres: [],
+          a_venir: [],
+          en_attente: [],
+          post_match: [],
+          total: 0,
+          reservations: [],
+        });
+      }
+
+      // Journée gérant = aujourd'hui + créneaux nuit prolongée (00h–04h59) de demain
       const demainDate = (() => {
         const [y, m, d] = date.split('-').map(Number);
         const dt = new Date(y, m - 1, d + 1, 12, 0, 0);
@@ -657,6 +701,11 @@ function mountGerantCheckinRoutes(app) {
         date,
         terrain_id: terrain.id,
         terrain_nom: terrain.nom,
+        ferme: false,
+        horaire: {
+          heure_ouverture: String(horaire.heure_debut || '').slice(0, 5),
+          heure_fermeture: String(horaire.heure_fin || '').slice(0, 5),
+        },
         reservations: rows.map(mapReservationGerantRow),
       });
     } catch (err) {
@@ -674,16 +723,17 @@ function mountGerantCheckinRoutes(app) {
       const terrain = await queryOne(db, 'SELECT id, nom FROM terrains WHERE id = ?', [terrainId]);
       if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
-      const { from, to } = weekBoundsYmd();
+      const { from, to, toTech } = next7DaysBoundsYmd();
       const rows = await queryAll(db, `
         ${reservationsGerantListSql()}
           AND r.date >= ? AND r.date <= ?
         ORDER BY r.date ASC, r.heure_debut ASC, r.heure_fin ASC
-      `, [terrainId, from, to]);
+      `, [terrainId, from, toTech]);
 
       res.json({
         from,
         to,
+        fenetre: '7_prochains_jours',
         terrain_id: terrain.id,
         terrain_nom: terrain.nom,
         reservations: rows.map(mapReservationGerantRow),

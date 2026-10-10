@@ -45,21 +45,13 @@ type ScannerModalProps = {
   /** Mode B : réservation pré-sélectionnée. Mode A : null/undefined (identifie via QR). */
   expectedReservationId?: number | string | null;
   expectedCodeReservation?: string | null;
+  /** Appelé dès le succès API — pour mise à jour optimiste de la file. Ne ferme pas le modal. */
   onSuccess?: (reservation: ReservationRecap) => void;
   /** Workflow 4 : après QR invalide → recherche manuelle */
   onManualValidation?: () => void;
 };
 
 type CameraFacing = "environment" | "user";
-
-function formatDate(value?: string) {
-  if (!value) return "-";
-  return new Date(`${value}T00:00:00`).toLocaleDateString("fr-FR", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-  });
-}
 
 function formatTime(value?: string) {
   if (!value) return "-";
@@ -83,6 +75,13 @@ function formatDateTime(value?: string) {
 function formatMoney(value?: number) {
   const n = Number(value || 0);
   return n.toLocaleString("fr-FR");
+}
+
+function formatScannableHour(iso?: string) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 }
 
 function isRearCameraLabel(label: string): boolean {
@@ -198,6 +197,7 @@ export default function ScannerModal({
   const rafRef = useRef<number | null>(null);
   const facingRef = useRef<CameraFacing>("environment");
   const submitScanRef = useRef<(rawValue: string) => Promise<void>>(async () => undefined);
+  const submittingRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const onSuccessRef = useRef(onSuccess);
   const [result, setResult] = useState<ScanResult>({ state: "scan" });
@@ -206,6 +206,7 @@ export default function ScannerModal({
   const [showManual, setShowManual] = useState(false);
   const [hint, setHint] = useState("Place le QR bien en face, bien éclairé");
   const [facing, setFacing] = useState<CameraFacing>("environment");
+  const [submitting, setSubmitting] = useState(false);
 
   const isModeB = expectedReservationId != null && String(expectedReservationId) !== "";
 
@@ -243,21 +244,28 @@ export default function ScannerModal({
 
   const submitScan = useCallback(
     async (rawValue: string) => {
+      if (submittingRef.current) return;
       scanningRef.current = false;
       stopCamera();
+      submittingRef.current = true;
+      setSubmitting(true);
 
-      const parsed = parseQrPayload(rawValue);
+      const qrData = String(rawValue || "").trim();
+      const parsed = parseQrPayload(qrData);
 
       if (isModeB && !matchesExpected(parsed)) {
         triggerFlash("red");
         setResult({
           state: "mismatch",
-          title: "❌ Mauvais QR",
+          title: "QR code non reconnu",
           text: "Ce QR code ne correspond pas à ce match. Demande au joueur de montrer le bon code.",
         });
+        submittingRef.current = false;
+        setSubmitting(false);
         return;
       }
 
+      // JSON métier : { reservation_id, code, creneau_id, terrain_id }
       let reservationId: string | number | null | undefined = isModeB
         ? expectedReservationId
         : parsed.id || null;
@@ -273,16 +281,20 @@ export default function ScannerModal({
         if (error.code === "QR_WRONG_TERRAIN") {
           setResult({
             state: "wrong_terrain",
-            title: "❌ Ce QR code ne correspond pas à ton terrain",
+            title: "Ce QR code ne correspond pas à ton terrain",
             text: error.message,
           });
+          submittingRef.current = false;
+          setSubmitting(false);
           return;
         }
         setResult({
           state: "invalid",
-          title: "❌ QR code non reconnu",
+          title: "QR code non reconnu",
           text: "Demande au joueur de montrer le QR reçu par WhatsApp. Si le problème persiste, utilise la validation manuelle.",
         });
+        submittingRef.current = false;
+        setSubmitting(false);
         return;
       }
 
@@ -290,27 +302,27 @@ export default function ScannerModal({
         triggerFlash("red");
         setResult({
           state: "invalid",
-          title: "❌ QR code non reconnu",
+          title: "QR code non reconnu",
           text: "Demande au joueur de montrer le QR reçu par WhatsApp. Si le problème persiste, utilise la validation manuelle.",
         });
+        submittingRef.current = false;
+        setSubmitting(false);
         return;
       }
 
       try {
-        const payload = (await gerantApi.scanQr(
-          reservationId,
-          "especes",
-          parsed.raw || rawValue,
-        )) as {
+        const payload = (await gerantApi.scanQr(reservationId, "especes", qrData)) as {
           reservation?: ReservationRecap;
         };
         triggerFlash("green");
+        const reservation = payload.reservation;
         setResult({
           state: "success",
-          title: "✅ Entrée validée !",
-          reservation: payload.reservation,
+          title: "Entrée validée ✅",
+          reservation,
         });
-        if (payload.reservation) onSuccessRef.current?.(payload.reservation);
+        // Optimistic update côté file d'attente — le parent ne doit PAS fermer le modal ici
+        if (reservation) onSuccessRef.current?.(reservation);
       } catch (err) {
         const error = err as Error & {
           code?: string;
@@ -323,86 +335,117 @@ export default function ScannerModal({
         };
 
         if (error.code === "QR_SCAN_TOO_EARLY") {
+          const heure = formatScannableHour(error.scannable_at);
           setResult({
             state: "too_early",
-            title: "⏰ C'est un peu tôt",
-            text: error.scannable_at
-              ? `Tu pourras scanner à partir de ${new Date(error.scannable_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}.`
-              : error.message,
+            title: "C'est un peu tôt 😄",
+            text: heure
+              ? `Ouverture du scan à ${heure}.`
+              : error.message || "Ce match n'est pas encore dans la fenêtre de scan.",
             minutesRemaining: error.minutes_remaining,
             scannableAt: error.scannable_at,
           });
+          submittingRef.current = false;
+          setSubmitting(false);
           return;
         }
         if (error.code === "QR_SCAN_EXPIRED") {
+          triggerFlash("red");
           setResult({
             state: "expired",
-            title: "⌛ Fenêtre dépassée",
-            text: `Ce match était prévu à ${formatTime(error.match_time)}. Le délai de validation est dépassé.`,
+            title: "Fenêtre dépassée",
+            text: error.match_time
+              ? `Ce match était prévu à ${formatTime(error.match_time)}. Le délai de validation est dépassé.`
+              : error.message || "Le délai de validation est dépassé.",
           });
+          submittingRef.current = false;
+          setSubmitting(false);
           return;
         }
         if (error.code === "QR_SCAN_PRIORITY") {
           setResult({
             state: "invalid",
-            title: "⏳ Un créneau à la fois",
+            title: "QR code non reconnu",
             text: error.message || "Valide d'abord le créneau prioritaire.",
           });
+          submittingRef.current = false;
+          setSubmitting(false);
           return;
         }
-        if (error.status === 403 || error.code === "QR_ALREADY_SCANNED") {
-          setResult({
-            state: "already_scanned",
-            title: "ℹ️ Ce joueur est déjà entré",
-            text: `QR validé le ${formatDateTime(error.qr_code_scanne_at)}`,
-          });
-          return;
-        }
+        // QR_WRONG_TERRAIN avant le filet 403 (déjà scanné) — même status HTTP
         if (error.code === "QR_WRONG_TERRAIN") {
           triggerFlash("red");
           setResult({
             state: "wrong_terrain",
-            title: "❌ Ce QR code ne correspond pas à ton terrain",
+            title: "Ce QR code ne correspond pas à ton terrain",
             text: error.message || "Ce QR appartient à un autre terrain.",
           });
+          submittingRef.current = false;
+          setSubmitting(false);
+          return;
+        }
+        if (error.code === "QR_ALREADY_SCANNED") {
+          setResult({
+            state: "already_scanned",
+            title: "Ce joueur est déjà entré",
+            text: error.qr_code_scanne_at
+              ? `Premier scan : ${formatDateTime(error.qr_code_scanne_at)}`
+              : error.message || "Ce QR a déjà été validé.",
+          });
+          submittingRef.current = false;
+          setSubmitting(false);
           return;
         }
         if (error.code === "QR_BAD_STATUS") {
           triggerFlash("red");
           setResult({
             state: "invalid",
-            title: "❌ Réservation non scannable",
+            title: "QR code non reconnu",
             text: error.message || "Cette réservation n'est pas confirmée.",
           });
+          submittingRef.current = false;
+          setSubmitting(false);
           return;
         }
         if (error.code === "QR_MISSING") {
           triggerFlash("red");
           setResult({
             state: "invalid",
-            title: "❌ QR code manquant",
+            title: "QR code non reconnu",
             text: "Scanne le QR reçu par WhatsApp, ou saisis le code manuellement.",
           });
+          submittingRef.current = false;
+          setSubmitting(false);
+          return;
+        }
+
+        // 403 déjà scanné sans code explicite (filet de sécurité)
+        if (error.status === 403) {
+          setResult({
+            state: "already_scanned",
+            title: "Ce joueur est déjà entré",
+            text: error.qr_code_scanne_at
+              ? `Premier scan : ${formatDateTime(error.qr_code_scanne_at)}`
+              : error.message || "Ce QR a déjà été validé.",
+          });
+          submittingRef.current = false;
+          setSubmitting(false);
           return;
         }
 
         triggerFlash("red");
         setResult({
           state: "invalid",
-          title: "❌ QR code non reconnu",
+          title: "QR code non reconnu",
           text:
             error.message ||
             "Demande au joueur de montrer le QR reçu par WhatsApp. Si le problème persiste, utilise la validation manuelle.",
         });
       }
+      submittingRef.current = false;
+      setSubmitting(false);
     },
-    [
-      expectedReservationId,
-      isModeB,
-      matchesExpected,
-      stopCamera,
-      triggerFlash,
-    ],
+    [expectedReservationId, isModeB, matchesExpected, stopCamera, triggerFlash],
   );
 
   submitScanRef.current = submitScan;
@@ -416,6 +459,8 @@ export default function ScannerModal({
       }
 
       stopCamera();
+      submittingRef.current = false;
+      setSubmitting(false);
       setResult({ state: "scan" });
       setHint("Place le QR bien en face, bien éclairé");
       setShowManual(false);
@@ -506,6 +551,8 @@ export default function ScannerModal({
       setFlash(null);
       setManualCode("");
       setShowManual(false);
+      submittingRef.current = false;
+      setSubmitting(false);
       facingRef.current = "environment";
       setFacing("environment");
       return;
@@ -514,7 +561,7 @@ export default function ScannerModal({
       setShowManual(true);
       setResult({
         state: "invalid",
-        title: "❌ Caméra indisponible",
+        title: "Caméra indisponible",
         text:
           err instanceof Error
             ? `${err.message}. Tu peux saisir le code manuellement ou utiliser la validation manuelle.`
@@ -543,19 +590,20 @@ export default function ScannerModal({
       setShowManual(true);
       setResult({
         state: "invalid",
-        title: "❌ Caméra indisponible",
+        title: "Caméra indisponible",
         text: "Impossible de basculer la caméra.",
       });
     });
   };
 
+  /** Réactive la caméra après un résultat (succès ou erreur). */
   const retry = () => {
     setManualCode("");
     startCamera(facingRef.current).catch(() => {
       setShowManual(true);
       setResult({
         state: "invalid",
-        title: "❌ Caméra indisponible",
+        title: "Caméra indisponible",
         text: "Impossible d'activer la caméra. Vérifie les permissions puis réessaie.",
       });
     });
@@ -563,9 +611,13 @@ export default function ScannerModal({
 
   const submitManual = () => {
     const value = manualCode.trim();
-    if (!value) return;
-    scanningRef.current = true;
+    if (!value || submittingRef.current) return;
     void submitScan(value);
+  };
+
+  const closeModal = () => {
+    stopCamera();
+    onClose();
   };
 
   if (!open) return null;
@@ -596,10 +648,7 @@ export default function ScannerModal({
 
       <button
         type="button"
-        onClick={() => {
-          stopCamera();
-          onClose();
-        }}
+        onClick={closeModal}
         className="absolute right-4 top-4 z-20 inline-flex h-11 w-11 items-center justify-center rounded-full bg-black/35 backdrop-blur"
         aria-label="Fermer"
       >
@@ -670,9 +719,12 @@ export default function ScannerModal({
                   placeholder={expectedCodeReservation || "TF-XXXXXX"}
                   className="w-full h-11 rounded-xl bg-white text-[var(--color-text-primary)] px-3 text-sm font-semibold tracking-wide outline-none"
                   autoCapitalize="characters"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitManual();
+                  }}
                 />
-                <Button type="button" variant="hero" className="w-full" onClick={submitManual}>
-                  Valider ce code
+                <Button type="button" variant="hero" className="w-full" onClick={submitManual} disabled={submitting}>
+                  {submitting ? "Validation…" : "Valider ce code"}
                 </Button>
               </div>
             )}
@@ -751,70 +803,28 @@ export default function ScannerModal({
             )}
 
             <div className="mt-6 flex flex-col gap-2">
-              {result.state === "success" && (
-                <>
-                  <Button type="button" variant="hero" className="w-full" onClick={retry}>
-                    Scanner un autre joueur
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => {
-                      stopCamera();
-                      onClose();
-                    }}
-                  >
-                    Fermer
-                  </Button>
-                </>
-              )}
+              <Button type="button" variant="hero" className="w-full" onClick={retry}>
+                Scanner un autre
+              </Button>
 
-              {result.state === "invalid" && (
-                <>
-                  {onManualValidation && (
-                    <Button
-                      type="button"
-                      variant="hero"
-                      className="w-full"
-                      onClick={() => {
-                        stopCamera();
-                        onClose();
-                        onManualValidation();
-                      }}
-                    >
-                      Validation manuelle
-                    </Button>
-                  )}
-                  <Button type="button" variant="outline" className="w-full" onClick={retry}>
-                    Réessayer
-                  </Button>
-                </>
-              )}
-
-              {(result.state === "mismatch" ||
-                result.state === "expired" ||
-                result.state === "too_early" ||
-                result.state === "already_scanned" ||
-                result.state === "wrong_terrain") && (
+              {result.state === "invalid" && onManualValidation && (
                 <Button
                   type="button"
-                  variant="hero"
+                  variant="outline"
                   className="w-full"
                   onClick={() => {
                     stopCamera();
                     onClose();
+                    onManualValidation();
                   }}
                 >
-                  Fermer
+                  Validation manuelle
                 </Button>
               )}
 
-              {result.state === "mismatch" && (
-                <Button type="button" variant="outline" className="w-full" onClick={retry}>
-                  Réessayer
-                </Button>
-              )}
+              <Button type="button" variant="outline" className="w-full" onClick={closeModal}>
+                Fermer
+              </Button>
             </div>
           </section>
         </div>
