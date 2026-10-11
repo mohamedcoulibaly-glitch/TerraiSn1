@@ -54,7 +54,9 @@ function fraisSelonPolitique({
 
 function calculerDepuisAvance(avanceInput, contrat = {}) {
   const avance = arrondiFcfa(avanceInput);
-  const commissionPct = Number(contrat.commission_pourcentage || 0);
+  // Essai actif (flag explicite ou commission déjà forcée à 0 par chargerContrat)
+  const essai = Number(contrat.essai_actif) === 1 || contrat.essai_actif === true;
+  const commissionPct = essai ? 0 : Number(contrat.commission_pourcentage || 0);
   const commission = Math.min(avance, arrondiFcfa((avance * commissionPct) / 100));
   const base_gerant = Math.max(0, avance - commission);
   const { frais_gerant, frais_plateforme } = fraisSelonPolitique({

@@ -14,7 +14,13 @@ const TABS = [
   { id: "terrains", label: "Terrains", icon: MapPin, route: "/backoffice/proprietaire/terrains", end: false },
 ] as const;
 
-type HeaderUser = { prenom?: string; nom?: string; photo_url?: string } | null;
+type HeaderUser = {
+  prenom?: string;
+  nom?: string;
+  photo_url?: string;
+  role?: string;
+  accountType?: string;
+} | null;
 
 function initials(user: HeaderUser) {
   const p = (user?.prenom || "").trim();
@@ -147,7 +153,7 @@ export default function ProprietaireChrome() {
           </div>
         </header>
 
-        <main className="flex-1 p-3 md:p-6">
+        <main className="flex-1 p-3 md:p-6 overflow-auto">
           <Outlet />
         </main>
       </div>

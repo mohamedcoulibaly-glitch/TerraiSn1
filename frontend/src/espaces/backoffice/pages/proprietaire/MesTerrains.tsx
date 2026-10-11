@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { User } from "lucide-react";
 import { employesApi, proprietaireApi } from "@/lib/api";
 import ProprioEmptyState from "@/espaces/backoffice/components/ProprioEmptyState";
@@ -18,7 +17,6 @@ type Terrain = {
 };
 
 export default function MesTerrains() {
-  const navigate = useNavigate();
   const [terrains, setTerrains] = useState<Terrain[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [employes, setEmployes] = useState<any[]>([]);
@@ -95,16 +93,7 @@ export default function MesTerrains() {
           return (
             <article
               key={t.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate(`/backoffice/proprietaire/terrain/${t.id}`)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  navigate(`/backoffice/proprietaire/terrain/${t.id}`);
-                }
-              }}
-              className="rounded-2xl p-4 cursor-pointer transition-opacity hover:opacity-95"
+              className="rounded-2xl p-4"
               style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}
             >
               <div className="flex items-start gap-3">

@@ -51,6 +51,82 @@ function isPasswordChangeAllowedPath(req) {
   );
 }
 
+function isGerantUser(user) {
+  if (!user) return false;
+  const role = user.role === 'superadmin' ? 'super_admin' : user.role;
+  return role === 'gerant' || user.accountType === 'employe';
+}
+
+/**
+ * Enrichit req.user pour les gérants multi-terrains (portage Babacar, DB sync SQLite).
+ * - terrains_ids : terrains accessibles (gerants_terrains actifs, fallback employes.terrain_id / JWT)
+ * - terrain_id_principal : premier terrain (principal d'abord)
+ * - terrain_id : terrain actif (header X-Terrain-Id / ?terrain_id= si autorisé, sinon JWT)
+ * Sans lignes gerants_terrains, le comportement reste celui du JWT (terrain_id inchangé).
+ */
+function enrichirGerant(req, db) {
+  if (!isGerantUser(req.user)) return;
+  const { queryAll, queryOne } = require('../database');
+  const gerantId = Number(req.user.id);
+
+  let terrains = [];
+  try {
+    terrains = queryAll(
+      db,
+      `SELECT terrain_id FROM gerants_terrains
+       WHERE gerant_id = ? AND actif = 1
+       ORDER BY est_principal DESC, id ASC`,
+      [gerantId],
+    );
+  } catch {
+    terrains = [];
+  }
+
+  if (!terrains.length && req.user.terrain_id) {
+    terrains = [{ terrain_id: req.user.terrain_id }];
+  }
+  if (!terrains.length) {
+    const emp = queryOne(db, 'SELECT terrain_id FROM employes WHERE id = ?', [gerantId]);
+    if (emp?.terrain_id) terrains = [{ terrain_id: emp.terrain_id }];
+  }
+
+  req.user.terrains_ids = terrains.map((t) => Number(t.terrain_id)).filter(Boolean);
+  req.user.terrain_id_principal = req.user.terrains_ids[0] || null;
+
+  const headerRaw = req.headers['x-terrain-id'] || req.query?.terrain_id;
+  const requested = headerRaw != null && headerRaw !== '' ? Number(headerRaw) : null;
+
+  if (requested && req.user.terrains_ids.includes(requested)) {
+    req.user.terrain_id = requested;
+  } else if (req.user.terrain_id && req.user.terrains_ids.includes(Number(req.user.terrain_id))) {
+    req.user.terrain_id = Number(req.user.terrain_id);
+  } else if (req.user.terrain_id_principal) {
+    req.user.terrain_id = req.user.terrain_id_principal;
+  }
+}
+
+function verifierTerrainGerant(terrainId, req) {
+  const tid = Number(terrainId);
+  if (!Number.isFinite(tid)) return false;
+  if (Array.isArray(req.user?.terrains_ids) && req.user.terrains_ids.length) {
+    return req.user.terrains_ids.includes(tid);
+  }
+  return Number(req.user?.terrain_id) === tid;
+}
+
+/** Résout le terrain actif d'une route gérant (param / body / query / JWT) — null si non autorisé. */
+function resolveTerrainGerant(req, explicitTerrainId = null) {
+  const candidate = explicitTerrainId
+    ?? req.params?.terrain_id
+    ?? req.body?.terrain_id
+    ?? req.query?.terrain_id
+    ?? req.user?.terrain_id
+    ?? req.user?.terrain_id_principal;
+  const tid = Number(candidate);
+  if (!Number.isFinite(tid) || !verifierTerrainGerant(tid, req)) return null;
+  return tid;
+}
+
 async function middlewareAuth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Non authentifié' });
@@ -90,6 +166,7 @@ async function middlewareAuth(req, res, next) {
       }
     }
 
+    enrichirGerant(req, db);
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
@@ -116,6 +193,8 @@ module.exports = {
   authMiddleware,
   middlewareAuth,
   requireRole,
+  resolveTerrainGerant,
+  verifierTerrainGerant,
   genererAccessToken,
   genererRefreshToken,
   hashRefreshToken,

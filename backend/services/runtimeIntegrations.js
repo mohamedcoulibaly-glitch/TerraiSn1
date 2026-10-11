@@ -10,7 +10,7 @@ const { queryOne, runSql } = require('../database');
 const SETTING_PREFIX = 'integration.';
 const ENV_PATH = path.join(__dirname, '..', '.env');
 
-/** @typedef {'paiement'|'whatsapp'|'general'} IntegrationGroup */
+/** @typedef {'paiement'|'paydunya'|'whatsapp'|'general'} IntegrationGroup */
 
 /**
  * @type {Array<{
@@ -21,6 +21,7 @@ const ENV_PATH = path.join(__dirname, '..', '.env');
  *   hint?: string,
  *   type?: 'text'|'password'|'select'|'boolean',
  *   options?: string[],
+ *   readonly?: boolean,
  * }>}
  */
 const MANAGED = [
@@ -86,7 +87,107 @@ const MANAGED = [
     type: 'select',
     options: ['production', 'simulation'],
     label: 'Mode paiement',
-    hint: 'simulation = page locale sans appel passerelle',
+    hint: 'production = PayTech réel (joueur). simulation = page locale hors réservation joueur uniquement',
+  },
+  {
+    env: 'PAYMENT_PROVIDER',
+    group: 'paiement',
+    type: 'select',
+    options: ['paytech', 'paydunya'],
+    label: 'Passerelle active',
+    hint: 'paytech ou paydunya — passerelle utilisée pour les paiements en ligne',
+  },
+  // ─── PayDunya (groupe dédié) ───
+  {
+    env: 'PAYDUNYA_MODE',
+    group: 'paydunya',
+    type: 'select',
+    options: ['test', 'live'],
+    label: 'Mode PayDunya',
+    hint: 'test = sandbox · live = paiements réels',
+  },
+  {
+    env: 'PAYDUNYA_STORE_NAME',
+    group: 'paydunya',
+    type: 'text',
+    label: 'Nom de la boutique',
+  },
+  {
+    env: 'PAYDUNYA_MASTER_KEY',
+    group: 'paydunya',
+    secret: true,
+    type: 'password',
+    label: 'Master key',
+  },
+  {
+    env: 'PAYDUNYA_PUBLIC_KEY',
+    group: 'paydunya',
+    secret: true,
+    type: 'password',
+    label: 'Clé publique',
+  },
+  {
+    env: 'PAYDUNYA_PRIVATE_KEY',
+    group: 'paydunya',
+    secret: true,
+    type: 'password',
+    label: 'Clé privée',
+    hint: 'Ne jamais partager',
+  },
+  {
+    env: 'PAYDUNYA_TOKEN',
+    group: 'paydunya',
+    secret: true,
+    type: 'password',
+    label: 'Token',
+  },
+  {
+    env: 'PAYDUNYA_CALLBACK_URL',
+    group: 'paydunya',
+    type: 'text',
+    label: 'URL callback / IPN',
+    hint: 'Laisser vide pour dériver de APP_DOMAIN (/webhook/paydunya)',
+  },
+  {
+    env: 'PAYDUNYA_RETURN_URL',
+    group: 'paydunya',
+    type: 'text',
+    label: 'URL retour (succès)',
+  },
+  {
+    env: 'PAYDUNYA_CANCEL_URL',
+    group: 'paydunya',
+    type: 'text',
+    label: 'URL annulation',
+  },
+  {
+    env: 'PAYDUNYA_PAYOUT_ENABLED',
+    group: 'paydunya',
+    type: 'boolean',
+    label: 'Reversements automatiques PayDunya',
+    hint: 'true / false',
+  },
+  {
+    env: 'PAYDUNYA_PAYOUT_CALLBACK_URL',
+    group: 'paydunya',
+    type: 'text',
+    label: 'URL callback reversements',
+  },
+  {
+    env: 'PAYDUNYA_DISBURSE_USE_SANDBOX',
+    group: 'paydunya',
+    type: 'boolean',
+    label: 'Sandbox pour les reversements',
+    hint: 'true = API disburse sandbox (mode test uniquement)',
+  },
+  // ─── Web Push ───
+  {
+    env: 'VAPID_PUBLIC_KEY',
+    group: 'general',
+    type: 'text',
+    readonly: true,
+    label: 'Clé publique VAPID (Web Push)',
+    hint: 'Lecture seule — régénérer via POST /api/admin/integrations/vapid/regenerate',
   },
   {
     env: 'OPENWA_BASE_URL',
@@ -213,6 +314,7 @@ function applyToProcessEnv(envKey, value) {
 function seedMissingFromEnv(db) {
   let seeded = 0;
   for (const field of MANAGED) {
+    if (field.readonly) continue;
     const fromDb = readDbValue(db, field.env);
     if (fromDb != null && fromDb !== '') continue;
     const fromEnv = process.env[field.env];
@@ -233,6 +335,7 @@ function hydrateFromDb(db) {
   const overridden = [];
   const envMirror = {};
   for (const field of MANAGED) {
+    if (field.readonly) continue;
     const fromDb = readDbValue(db, field.env);
     if (fromDb != null && fromDb !== '') {
       const fromEnv = process.env[field.env];
@@ -303,7 +406,21 @@ function syncEnvFile(updates) {
 
 function describe(db) {
   const fields = MANAGED.map((field) => {
-    const { value, source } = effectiveValue(db, field.env);
+    let { value, source } = field.readonly
+      ? { value: '', source: 'unset' }
+      : effectiveValue(db, field.env);
+    if (field.readonly && field.env === 'VAPID_PUBLIC_KEY') {
+      // Lecture seule : clé effective du serveur Web Push (env / fichier / auto-générée)
+      try {
+        const push = require('../pushService');
+        value = String(push.getPublicKey() || process.env.VAPID_PUBLIC_KEY || '');
+        const info = push.describe();
+        source = value ? (info.source || 'env') : 'unset';
+      } catch {
+        value = String(process.env.VAPID_PUBLIC_KEY || '');
+        source = value ? 'env' : 'unset';
+      }
+    }
     const base = {
       env: field.env,
       group: field.group,
@@ -311,6 +428,7 @@ function describe(db) {
       hint: field.hint || null,
       type: field.type || (field.secret ? 'password' : 'text'),
       options: field.options || null,
+      readonly: Boolean(field.readonly),
       secret: Boolean(field.secret),
       source,
       configured: Boolean(value),
@@ -329,6 +447,11 @@ function describe(db) {
       && String(process.env.PAYTECH_API_SECRET || '').trim(),
   );
   const openwaConfigured = Boolean(String(process.env.OPENWA_API_KEY || '').trim());
+  const paydunyaConfigured = Boolean(
+    String(process.env.PAYDUNYA_MASTER_KEY || '').trim()
+      && String(process.env.PAYDUNYA_PRIVATE_KEY || '').trim()
+      && String(process.env.PAYDUNYA_TOKEN || '').trim(),
+  );
 
   return {
     fields,
@@ -338,6 +461,13 @@ function describe(db) {
         subtitle: 'Clés Wave / Orange Money (passerelle)',
         ready: paymentConfigured,
         env: process.env.PAYTECH_ENV || 'test',
+      },
+      paydunya: {
+        title: 'PayDunya',
+        subtitle: 'Master key, clés API, token et reversements',
+        ready: paydunyaConfigured,
+        env: process.env.PAYDUNYA_MODE || 'test',
+        provider: String(process.env.PAYMENT_PROVIDER || process.env.PAYMENT_GATEWAY || 'paytech').toLowerCase(),
       },
       whatsapp: {
         title: 'WhatsApp OpenWA',
@@ -365,6 +495,7 @@ function save(db, patch = {}) {
   const changed = [];
 
   for (const field of MANAGED) {
+    if (field.readonly) continue; // affichage seul (ex. VAPID_PUBLIC_KEY)
     if (!Object.prototype.hasOwnProperty.call(body, field.env)) continue;
     let raw = body[field.env];
     if (raw == null) continue;

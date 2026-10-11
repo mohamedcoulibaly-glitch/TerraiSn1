@@ -202,7 +202,9 @@ async function creerCheckout({
       ? `Abonnement — ${nomTerrain}`
       : kind === 'achat'
         ? `Achat définitif — ${nomTerrain}`
-        : `Avance réservation — ${nomTerrain}`);
+        : kind === 'dette'
+          ? `Dette commission — ${nomTerrain}`
+          : `Avance réservation — ${nomTerrain}`);
 
   const body = {
     invoice: {

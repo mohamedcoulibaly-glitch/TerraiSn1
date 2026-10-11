@@ -46,6 +46,8 @@ backend/.wwebjs_cache
 *.sw?
 
 backend/uploads/
+# Auth WhatsApp / sessions locales (ne jamais versionner)
+backend/data/
 
 # Contenu LinkedIn personnel (non partagé / non versionné)
 linkedin_posts_architecture.md

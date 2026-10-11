@@ -197,7 +197,9 @@ const Accueil = () => {
 
   useSilentRefresh({
     enabled: geo.ready,
-    onRefresh: () => refetch(),
+    onRefresh: async () => {
+      await refetch();
+    },
   });
 
   const error = queryError

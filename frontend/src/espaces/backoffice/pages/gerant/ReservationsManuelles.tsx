@@ -1,4 +1,5 @@
 ﻿import { useEffect, useState } from "react";
+import { MessageCircle } from "lucide-react";
 import { gerantApi, reservationsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
@@ -76,8 +77,14 @@ export default function ReservationsManuelles() {
     montant_avance?: number;
     montant_restant?: number;
     pourcentage_avance?: number;
+    montant_commission?: number;
+    commission_pourcentage?: number;
   } | null>(null);
   const [devisLoading, setDevisLoading] = useState(false);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [freeSlots, setFreeSlots] = useState<
+    Array<{ heure_debut: string; heure_fin: string; label: string }>
+  >([]);
   const [manual, setManual] = useState({
     joueur_nom: "",
     joueur_telephone: "",
@@ -93,14 +100,56 @@ export default function ReservationsManuelles() {
     }
   }, [enabled, navigate]);
 
+  /** Charge les créneaux libres du jour sélectionné (pills — pas de saisie libre début/fin). */
   useEffect(() => {
-    if (!manual.date || !manual.heure_debut || !manual.heure_fin) {
-      setDevis(null);
+    if (!manual.date) {
+      setFreeSlots([]);
+      setManual((m) => ({ ...m, heure_debut: "", heure_fin: "" }));
       return;
     }
-    const start = parseInt(String(manual.heure_debut).split(":")[0], 10);
-    const end = parseInt(String(manual.heure_fin).split(":")[0], 10);
-    if (!(end > start)) {
+    let cancelled = false;
+    setSlotsLoading(true);
+    gerantApi
+      .disponibilites(manual.date)
+      .then((data) => {
+        if (cancelled) return;
+        const slots = (data?.creneaux || [])
+          .filter((s) => s.disponible !== false && (s.statut === "libre" || !s.statut || s.statut === "disponible"))
+          .map((s) => {
+            const debut = String(s.heure_debut || s.heure || "").slice(0, 5);
+            const fin = String(s.heure_fin || "").slice(0, 5);
+            return {
+              heure_debut: debut,
+              heure_fin: fin,
+              label: fin ? `${debut} – ${fin}` : debut,
+            };
+          })
+          .filter((s) => s.heure_debut);
+        setFreeSlots(slots);
+        setManual((m) => {
+          const stillOk = slots.some(
+            (s) => s.heure_debut === m.heure_debut && s.heure_fin === m.heure_fin,
+          );
+          if (stillOk) return m;
+          return { ...m, heure_debut: "", heure_fin: "" };
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFreeSlots([]);
+          setManual((m) => ({ ...m, heure_debut: "", heure_fin: "" }));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSlotsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [manual.date]);
+
+  useEffect(() => {
+    if (!manual.date || !manual.heure_debut || !manual.heure_fin) {
       setDevis(null);
       return;
     }
@@ -167,6 +216,10 @@ export default function ReservationsManuelles() {
       return;
     }
     setPhoneFieldError(null);
+    if (!manual.date || !manual.heure_debut || !manual.heure_fin) {
+      toast.error("Choisis un créneau libre dans la liste");
+      return;
+    }
     if (waDown) {
       toast.error(WHATSAPP_INFRA_MESSAGE);
       if (!confirmWhatsappAction(true)) return;
@@ -522,29 +575,53 @@ export default function ReservationsManuelles() {
               className="w-full h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 text-sm outline-none focus:border-[var(--color-primary)]"
             />
           </div>
-          <div>
+          <div className="sm:col-span-2">
             <label className="text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 block">
-              Créneau — début
+              Créneau libre
             </label>
-            <input
-              required
-              type="time"
-              value={manual.heure_debut}
-              onChange={(e) => setManual({ ...manual, heure_debut: e.target.value })}
-              className="w-full h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 text-sm outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 block">
-              Créneau — fin
-            </label>
-            <input
-              required
-              type="time"
-              value={manual.heure_fin}
-              onChange={(e) => setManual({ ...manual, heure_fin: e.target.value })}
-              className="w-full h-[52px] rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 text-sm outline-none focus:border-[var(--color-primary)]"
-            />
+            {!manual.date ? (
+              <p className="text-sm text-[var(--color-text-muted)]">
+                Sélectionne d&apos;abord une date pour voir les créneaux libres.
+              </p>
+            ) : slotsLoading ? (
+              <p className="text-sm text-[var(--color-text-secondary)] animate-pulse">Chargement des créneaux…</p>
+            ) : freeSlots.length === 0 ? (
+              <p className="text-sm text-[var(--color-text-muted)]">
+                Aucun créneau libre ce jour — choisis une autre date.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {freeSlots.map((slot) => {
+                  const selected =
+                    manual.heure_debut === slot.heure_debut && manual.heure_fin === slot.heure_fin;
+                  return (
+                    <button
+                      key={`${slot.heure_debut}-${slot.heure_fin}`}
+                      type="button"
+                      onClick={() =>
+                        setManual({
+                          ...manual,
+                          heure_debut: slot.heure_debut,
+                          heure_fin: slot.heure_fin,
+                        })
+                      }
+                      className={`min-h-[44px] px-3.5 rounded-xl border text-sm font-semibold transition-colors ${
+                        selected
+                          ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
+                          : "border-[var(--color-border)] bg-white text-[var(--color-primary)] hover:border-[var(--color-primary)]"
+                      }`}
+                    >
+                      {slot.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {!manual.heure_debut && manual.date && freeSlots.length > 0 ? (
+              <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5">
+                Touche un créneau pour le sélectionner (pas de saisie manuelle début/fin).
+              </p>
+            ) : null}
           </div>
 
           {(devisLoading || devis) && (

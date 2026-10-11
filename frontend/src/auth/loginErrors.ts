@@ -55,9 +55,8 @@ export function messageErreurAuth(
   }
 
   if (/syntaxerror|sql\b|stack|paytech|whatsapp|<html|exception/i.test(msg)) {
-    return contexte === "otp"
-      ? "Code incorrect. Vérifie ton WhatsApp."
-      : "Mot de passe incorrect. Réessaie.";
+    // Le contexte "otp" est déjà traité plus haut (retour anticipé).
+    return "Mot de passe incorrect. Réessaie.";
   }
 
   return msg || "Mot de passe incorrect. Réessaie.";

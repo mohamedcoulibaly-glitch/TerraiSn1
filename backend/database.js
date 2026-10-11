@@ -617,6 +617,9 @@ function initDb(database) {
   database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_dettes_reservation ON dettes_commissions(reservation_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_dettes_terrain ON dettes_commissions(terrain_id, statut, periode)');
   database.run('CREATE INDEX IF NOT EXISTS idx_dettes_gerant ON dettes_commissions(gerant_id, statut)');
+  addColumnIfMissing(database, 'dettes_commissions', 'date_echeance', 'DATE');
+  addColumnIfMissing(database, 'dettes_commissions', 'montant_regle', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'dettes_commissions', 'derniere_mise_a_jour', 'DATETIME');
 
   database.run(`CREATE TABLE IF NOT EXISTS audit_dette (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -634,6 +637,21 @@ function initDb(database) {
     FOREIGN KEY (dette_id) REFERENCES dettes_commissions(id),
     FOREIGN KEY (terrain_id) REFERENCES terrains(id)
   )`);
+
+  // Payin gérant pour soldes de dettes commissions (hors réservation joueur)
+  database.run(`CREATE TABLE IF NOT EXISTS paiements_dettes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER,
+    gerant_id INTEGER NOT NULL,
+    periode TEXT NOT NULL,
+    montant INTEGER NOT NULL,
+    reference TEXT NOT NULL UNIQUE,
+    statut TEXT DEFAULT 'en_attente' CHECK(statut IN ('en_attente','paye','annule')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    payee_at DATETIME,
+    FOREIGN KEY (gerant_id) REFERENCES employes(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_paiements_dettes_gerant ON paiements_dettes(gerant_id, statut, periode)');
 
   database.run(`CREATE TABLE IF NOT EXISTS plateforme_settings (
     cle TEXT PRIMARY KEY,
@@ -1009,6 +1027,165 @@ function initContratPaiementSchema(database) {
     FOREIGN KEY (terrain_id) REFERENCES terrains(id)
   )`);
   database.run('CREATE INDEX IF NOT EXISTS idx_user_favoris_user ON user_favoris(user_id)');
+
+  // --- merge_final (colonnes / tables Babacar portées sur SQLite Mohamed) ---
+  addColumnIfMissing(database, 'terrains', 'politique_paiement', "TEXT DEFAULT 'avance'");
+  addColumnIfMissing(database, 'terrains', 'delai_paiement_dette_jours', 'INTEGER DEFAULT 30');
+  addColumnIfMissing(database, 'terrains', 'delai_verrou_paiement_min', 'INTEGER DEFAULT 15');
+  addColumnIfMissing(database, 'terrains', 'types_location', "TEXT DEFAULT 'les_deux'");
+  addColumnIfMissing(database, 'terrains', 'duree_min_minutes', 'INTEGER DEFAULT 60');
+  addColumnIfMissing(database, 'reservations', 'push_rappel_j1', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'reservations', 'push_rappel_h2', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'reservations', 'push_match_imminent', 'INTEGER DEFAULT 0');
+  // NB : colonnes dettes_commissions ajoutées dans initDb() juste après la création de la table
+  // (initContratPaiementSchema s'exécute avant → « no such table » sur une base neuve).
+  addColumnIfMissing(database, 'creneaux', 'duree_minutes', 'INTEGER');
+  addColumnIfMissing(database, 'creneaux', 'fenetre_retard', 'INTEGER DEFAULT 30');
+
+  database.run(`CREATE TABLE IF NOT EXISTS terrain_formats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    cle TEXT NOT NULL,
+    label TEXT NOT NULL,
+    prix_heure DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    map_grille TEXT,
+    ordre INTEGER DEFAULT 0,
+    actif INTEGER DEFAULT 1,
+    UNIQUE(terrain_id, cle),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_terrain_formats_terrain ON terrain_formats(terrain_id)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS terrain_durees (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    minutes INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    ordre INTEGER DEFAULT 0,
+    actif INTEGER DEFAULT 1,
+    UNIQUE(terrain_id, minutes),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_terrain_durees_terrain ON terrain_durees(terrain_id)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS gerants_terrains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER NOT NULL,
+    terrain_id INTEGER NOT NULL,
+    est_principal INTEGER DEFAULT 0,
+    actif INTEGER DEFAULT 1,
+    date_debut DATE,
+    date_fin DATE,
+    note TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(gerant_id, terrain_id),
+    FOREIGN KEY (gerant_id) REFERENCES employes(id),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS planning_garde (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    gerant_id INTEGER NOT NULL,
+    jour_semaine INTEGER,
+    heure_debut TIME,
+    heure_fin TIME,
+    date_specifique DATE,
+    actif INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id),
+    FOREIGN KEY (gerant_id) REFERENCES employes(id)
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS audit_gerants_terrain (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER,
+    gerant_id INTEGER,
+    action TEXT NOT NULL,
+    fait_par INTEGER,
+    role_fait_par TEXT,
+    detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS sessions_gerant_actives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerant_id INTEGER NOT NULL,
+    terrain_id INTEGER NOT NULL,
+    derniere_activite DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(gerant_id, terrain_id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_gerants_terrains_terrain ON gerants_terrains(terrain_id, actif)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_gerants_terrains_gerant ON gerants_terrains(gerant_id, actif)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_planning_garde_terrain ON planning_garde(terrain_id, jour_semaine, actif)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_sessions_gerant_terrain ON sessions_gerant_actives(terrain_id, derniere_activite)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS notif_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    account_type VARCHAR(20) NOT NULL DEFAULT 'user',
+    push_resa_confirmee INTEGER DEFAULT 1,
+    push_resa_annulee INTEGER DEFAULT 1,
+    push_rappel_match INTEGER DEFAULT 1,
+    push_remboursement INTEGER DEFAULT 1,
+    push_nouvelle_resa INTEGER DEFAULT 1,
+    push_match_imminent INTEGER DEFAULT 1,
+    push_reversement INTEGER DEFAULT 1,
+    push_dette_rappel INTEGER DEFAULT 1,
+    push_revenus INTEGER DEFAULT 1,
+    push_sante_gerant INTEGER DEFAULT 1,
+    push_abonnement INTEGER DEFAULT 1,
+    push_retrait_demande INTEGER DEFAULT 1,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, account_type)
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS push_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    account_type VARCHAR(20) DEFAULT 'user',
+    type_notif TEXT NOT NULL,
+    titre TEXT NOT NULL,
+    corps TEXT NOT NULL,
+    data TEXT,
+    statut VARCHAR(20) DEFAULT 'envoye',
+    erreur TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_push_logs_user ON push_logs(user_id, created_at)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_push_logs_type ON push_logs(type_notif, created_at)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS resume_dette_periode (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terrain_id INTEGER NOT NULL,
+    gerant_id INTEGER NOT NULL,
+    periode TEXT NOT NULL,
+    total_commission INTEGER DEFAULT 0,
+    total_regle INTEGER DEFAULT 0,
+    solde_restant INTEGER DEFAULT 0,
+    date_echeance DATE,
+    statut TEXT DEFAULT 'en_cours',
+    notif_j7_envoyee INTEGER DEFAULT 0,
+    notif_j3_envoyee INTEGER DEFAULT 0,
+    notif_j1_envoyee INTEGER DEFAULT 0,
+    notif_retard_envoyee INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(terrain_id, gerant_id, periode),
+    FOREIGN KEY (terrain_id) REFERENCES terrains(id)
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_resume_dette_terrain ON resume_dette_periode(terrain_id, periode, statut)');
+
+  try {
+    database.run(`INSERT OR IGNORE INTO gerants_terrains (
+      gerant_id, terrain_id, est_principal, actif, date_debut, note
+    )
+    SELECT
+      e.id, e.terrain_id, 1, COALESCE(e.is_active, 1),
+      date(COALESCE(e.created_at, CURRENT_TIMESTAMP)),
+      'merge_final — gérant historique'
+    FROM employes e
+    WHERE e.terrain_id IS NOT NULL`);
+  } catch (err) {
+    console.warn('[schema] backfill gerants_terrains:', err.message);
+  }
 }
 
 function addColumnIfMissing(database, table, column, definition) {

@@ -34,6 +34,9 @@ const essaiService = require('../services/essaiService');
 const terrainFeaturesService = require('../services/terrainFeaturesService');
 const modeRevenuService = require('../services/modeRevenuService');
 const runtimeIntegrations = require('../services/runtimeIntegrations');
+const formatsTerrainService = require('../services/formatsTerrainService');
+const { normaliserDelaiVerrouPaiementMin } = require('../reservationLockService');
+const { registerAdminGerantsRoutes } = require('./multiGerants');
 
 const photoUpload = multer({
   storage: multer.memoryStorage(),
@@ -83,6 +86,10 @@ router.post('/auth/login', async (req, res) => {
 });
 
 router.use(authMiddleware, requireRole('super_admin'));
+
+// Multi-gérants (portage Babacar, DB SQLite) — enregistré AVANT les anciennes routes 1:1 ci-dessous,
+// qui restent en place comme repli mais sont masquées par ces handlers.
+registerAdminGerantsRoutes(router);
 
 router.get('/dashboard', async (req, res) => {
   const db = await getDb();
@@ -856,6 +863,17 @@ router.post('/users', async (req, res) => {
         db.run(`INSERT INTO employes (proprietaire_id, terrain_id, nom, email, telephone, whatsapp_number, password_hash, is_active, must_change_password)
           VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)`, [terrain.proprietaire_id, terrain_id, nom, email, telephone, telephone, passwordHash]);
         id = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
+        // Multi-gérants : liaison gerants_terrains (principal si le terrain n'en a pas encore)
+        const hasPrincipal = queryOne(
+          db,
+          'SELECT id FROM gerants_terrains WHERE terrain_id = ? AND est_principal = 1 AND actif = 1',
+          [terrain_id],
+        );
+        db.run(
+          `INSERT OR IGNORE INTO gerants_terrains (gerant_id, terrain_id, est_principal, actif, date_debut, note)
+           VALUES (?, ?, ?, 1, date('now'), 'Création compte admin')`,
+          [id, terrain_id, hasPrincipal ? 0 : 1],
+        );
       }
     });
     await envoyerAcces({ telephone, motDePasse: temporaryPassword, role });
@@ -1246,6 +1264,242 @@ router.patch('/terrains/:id/mode-revenu', async (req, res) => {
     res.json(modeRevenuService.enrichTerrain(next));
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+// ─── Paramètres terrain portés de Babacar (politique paiement, verrou, formats, location) ───
+
+/** Politique de paiement ('avance' | 'sans_avance') + délai de règlement de la dette commission (jours). */
+router.patch('/terrains/:id/politique-paiement', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(
+      db,
+      'SELECT id, politique_paiement, delai_paiement_dette_jours FROM terrains WHERE id = ?',
+      [terrainId],
+    );
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+
+    const body = req.body || {};
+    let politique = body.politique_paiement != null
+      ? String(body.politique_paiement).trim()
+      : String(terrain.politique_paiement || 'avance');
+    if (politique === 'avec_avance') politique = 'avance';
+    if (!['avance', 'sans_avance'].includes(politique)) {
+      return res.status(400).json({ error: "politique_paiement doit être 'avance' ou 'sans_avance'" });
+    }
+
+    let delai = body.delai_paiement_dette_jours != null
+      ? Number(body.delai_paiement_dette_jours)
+      : Number(terrain.delai_paiement_dette_jours || 30);
+    if (!Number.isFinite(delai) || delai < 7 || delai > 90) {
+      return res.status(400).json({ error: 'delai_paiement_dette_jours doit être entre 7 et 90' });
+    }
+    delai = Math.round(delai);
+
+    transaction(db, () => {
+      runSql(
+        db,
+        'UPDATE terrains SET politique_paiement = ?, delai_paiement_dette_jours = ? WHERE id = ?',
+        [politique, delai, terrainId],
+      );
+      try {
+        runSql(
+          db,
+          `INSERT INTO audit_logs (acteur_type, acteur_id, action, table_cible, enregistrement_id, details)
+           VALUES (?, ?, 'politique_paiement', 'terrains', ?, ?)`,
+          [
+            req.user?.role || 'super_admin',
+            req.user?.id || null,
+            terrainId,
+            JSON.stringify({
+              avant: {
+                politique_paiement: terrain.politique_paiement,
+                delai_paiement_dette_jours: terrain.delai_paiement_dette_jours,
+              },
+              apres: { politique_paiement: politique, delai_paiement_dette_jours: delai },
+            }),
+          ],
+        );
+      } catch {
+        /* audit optionnel */
+      }
+    });
+
+    syncApresModificationTerrain(terrainId, 'contrat_paiement', {
+      politique_paiement: politique,
+      delai_paiement_dette_jours: delai,
+    });
+    res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+  } catch (error) {
+    console.error(error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+/** Délai d'indisponibilité du créneau pendant l'attente de confirmation de paiement (minutes, 1..120). */
+router.patch('/terrains/:id/delai-verrou-paiement', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+    const delai = normaliserDelaiVerrouPaiementMin(req.body?.delai_verrou_paiement_min);
+    runSql(db, 'UPDATE terrains SET delai_verrou_paiement_min = ? WHERE id = ?', [delai, terrainId]);
+    syncApresModificationTerrain(terrainId, 'contrat_paiement', { delai_verrou_paiement_min: delai });
+    res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+  } catch (error) {
+    console.error(error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+/** Types de location autorisés + durée minimale (minutes). */
+router.patch('/terrains/:id/location-config', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id, types_location, duree_min_minutes FROM terrains WHERE id = ?', [terrainId]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+
+    const body = req.body || {};
+    const types = body.types_location != null
+      ? String(body.types_location).trim().toLowerCase()
+      : String(terrain.types_location || 'les_deux');
+    if (!['les_deux', 'entier', 'moitie'].includes(types)) {
+      return res.status(400).json({ error: "types_location doit être 'les_deux', 'entier' ou 'moitie'" });
+    }
+
+    let duree = body.duree_min_minutes != null
+      ? Number(body.duree_min_minutes)
+      : Number(terrain.duree_min_minutes || 60);
+    if (!Number.isFinite(duree) || duree < 30 || duree > 480) {
+      return res.status(400).json({ error: 'duree_min_minutes doit être entre 30 et 480' });
+    }
+    duree = Math.round(duree);
+
+    runSql(db, 'UPDATE terrains SET types_location = ?, duree_min_minutes = ? WHERE id = ?', [types, duree, terrainId]);
+    syncApresModificationTerrain(terrainId, 'tarifs_dynamiques', { types_location: types, duree_min_minutes: duree });
+    res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+  } catch (error) {
+    console.error(error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+// Formats de terrain (demi / entier / …) + durées de réservation
+router.get('/terrains/:id/formats', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+    res.json({
+      formats: formatsTerrainService.listFormats(db, terrainId),
+      durees: formatsTerrainService.listDurees(db, terrainId),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.put('/terrains/:id/formats', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const result = formatsTerrainService.replaceFormatsEtDurees(db, terrainId, {
+      formats: req.body?.formats,
+      durees: req.body?.durees,
+    });
+    syncApresModificationTerrain(terrainId, 'tarifs_dynamiques', { action: 'formats' });
+    res.json({ message: 'Formats et durées enregistrés', ...result });
+  } catch (error) {
+    console.error(error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+// Nuit prolongée : heure de fermeture maximale de la plateforme
+const NUIT_PROLONGEE_HEURES = new Set(['23:00', '00:00', '01:00', '02:00', '03:00', '04:00']);
+
+router.get('/nuit-prolongee', async (req, res) => {
+  const db = await getDb();
+  const row = queryOne(db, 'SELECT valeur FROM plateforme_settings WHERE cle = ?', ['heure_fermeture_maximale']);
+  res.json({
+    heure_fermeture_maximale: row?.valeur || '03:00',
+    heure_debut_nuit_prolongee: '00:00',
+  });
+});
+
+router.put('/nuit-prolongee', async (req, res) => {
+  const db = await getDb();
+  const val = String(req.body?.heure_fermeture_maximale || '03:00').slice(0, 5);
+  if (!NUIT_PROLONGEE_HEURES.has(val)) {
+    return res.status(400).json({ error: 'Heure de fermeture maximale invalide' });
+  }
+  transaction(db, () => {
+    const existing = queryOne(db, 'SELECT cle FROM plateforme_settings WHERE cle = ?', ['heure_fermeture_maximale']);
+    if (existing) {
+      runSql(db, 'UPDATE plateforme_settings SET valeur = ?, updated_at = CURRENT_TIMESTAMP WHERE cle = ?', [val, 'heure_fermeture_maximale']);
+    } else {
+      runSql(db, 'INSERT INTO plateforme_settings (cle, valeur) VALUES (?, ?)', ['heure_fermeture_maximale', val]);
+    }
+  });
+  res.json({ heure_fermeture_maximale: val, heure_debut_nuit_prolongee: '00:00' });
+});
+
+// Alertes développeur (e-mail SMTP + WhatsApp plateforme)
+router.get('/bug-alerts/status', async (req, res) => {
+  const bugAlert = require('../services/bugAlertService');
+  res.json({
+    enabled: String(process.env.BUG_ALERT_ENABLED || 'true').toLowerCase() !== 'false',
+    smtp_configured: bugAlert.smtpConfigured(),
+    emails: bugAlert.emailRecipients(),
+    whatsapp: bugAlert.whatsappContacts().map((c) => ({ phone: c.phone, name: c.fullName })),
+  });
+});
+
+router.post('/bug-alerts/test', async (req, res) => {
+  const bugAlert = require('../services/bugAlertService');
+  try {
+    const result = await bugAlert.notify({
+      kind: 'test',
+      title: 'Test alerte développeur TerrainSN',
+      error: new Error(req.body?.message || 'Ceci est un test manuel depuis le superadmin.'),
+      req,
+      force: true,
+      meta: { triggered_by: req.user?.email || req.user?.id || 'superadmin' },
+    });
+    res.json({
+      ok: Boolean(result.ok),
+      email: result.email,
+      whatsapp: result.whatsapp,
+      recipients: {
+        emails: bugAlert.emailRecipients(),
+        whatsapp: bugAlert.whatsappContacts().map((c) => ({ phone: c.phone, name: c.fullName })),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message || 'Envoi impossible' });
+  }
+});
+
+// Régénération de la paire VAPID (Web Push). Invalide tous les abonnements push existants.
+router.post('/integrations/vapid/regenerate', async (req, res) => {
+  try {
+    const pushService = require('../pushService');
+    if (req.body?.confirm !== true && req.body?.confirm !== 'true') {
+      return res.status(400).json({
+        error: 'Confirmation requise : envoie { "confirm": true } (tous les abonnements push seront invalidés).',
+      });
+    }
+    const result = await pushService.regenerateVapidKeys();
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error(error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Régénération impossible' });
   }
 });
 

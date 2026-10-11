@@ -6,6 +6,16 @@ const {
   hourlySlots,
 } = require('./scheduleService');
 
+const DEFAULT_DELAI_VERROU_PAIEMENT_MIN = 15;
+
+/** Délai (minutes) pendant lequel un créneau reste verrouillé en attente de paiement : 1..120, défaut 15. */
+function normaliserDelaiVerrouPaiementMin(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_DELAI_VERROU_PAIEMENT_MIN;
+  if (n > 120) return 120;
+  return Math.round(n);
+}
+
 function rowsModified(database) {
   if (typeof database.getRowsModified === 'function') {
     return database.getRowsModified();
@@ -207,6 +217,8 @@ module.exports = {
   normalizeHourString,
   hourlySlots,
   rowsModified,
+  normaliserDelaiVerrouPaiementMin,
+  DEFAULT_DELAI_VERROU_PAIEMENT_MIN,
   lockCreneauxAtomique,
   libererCreneauxReservation,
   confirmerCreneauxReservation,

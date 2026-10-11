@@ -329,7 +329,7 @@ async function run() {
     // Assert
     h.assert('B7 non configuré → throw', Boolean(err));
     h.assertEqual('B7 statusCode 503', err?.statusCode, 503);
-    h.assert('B7 message config explicite', /pas configuré/i.test(String(err?.message || '')), err?.message);
+    h.assert('B7 message config explicite', /(pas|non) configuré/i.test(String(err?.message || '')), err?.message);
 
     process.env.PAYTECH_API_KEY = savedKey;
     process.env.PAYTECH_API_SECRET = savedSecret;

@@ -24,7 +24,8 @@ const BottomNav = () => {
       icon: User,
       label: "Profil",
       path: profilPath,
-      match: (p: string) => p.startsWith("/profil") || p === "/login",
+      match: (p: string) =>
+        p.startsWith("/profil") || p === "/login" || p.startsWith("/espace-joueur"),
     },
   ];
 

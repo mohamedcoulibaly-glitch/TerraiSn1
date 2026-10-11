@@ -67,15 +67,15 @@ function enregistrerPaiementPending(db, { reservationId, montant, reference, can
 }
 
 /**
- * Crée un paiement via PaymentService :
- * - PAYMENT_MODE=simulation → page locale
- * - PAYMENT_PROVIDER=paydunya → sandbox PayDunya
- * - PAYMENT_PROVIDER=paytech → production PayTech
+ * Crée un paiement réservation joueur via le vrai prestataire
+ * (PayTech / PayDunya) — plus de page /simulation/paiement côté joueur.
  */
 async function creerPaiement({
   reservationId,
   terrainId,
   prixChoisi,
+  montantAvance: montantAvanceOverride,
+  montantRestant: montantRestantOverride,
   joueurNom,
   joueurTelephone,
   preferredChannel,
@@ -93,9 +93,20 @@ async function creerPaiement({
   }
 
   const prix = Number(prixChoisi || 0);
-  const montantAvance = calculerMontantAvance(prix, terrain.pourcentage_avance);
-  const montantRestant = Math.max(0, prix - montantAvance);
+  const avanceCalculee = calculerMontantAvance(prix, terrain.pourcentage_avance);
+  const montantAvance = Number(montantAvanceOverride) > 0
+    ? Math.round(Number(montantAvanceOverride))
+    : avanceCalculee;
+  const montantRestant = Number.isFinite(Number(montantRestantOverride))
+    ? Math.max(0, Math.round(Number(montantRestantOverride)))
+    : Math.max(0, prix - montantAvance);
   const canal = normalizeCanal(preferredChannel);
+
+  if (!(montantAvance > 0)) {
+    const error = new Error('Montant d’avance invalide pour le paiement en ligne');
+    error.statusCode = 400;
+    throw error;
+  }
 
   runSql(
     db,
@@ -109,52 +120,30 @@ async function creerPaiement({
     [montantAvance, montantRestant, montantAvance, montantRestant, canal, reservationId]
   );
 
-  const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
   const refCommand = `TF-${reservationId}-${Date.now()}`;
 
-  let result;
-  if (estModeMock() || paymentMode() === 'simulation') {
-    const params = new URLSearchParams({
-      id: String(reservationId),
-      ref: refCommand,
-      terrain: terrain.nom || '',
-      montant: String(montantAvance),
-      total: String(prix),
-      reste: String(montantRestant),
-      ...(canal ? { canal } : {}),
-    });
-    result = {
-      success: true,
-      redirectUrl: `${domain}/simulation/paiement?${params}`,
-      redirect_url: `${domain}/simulation/paiement?${params}`,
-      reference: refCommand,
-      montantAvance,
-      montantRestant,
-      provider: 'simulation',
-      canal_paiement: canal,
-    };
-  } else {
-    result = await paymentService.createCheckout({
-      reservationId,
-      terrain,
-      montantAvance,
-      montantRestant,
-      prix,
-      refCommand,
-      joueurNom,
-      joueurTelephone,
-      preferredChannel: canal,
-      kind: 'reservation',
-    });
-    result.canal_paiement = canal;
-  }
+  const result = await paymentService.createCheckout({
+    reservationId,
+    terrain,
+    montantAvance,
+    montantRestant,
+    prix,
+    refCommand,
+    joueurNom,
+    joueurTelephone,
+    preferredChannel: canal,
+    kind: 'reservation',
+  });
+  result.canal_paiement = canal;
+  result.montantAvance = montantAvance;
+  result.montantRestant = montantRestant;
 
   enregistrerPaiementPending(db, {
     reservationId,
     montant: montantAvance,
     reference: result.reference || refCommand,
     canal,
-    provider: result.provider,
+    provider: result.provider || targetProvider(),
   });
 
   return result;
@@ -165,10 +154,14 @@ async function creerLienPaiement(reservation, options = {}) {
   const prixChoisi = Number(
     reservation.prix_total || reservation.montant || 0
   );
+  const avanceExistante = Number(reservation.montant_avance || reservation.acompte || 0);
+  const resteExistant = Number(reservation.montant_restant ?? reservation.reste_a_payer);
   return creerPaiement({
     reservationId: reservation.id,
     terrainId: reservation.terrain_id,
     prixChoisi,
+    montantAvance: avanceExistante > 0 ? avanceExistante : undefined,
+    montantRestant: Number.isFinite(resteExistant) ? resteExistant : undefined,
     joueurNom: reservation.joueur_nom,
     joueurTelephone: reservation.joueur_telephone,
     preferredChannel: options.preferredChannel || reservation.canal_paiement || options.methode,
@@ -259,9 +252,86 @@ async function ordonnerPayout({ numero, montant, canal, reservationId, motif = '
   });
 }
 
+/**
+ * Lien de paiement pour solde de dette commission gérant (hors réservation joueur).
+ * Référence : DETTE-{gerantId}-{periode}-{timestamp}
+ */
+async function creerLienPaiementDette({
+  gerantId,
+  terrainId,
+  periode,
+  montant,
+  gerantNom,
+  gerantTelephone,
+  preferredChannel,
+}) {
+  const amount = Math.round(Number(montant || 0));
+  if (!(amount > 0)) {
+    const error = new Error('Montant de dette invalide');
+    error.statusCode = 400;
+    throw error;
+  }
+  const canal = normalizeCanal(preferredChannel);
+  const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
+  const periodeSafe = String(periode || '').replace(/[^\d-]/g, '').slice(0, 7);
+  const refCommand = `DETTE-${Number(gerantId)}-${periodeSafe}-${Date.now()}`;
+
+  let result;
+  if (estModeMock() || paymentMode() === 'simulation') {
+    const params = new URLSearchParams({
+      kind: 'dette',
+      ref: refCommand,
+      gerant_id: String(gerantId),
+      periode: periodeSafe,
+      montant: String(amount),
+      ...(terrainId ? { terrain_id: String(terrainId) } : {}),
+      ...(canal ? { canal } : {}),
+    });
+    result = {
+      success: true,
+      redirectUrl: `${domain}/simulation/paiement?${params}`,
+      redirect_url: `${domain}/simulation/paiement?${params}`,
+      reference: refCommand,
+      montant: amount,
+      provider: 'simulation',
+      canal_paiement: canal,
+      kind: 'dette',
+    };
+  } else {
+    result = await paymentService.createCheckout({
+      // entityId pour les query success (gerant_id) — pas une réservation
+      reservationId: Number(gerantId),
+      terrain: { id: terrainId, nom: `Dette commission ${periodeSafe}` },
+      montantAvance: amount,
+      montantRestant: 0,
+      prix: amount,
+      refCommand,
+      joueurNom: gerantNom || 'Gerant',
+      joueurTelephone: gerantTelephone || '',
+      preferredChannel: canal,
+      kind: 'dette',
+      itemName: `Dette commission — ${periodeSafe}`,
+      commandName: `Solde dette TerrainSN gérant #${gerantId} (${periodeSafe})`,
+      customField: {
+        kind: 'dette',
+        gerant_id: Number(gerantId),
+        periode: periodeSafe,
+        terrain_id: terrainId ? Number(terrainId) : null,
+        montant: amount,
+      },
+    });
+    result.canal_paiement = canal;
+    result.kind = 'dette';
+    result.montant = amount;
+  }
+
+  return result;
+}
+
 module.exports = {
   creerPaiement,
   creerLienPaiement,
+  creerLienPaiementDette,
   calculerMontantAvance,
   montantLienPaiement,
   verifierHash,

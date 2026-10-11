@@ -57,15 +57,16 @@ export default function FormatsTerrainEditor({ terrainId }: Props) {
       toast.error("Au moins un format actif avec un prix > 0");
       return;
     }
-    if (!durees.some((d) => d.actif !== false && Number(d.minutes) > 0)) {
-      toast.error("Au moins une durée active");
-      return;
-    }
     setSaving(true);
     try {
-      const result = await superAdminApi.saveTerrainFormats(terrainId, { formats, durees });
+      // Durée plateforme figée à 1 h
+      const dureesOneHour = [{ minutes: 60, label: "1h", ordre: 0, actif: true }];
+      const result = await superAdminApi.saveTerrainFormats(terrainId, {
+        formats,
+        durees: dureesOneHour,
+      });
       setFormats(Array.isArray(result?.formats) ? result.formats : formats);
-      setDurees(Array.isArray(result?.durees) ? result.durees : durees);
+      setDurees(Array.isArray(result?.durees) ? result.durees : dureesOneHour);
       toast.success("Formats et durées enregistrés — visibles joueur / gérant");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
@@ -242,90 +243,19 @@ export default function FormatsTerrainEditor({ terrainId }: Props) {
       <section className="rounded-xl p-4 space-y-3" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
         <div>
           <h2 className="text-sm font-semibold" style={{ color: "var(--sa-text)" }}>
-            Durées de match proposées
+            Durée de match
           </h2>
           <p className="text-[12px] mt-1" style={{ color: "var(--sa-muted)" }}>
-            Ces durées s&apos;affichent sur la fiche joueur et la réservation express gérant.
+            Fixée à <strong>1 h</strong> pour la réservation en ligne (joueur &amp; express gérant).
+            Les séances plus longues passent par le gérant (tarif négocié, tournoi…).
           </p>
         </div>
-        <div className="space-y-2">
-          {durees.map((d, idx) => (
-            <div
-              key={`${d.minutes}-${idx}`}
-              className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end rounded-lg p-3"
-              style={{ background: "var(--sa-surface-2)" }}
-            >
-              <label className="sm:col-span-3 block">
-                <span className="text-[11px]" style={{ color: "var(--sa-muted)" }}>
-                  Minutes
-                </span>
-                <input
-                  type="number"
-                  min={15}
-                  step={15}
-                  value={d.minutes || ""}
-                  onChange={(e) =>
-                    setDurees((prev) =>
-                      prev.map((row, i) =>
-                        i === idx ? { ...row, minutes: Number(e.target.value) || 0 } : row,
-                      ),
-                    )
-                  }
-                  className="mt-1 h-10 w-full rounded-lg px-2 text-sm"
-                  style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface)" }}
-                />
-              </label>
-              <label className="sm:col-span-4 block">
-                <span className="text-[11px]" style={{ color: "var(--sa-muted)" }}>
-                  Libellé
-                </span>
-                <input
-                  value={d.label}
-                  onChange={(e) =>
-                    setDurees((prev) =>
-                      prev.map((row, i) => (i === idx ? { ...row, label: e.target.value } : row)),
-                    )
-                  }
-                  className="mt-1 h-10 w-full rounded-lg px-2 text-sm"
-                  style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface)" }}
-                />
-              </label>
-              <label className="sm:col-span-3 flex items-center gap-2 min-h-[40px]">
-                <input
-                  type="checkbox"
-                  checked={d.actif !== false}
-                  onChange={(e) =>
-                    setDurees((prev) =>
-                      prev.map((row, i) => (i === idx ? { ...row, actif: e.target.checked } : row)),
-                    )
-                  }
-                />
-                <span className="text-xs">Actif</span>
-              </label>
-              <button
-                type="button"
-                className="sm:col-span-2 h-10 rounded-lg inline-flex items-center justify-center gap-1 text-xs font-medium"
-                style={{ color: "var(--sa-danger)", border: "1px solid var(--sa-border)" }}
-                onClick={() => setDurees((prev) => prev.filter((_, i) => i !== idx))}
-              >
-                <Trash2 className="w-4 h-4" /> Retirer
-              </button>
-            </div>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() =>
-            setDurees((prev) => [
-              ...prev,
-              { minutes: 60, label: "1h", ordre: prev.length, actif: true },
-            ])
-          }
-          className="min-h-[40px] px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5"
-          style={{ border: "1px dashed var(--sa-border)", color: "var(--sa-primary)" }}
+        <div
+          className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold"
+          style={{ background: "var(--sa-surface-2)", color: "var(--sa-text)" }}
         >
-          <Plus className="w-4 h-4" /> Ajouter une durée
-        </button>
+          1h · 60 min
+        </div>
       </section>
 
       <div className="flex flex-wrap items-center justify-between gap-3">

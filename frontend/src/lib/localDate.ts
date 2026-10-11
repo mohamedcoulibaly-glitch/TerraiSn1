@@ -18,6 +18,22 @@ export function weekDates(from = localYmd()) {
   });
 }
 
+/** Fenêtre glissante : `from` + les 6 jours suivants (= 7 jours), y compris le week-end. */
+export function next7Days(from = localYmd()) {
+  const d = new Date(`${from}T12:00:00`);
+  return Array.from({ length: 7 }, (_, i) => {
+    const x = new Date(d);
+    x.setDate(d.getDate() + i);
+    return localYmd(x);
+  });
+}
+
+export function addDaysYmd(ymd: string, delta: number) {
+  const d = new Date(`${ymd}T12:00:00`);
+  d.setDate(d.getDate() + delta);
+  return localYmd(d);
+}
+
 export function formatJourCourt(ymd: string) {
   const d = new Date(`${ymd}T12:00:00`);
   const jours = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];

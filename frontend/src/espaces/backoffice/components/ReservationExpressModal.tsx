@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, X, AlertTriangle, Moon } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, X, AlertTriangle, Moon } from "lucide-react";
+import { WhatsAppIcon } from "@/components/WhatsAppIcon";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
@@ -18,12 +19,16 @@ import {
 } from "@/utils/creneauLabel";
 
 type JoueurConnu = {
-  id: number;
+  id?: number | null;
   display_nom: string;
   prenom?: string | null;
   nom?: string | null;
   telephone?: string | null;
+  photo_url?: string | null;
 };
+
+/** inscrit = compte plateforme ; connu = historique manuel ; nouveau = inconnu */
+type LookupKind = "idle" | "loading" | "inscrit" | "connu" | "nouveau";
 
 type Prefill = {
   date?: string;
@@ -55,9 +60,6 @@ type ExpressDraft = {
   dateSelectionnee: string;
   selectedSlot: string | null;
   selectedDuration: number;
-  heureDebutManuelle: string;
-  heureFinManuelle: string;
-  modeHoraire: "liste" | "manuel";
   formatTerrain: string;
   joueurTel: string;
   joueurPrenom: string;
@@ -96,12 +98,8 @@ function getEndTime(startSlot: string, durationHours: number) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-const DUREES_EXPRESS_FALLBACK = [
-  { label: "1h", hours: 1 },
-  { label: "1h30", hours: 1.5 },
-  { label: "2h", hours: 2 },
-  { label: "3h", hours: 3 },
-] as const;
+/** Réservation standard = 1 h. Au-delà = négociation gérant (tournoi…). */
+const DUREES_EXPRESS_FALLBACK = [{ label: "1h", hours: 1 }] as const;
 
 function formatDureeLabel(hours: number) {
   if (hours === 1.5) return "1h30";
@@ -149,16 +147,32 @@ export default function ReservationExpressModal({
 }: Props) {
   const navigate = useNavigate();
   const lockedCreneau = Boolean(prefill?.date && prefill?.heure_debut && prefill?.heure_fin);
-  const dates = useMemo(() => buildDateChips(7), []);
+  const baseDates = useMemo(() => buildDateChips(7), []);
   const todayIso = localYmd();
 
   const [step, setStep] = useState<Step>(1);
   const [dateSelectionnee, setDateSelectionnee] = useState(todayIso);
+
+  /** Inclut une date hors des 7 jours (ex. choisie via le calendrier dashboard). */
+  const dates = useMemo(() => {
+    if (!dateSelectionnee || baseDates.some((d) => d.isoDate === dateSelectionnee)) {
+      return baseDates;
+    }
+    const d = new Date(`${dateSelectionnee}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return baseDates;
+    return [
+      ...baseDates,
+      {
+        day: d.getDate(),
+        weekday: ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"][d.getDay()],
+        isToday: false,
+        isoDate: dateSelectionnee,
+        shortLabel: null as string | null,
+      },
+    ];
+  }, [baseDates, dateSelectionnee]);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [selectedDuration, setSelectedDuration] = useState(1);
-  const [heureDebutManuelle, setHeureDebutManuelle] = useState("");
-  const [heureFinManuelle, setHeureFinManuelle] = useState("");
-  const [modeHoraire, setModeHoraire] = useState<"liste" | "manuel">("liste");
   const [nuitWarnDismissed, setNuitWarnDismissed] = useState(false);
   const [verifState, setVerifState] = useState<"idle" | "loading" | "ok" | "conflit">("idle");
   const [verifMsg, setVerifMsg] = useState<string | null>(null);
@@ -190,7 +204,8 @@ export default function ReservationExpressModal({
   const [joueurNomFamille, setJoueurNomFamille] = useState("");
   const [joueurId, setJoueurId] = useState<number | null>(null);
   const [joueurConnu, setJoueurConnu] = useState<JoueurConnu | null>(null);
-  const [lookupState, setLookupState] = useState<"idle" | "loading" | "connu" | "nouveau">("idle");
+  const [lookupState, setLookupState] = useState<LookupKind>("idle");
+  const namesLocked = lookupState === "inscrit";
   const [devis, setDevis] = useState<{
     montant: number;
     montant_avance: number;
@@ -209,20 +224,14 @@ export default function ReservationExpressModal({
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
 
   const selectedDate = dateSelectionnee || todayIso;
-  const heureFin =
-    modeHoraire === "manuel" && heureDebutManuelle && heureFinManuelle
-      ? formatHourLabel(heureFinManuelle)
-      : selectedSlot
-        ? getEndTime(selectedSlot, selectedDuration)
-        : null;
-  const heureDebutEffective =
-    modeHoraire === "manuel" && heureDebutManuelle
-      ? formatHourLabel(heureDebutManuelle)
-      : selectedSlot;
+  const heureDebutEffective = selectedSlot;
+  const heureFin = selectedSlot ? getEndTime(selectedSlot, selectedDuration) : null;
   const telLocal = toLocal9(joueurTel);
   const telError = joueurTel.trim() ? phoneError(joueurTel) : "Numéro de téléphone requis";
   const displayNom = (
-    joueurConnu?.display_nom || [joueurPrenom, joueurNomFamille].filter(Boolean).join(" ")
+    namesLocked
+      ? joueurConnu?.display_nom || [joueurPrenom, joueurNomFamille].filter(Boolean).join(" ")
+      : [joueurPrenom, joueurNomFamille].filter(Boolean).join(" ")
   ).trim();
 
   const freeSlots = useMemo(
@@ -277,26 +286,14 @@ export default function ReservationExpressModal({
       setStep(draft?.step && draft.step > 1 ? draft.step : 1);
       setDateSelectionnee(iso);
       setSelectedSlot(formatHourLabel(prefill.heure_debut));
-      setHeureDebutManuelle(formatHourLabel(prefill.heure_debut));
-      setHeureFinManuelle(formatHourLabel(prefill.heure_fin));
-      setModeHoraire("liste");
-      const startM =
-        parseInt(prefill.heure_debut.slice(0, 2), 10) * 60 +
-        parseInt(prefill.heure_debut.slice(3, 5) || "0", 10);
-      const endM =
-        parseInt(prefill.heure_fin.slice(0, 2), 10) * 60 +
-        parseInt(prefill.heure_fin.slice(3, 5) || "0", 10);
-      let durH = (endM - startM) / 60;
-      if (!(durH > 0)) durH = 1;
-      const match = dureesOpts.find((d) => Math.abs(d.hours - durH) < 0.01);
-      setSelectedDuration(match ? match.hours : Math.min(3, Math.max(1, Math.round(durH))));
+      setSelectedDuration(1);
       setFormatTerrain(draft?.formatTerrain || "moitie");
       setJoueurTel(draft?.joueurTel || "");
       setJoueurPrenom(draft?.joueurPrenom || "");
       setJoueurNomFamille(draft?.joueurNomFamille || "");
       setJoueurId(draft?.joueurId ?? null);
       setJoueurConnu(null);
-      setLookupState(draft?.joueurTel ? "idle" : "idle");
+      setLookupState("idle");
       setPayChoice(draft?.payChoice || "lien");
       setNoteManuel(draft?.noteManuel || "");
     } else if (draft) {
@@ -304,9 +301,6 @@ export default function ReservationExpressModal({
       setDateSelectionnee(draft.dateSelectionnee || iso);
       setSelectedSlot(draft.selectedSlot);
       setSelectedDuration(draft.selectedDuration || 1);
-      setHeureDebutManuelle(draft.heureDebutManuelle || "");
-      setHeureFinManuelle(draft.heureFinManuelle || "");
-      setModeHoraire(draft.modeHoraire || "liste");
       setFormatTerrain(draft.formatTerrain || "moitie");
       setJoueurTel(draft.joueurTel || "");
       setJoueurPrenom(draft.joueurPrenom || "");
@@ -320,9 +314,6 @@ export default function ReservationExpressModal({
       setStep(1);
       setDateSelectionnee(iso);
       setSelectedSlot(null);
-      setHeureDebutManuelle("");
-      setHeureFinManuelle("");
-      setModeHoraire("liste");
       setSelectedDuration(1);
       setFormatTerrain("moitie");
       setJoueurTel("");
@@ -356,9 +347,6 @@ export default function ReservationExpressModal({
       dateSelectionnee,
       selectedSlot,
       selectedDuration,
-      heureDebutManuelle,
-      heureFinManuelle,
-      modeHoraire,
       formatTerrain,
       joueurTel,
       joueurPrenom,
@@ -376,9 +364,6 @@ export default function ReservationExpressModal({
     dateSelectionnee,
     selectedSlot,
     selectedDuration,
-    heureDebutManuelle,
-    heureFinManuelle,
-    modeHoraire,
     formatTerrain,
     joueurTel,
     joueurPrenom,
@@ -407,7 +392,9 @@ export default function ReservationExpressModal({
         setPourcentageAvance(Number.isFinite(pctAvance) && pctAvance > 0 ? pctAvance : 12.5);
         const pctComm = Number(t?.commission_pourcentage);
         setCommissionPourcentage(Number.isFinite(pctComm) && pctComm > 0 ? pctComm : 8);
-        const formats =
+        const typesLoc = String(t?.types_location || "les_deux");
+
+        let formats =
           Array.isArray(t?.formats) && t.formats.length
             ? t.formats.map((f: any) => ({
                 cle: String(f.cle),
@@ -424,21 +411,41 @@ export default function ReservationExpressModal({
                   map_grille: "entier",
                 },
               ];
+        if (typesLoc === "demi_terrain") {
+          formats = formats.filter(
+            (f: any) => f.map_grille === "demi" || f.cle === "moitie" || /demi/i.test(f.label),
+          );
+        } else if (typesLoc === "entier") {
+          formats = formats.filter(
+            (f: any) => f.map_grille === "entier" || f.cle === "entier" || /entier/i.test(f.label),
+          );
+        }
+        if (!formats.length) {
+          formats =
+            typesLoc === "entier"
+              ? [
+                  {
+                    cle: "entier",
+                    label: "Terrain entier",
+                    prix_heure: Number(t?.prix_entier || t?.prix_heure || 0),
+                    map_grille: "entier",
+                  },
+                ]
+              : [
+                  {
+                    cle: "moitie",
+                    label: "Demi-terrain",
+                    prix_heure: Number(t?.prix_moitie || 0),
+                    map_grille: "demi",
+                  },
+                ];
+        }
         setFormatsOpts(formats);
         const preferred = formats.find((f: any) => f.cle === "moitie") || formats[0];
         if (preferred) setFormatTerrain(preferred.cle);
-        const durees =
-          Array.isArray(t?.durees) && t.durees.length
-            ? t.durees.map((d: any) => ({
-                label: String(d.label || `${d.minutes} min`),
-                hours: Number(d.minutes) / 60,
-              }))
-            : [...DUREES_EXPRESS_FALLBACK];
-        setDureesOpts(durees);
-        if (!prefill?.heure_debut) {
-          const d1 = durees.find((d: any) => Math.abs(d.hours - 1) < 0.01) || durees[0];
-          if (d1) setSelectedDuration(d1.hours);
-        }
+
+        setDureesOpts([{ label: "1h", hours: 1 }]);
+        setSelectedDuration(1);
       })
       .catch(() => {
         setTerrainPrix({ moitie: 0, entier: 0 });
@@ -481,27 +488,11 @@ export default function ReservationExpressModal({
           if (!Number.isFinite(h)) return true;
           return h * 60 + (m || 0) > nowMin;
         });
-        if (slots.length === 0) {
-          slots = ["18:00", "19:00", "20:00", "21:00"].map((heure) => ({
-            heure,
-            heure_fin: getEndTime(heure, 1),
-            date: selectedDate,
-            disponible: true,
-            statut: "libre",
-          }));
-        }
         setCreneaux(slots);
       })
       .catch(() => {
         if (cancelled) return;
-        setCreneaux(
-          ["18:00", "19:00", "20:00", "21:00"].map((heure) => ({
-            heure,
-            heure_fin: getEndTime(heure, 1),
-            disponible: true,
-            statut: "libre",
-          })),
-        );
+        setCreneaux([]);
       })
       .finally(() => {
         if (!cancelled) setLoadingSlots(false);
@@ -555,14 +546,9 @@ export default function ReservationExpressModal({
       window.clearTimeout(t);
     };
   }, [open, terrainId, selectedDate, heureDebutEffective, heureFin, selectedDuration, bookingDateTechnique]);
+  // Auto-complétion joueur — debounce 400 ms dès 9 chiffres
   useEffect(() => {
-    if (!open || telLocal.length !== 9) {
-      setLookupState("idle");
-      setJoueurConnu(null);
-      setJoueurId(null);
-      return;
-    }
-    if (phoneError(joueurTel)) {
+    if (!open || telLocal.length !== 9 || phoneError(joueurTel)) {
       setLookupState("idle");
       setJoueurConnu(null);
       setJoueurId(null);
@@ -571,43 +557,80 @@ export default function ReservationExpressModal({
 
     let cancelled = false;
     setLookupState("loading");
-    gerantApi
-      .joueurByTelephone(telLocal)
-      .then((data) => {
-        if (cancelled) return;
-        if (data?.trouve && data.joueur) {
-          const known = data.joueur;
-          const split = splitDisplayNom(known.display_nom);
-          const prenomDb = String(known.prenom || "").trim();
-          const nomDb = String(known.nom || "").trim();
-          const prenom = prenomDb || split.prenom;
-          const nom = prenomDb
-            ? nomDb.startsWith(prenom) && nomDb !== prenom
-              ? nomDb.slice(prenom.length).trim()
-              : nomDb === prenom
-                ? ""
-                : nomDb
-            : split.nom;
-          setJoueurConnu(known);
-          setJoueurId(known.id);
-          setJoueurPrenom(prenom);
-          setJoueurNomFamille(nom);
-          setLookupState("connu");
-        } else {
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const data = await gerantApi.joueurByTelephone(telLocal);
+          if (cancelled) return;
+
+          // CAS 1 — compte plateforme
+          if (data?.trouve && data.joueur) {
+            const known = data.joueur;
+            const split = splitDisplayNom(known.display_nom);
+            const prenomDb = String(known.prenom || "").trim();
+            const nomDb = String(known.nom || "").trim();
+            const prenom = prenomDb || split.prenom;
+            const nom = prenomDb
+              ? nomDb.startsWith(prenom) && nomDb !== prenom
+                ? nomDb.slice(prenom.length).trim()
+                : nomDb === prenom
+                  ? ""
+                  : nomDb
+              : split.nom;
+            setJoueurConnu({
+              id: known.id,
+              display_nom: known.display_nom,
+              prenom: known.prenom,
+              nom: known.nom,
+              telephone: known.telephone,
+              photo_url: known.photo_url || null,
+            });
+            setJoueurId(known.id);
+            setJoueurPrenom(prenom);
+            setJoueurNomFamille(nom);
+            setLookupState("inscrit");
+            return;
+          }
+
+          // CAS 2 — historique manuel sans compte
+          const hist = await gerantApi.joueurHistorique(telLocal);
+          if (cancelled) return;
+          const last = hist?.reservations?.[0];
+          if (last?.joueur_nom) {
+            const split = splitDisplayNom(last.joueur_nom);
+            setJoueurConnu({
+              id: null,
+              display_nom: last.joueur_nom,
+              prenom: split.prenom,
+              nom: split.nom,
+              telephone: last.joueur_telephone,
+              photo_url: null,
+            });
+            setJoueurId(null);
+            setJoueurPrenom(split.prenom);
+            setJoueurNomFamille(split.nom);
+            setLookupState("connu");
+            return;
+          }
+
+          // CAS 3 — numéro inconnu
+          setJoueurConnu(null);
+          setJoueurId(null);
+          setJoueurPrenom("");
+          setJoueurNomFamille("");
+          setLookupState("nouveau");
+        } catch {
+          if (cancelled) return;
           setJoueurConnu(null);
           setJoueurId(null);
           setLookupState("nouveau");
         }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setJoueurConnu(null);
-        setJoueurId(null);
-        setLookupState("nouveau");
-      });
+      })();
+    }, 400);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [open, telLocal, joueurTel]);
 
@@ -961,7 +984,7 @@ export default function ReservationExpressModal({
               }}
             >
               <div className="flex items-start gap-2">
-                <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+                <WhatsAppIcon size={22} className="shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-bold" style={{ color: "var(--g-text)" }}>
                     WhatsApp déconnecté
@@ -976,9 +999,10 @@ export default function ReservationExpressModal({
               <button
                 type="button"
                 onClick={goToWhatsAppPairing}
-                className="flex min-h-[48px] w-full items-center justify-center rounded-xl text-sm font-semibold text-white"
-                style={{ background: "var(--g-primary)" }}
+                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold text-white"
+                style={{ background: "#25D366" }}
               >
+                <WhatsAppIcon className="w-5 h-5" light />
                 Connecter WhatsApp
               </button>
               <button
@@ -1029,7 +1053,8 @@ export default function ReservationExpressModal({
                     </div>
                     {noFreeToday ? (
                       <p className="mt-2 text-xs text-amber-600">
-                        Aucun créneau libre aujourd&apos;hui — choisis une autre date.
+                        Aucun créneau libre aujourd&apos;hui — crée d&apos;abord un créneau dans
+                        l&apos;agenda.
                       </p>
                     ) : null}
                   </div>
@@ -1038,93 +1063,15 @@ export default function ReservationExpressModal({
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
                       Durée
                     </p>
-                    <div className="flex flex-wrap gap-2">
-                      {dureesOpts.map((d) => (
-                        <button
-                          key={d.label}
-                          type="button"
-                          disabled={lockedCreneau}
-                          onClick={() => {
-                            setSelectedDuration(d.hours);
-                            if (modeHoraire === "liste") setSelectedSlot(null);
-                          }}
-                          className={cn(
-                            "min-h-[44px] min-w-[56px] flex-1 rounded-xl text-sm font-semibold",
-                            selectedDuration === d.hours
-                              ? "bg-[var(--g-primary)] text-white"
-                              : "border border-gray-200 bg-white text-[var(--text-secondary)]",
-                          )}
-                        >
-                          {d.label}
-                        </button>
-                      ))}
-                    </div>
-                    {selectedDuration !== 1 ? (
-                      <p className="mt-2 text-[11px] text-amber-700">
-                        Durée ≠ 1 h (habituel) — vérifie avant de continuer.
-                      </p>
-                    ) : null}
+                    <span className="inline-flex min-h-[44px] min-w-[56px] items-center justify-center rounded-xl bg-[var(--g-primary)] px-4 text-sm font-semibold text-white">
+                      1h
+                    </span>
+                    <p className="mt-2 text-[11px] text-neutral-500">
+                      Réservation standard 1 h. Pour une séance plus longue ou un tournoi, utilise le
+                      blocage / tarif négocié hors express.
+                    </p>
                   </div>
 
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setModeHoraire("liste")}
-                      className={cn(
-                        "flex-1 min-h-[36px] rounded-lg text-xs font-semibold",
-                        modeHoraire === "liste"
-                          ? "bg-[var(--g-primary)] text-white"
-                          : "bg-neutral-100 text-neutral-500",
-                      )}
-                    >
-                      Liste des libres
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setModeHoraire("manuel")}
-                      disabled={lockedCreneau}
-                      className={cn(
-                        "flex-1 min-h-[36px] rounded-lg text-xs font-semibold",
-                        modeHoraire === "manuel"
-                          ? "bg-[var(--g-primary)] text-white"
-                          : "bg-neutral-100 text-neutral-500",
-                      )}
-                    >
-                      Début / Fin
-                    </button>
-                  </div>
-
-                  {modeHoraire === "manuel" ? (
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="mb-1 block text-[11px] font-semibold text-neutral-400">
-                          Heure de début
-                        </label>
-                        <input
-                          type="time"
-                          value={heureDebutManuelle}
-                          disabled={lockedCreneau}
-                          onChange={(e) => {
-                            setHeureDebutManuelle(e.target.value);
-                            setSelectedSlot(formatHourLabel(e.target.value));
-                          }}
-                          className="w-full min-h-[44px] rounded-xl border border-gray-200 px-3 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-[11px] font-semibold text-neutral-400">
-                          Heure de fin
-                        </label>
-                        <input
-                          type="time"
-                          value={heureFinManuelle}
-                          disabled={lockedCreneau}
-                          onChange={(e) => setHeureFinManuelle(e.target.value)}
-                          className="w-full min-h-[44px] rounded-xl border border-gray-200 px-3 text-sm"
-                        />
-                      </div>
-                    </div>
-                  ) : (
                   <div>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
                       Créneaux libres
@@ -1136,8 +1083,10 @@ export default function ReservationExpressModal({
                         ))}
                       </div>
                     ) : freeSlots.length === 0 ? (
-                      <p className="py-6 text-center text-sm text-neutral-400">
-                        Aucun créneau libre ce jour
+                      <p className="py-6 text-center text-sm text-amber-700">
+                        {selectedDate === todayIso
+                          ? "Aucun créneau libre aujourd'hui — crée d'abord un créneau dans l'agenda."
+                          : "Aucun créneau libre ce jour"}
                       </p>
                     ) : (
                       <div className="flex flex-col gap-3">
@@ -1263,7 +1212,6 @@ export default function ReservationExpressModal({
                       </div>
                     ) : null}
                   </div>
-                  )}
 
                   {verifState !== "idle" ? (
                     <div
@@ -1309,7 +1257,8 @@ export default function ReservationExpressModal({
                         setJoueurTel(formatPhoneDisplay(e.target.value));
                         setJoueurId(null);
                         setJoueurConnu(null);
-                        if (lookupState === "connu") {
+                        setLookupState("idle");
+                        if (lookupState === "inscrit" || lookupState === "connu") {
                           setJoueurPrenom("");
                           setJoueurNomFamille("");
                         }
@@ -1334,26 +1283,88 @@ export default function ReservationExpressModal({
                   </div>
 
                   {lookupState === "loading" && (
-                    <p className="text-[11px] text-neutral-400">Recherche du joueur…</p>
-                  )}
-
-                  {lookupState === "connu" && joueurConnu && (
-                    <div className="flex items-center gap-3 rounded-xl border border-[color-mix(in_srgb,var(--g-primary)_25%,white)] bg-[var(--g-primary-glow)] px-3 py-3">
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--g-primary)] text-sm font-bold text-white">
-                        {initialsFrom(joueurPrenom, joueurNomFamille, joueurConnu.display_nom)}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-[var(--g-text)]">{joueurConnu.display_nom}</p>
-                        <p className="text-xs text-[var(--g-text-2)]">✓ {joueurConnu.display_nom} — joueur connu</p>
-                      </div>
+                    <div className="flex items-center gap-2 text-[11px] text-neutral-400">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Recherche du joueur…
                     </div>
                   )}
 
+                  {/* CAS 1 — inscrit plateforme */}
+                  {lookupState === "inscrit" && joueurConnu && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+                        {joueurConnu.photo_url ? (
+                          <img
+                            src={joueurConnu.photo_url}
+                            alt=""
+                            className="h-11 w-11 shrink-0 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
+                            {initialsFrom(joueurPrenom, joueurNomFamille, joueurConnu.display_nom)}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-emerald-900">
+                            {joueurConnu.display_nom}
+                          </p>
+                          <span className="mt-0.5 inline-flex rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                            Compte TerrainSN ✓
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        value={joueurPrenom}
+                        readOnly
+                        disabled
+                        placeholder="Prénom"
+                        className="h-12 w-full rounded-xl border border-gray-200 bg-neutral-100 px-3 text-sm text-neutral-600 outline-none"
+                      />
+                      <input
+                        value={joueurNomFamille}
+                        readOnly
+                        disabled
+                        placeholder="Nom"
+                        className="h-12 w-full rounded-xl border border-gray-200 bg-neutral-100 px-3 text-sm text-neutral-600 outline-none"
+                      />
+                    </div>
+                  )}
+
+                  {/* CAS 2 — fréquent non inscrit */}
+                  {lookupState === "connu" && joueurConnu && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-100 px-3 py-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-neutral-400 text-sm font-bold text-white">
+                          {initialsFrom(joueurPrenom, joueurNomFamille, joueurConnu.display_nom)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-neutral-800">
+                            {joueurConnu.display_nom}
+                          </p>
+                          <span className="mt-0.5 inline-flex rounded-full bg-neutral-500 px-2 py-0.5 text-[10px] font-semibold text-white">
+                            Joueur connu 📋
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        value={joueurPrenom}
+                        onChange={(e) => setJoueurPrenom(e.target.value)}
+                        placeholder="Prénom"
+                        className="h-12 w-full rounded-xl border border-gray-200 bg-[var(--surface-2)] px-3 text-sm outline-none focus:border-[var(--g-primary)]"
+                      />
+                      <input
+                        value={joueurNomFamille}
+                        onChange={(e) => setJoueurNomFamille(e.target.value)}
+                        placeholder="Nom"
+                        className="h-12 w-full rounded-xl border border-gray-200 bg-[var(--surface-2)] px-3 text-sm outline-none focus:border-[var(--g-primary)]"
+                      />
+                    </div>
+                  )}
+
+                  {/* CAS 3 — numéro inconnu */}
                   {lookupState === "nouveau" && (
                     <div className="space-y-3">
-                      <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        Nouveau joueur — il recevra son accès par WhatsApp
-                      </p>
+                      <p className="text-xs text-neutral-500">Nouveau joueur — saisis son prénom</p>
                       <input
                         value={joueurPrenom}
                         onChange={(e) => setJoueurPrenom(e.target.value)}
@@ -1382,40 +1393,45 @@ export default function ReservationExpressModal({
                   </p>
 
                   <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-                      Type de terrain
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {formatsOpts.map((fmt) => {
-                        const active = formatTerrain === fmt.cle;
-                        return (
-                          <button
-                            key={fmt.cle}
-                            type="button"
-                            onClick={() => setFormatTerrain(fmt.cle)}
-                            className={cn(
-                              "min-h-[64px] rounded-xl border p-3 text-left",
-                              active
-                                ? "border-[var(--g-primary)] bg-[var(--g-primary)] text-white"
-                                : "border-gray-200 bg-white",
-                            )}
-                          >
-                            <span className="block text-sm font-semibold">{fmt.label}</span>
-                            <span className="text-[11px] opacity-80">
-                              {active && devis
-                                ? `Total créneau : ${formatFcfa(devis.montant)}`
-                                : "Prix selon créneau / grille"}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {formatTerrain !== "moitie" ? (
-                      <p className="mt-2 text-[11px] text-amber-700">
-                        Format sélectionné :{" "}
-                        {formatsOpts.find((f) => f.cle === formatTerrain)?.label || formatTerrain}
+                    {formatsOpts.length > 1 ? (
+                      <>
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                          Type de terrain
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {formatsOpts.map((fmt) => {
+                            const active = formatTerrain === fmt.cle;
+                            return (
+                              <button
+                                key={fmt.cle}
+                                type="button"
+                                onClick={() => setFormatTerrain(fmt.cle)}
+                                className={cn(
+                                  "min-h-[64px] rounded-xl border p-3 text-left",
+                                  active
+                                    ? "border-[var(--g-primary)] bg-[var(--g-primary)] text-white"
+                                    : "border-gray-200 bg-white",
+                                )}
+                              >
+                                <span className="block text-sm font-semibold">{fmt.label}</span>
+                                <span className="text-[11px] opacity-80">
+                                  {active && devis
+                                    ? `Total créneau : ${formatFcfa(devis.montant)}`
+                                    : "Prix selon créneau / grille"}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-xs text-neutral-500">
+                        Type :{" "}
+                        <span className="font-semibold text-[var(--g-text)]">
+                          {formatsOpts[0]?.label || formatTerrain}
+                        </span>
                       </p>
-                    ) : null}
+                    )}
                     {devis?.nom_tarif ? (
                       <p className="mt-1 text-[11px] text-neutral-500">
                         Tarif appliqué : {devis.nom_tarif}
@@ -1494,12 +1510,13 @@ export default function ReservationExpressModal({
                     <button
                       type="button"
                       onClick={() => setPayChoice("lien")}
-                      className="w-full rounded-xl px-3 py-3 text-left text-sm"
+                      className="w-full rounded-xl px-3 py-3 text-left text-sm inline-flex items-center gap-2"
                       style={{
                         border: payChoice === "lien" ? "1.5px solid var(--g-primary)" : "1px solid var(--g-border, #e5e7eb)",
                         background: payChoice === "lien" ? "var(--g-primary-glow)" : "transparent",
                       }}
                     >
+                      <WhatsAppIcon className="w-4 h-4 shrink-0" />
                       Envoyer le lien de paiement WhatsApp
                     </button>
                   ) : null}
@@ -1551,8 +1568,9 @@ export default function ReservationExpressModal({
                       type="button"
                       disabled={busy}
                       onClick={() => void submitPaiement()}
-                      className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[var(--g-primary)] text-sm font-semibold text-white disabled:opacity-50"
+                      className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-[#25D366] text-sm font-semibold text-white disabled:opacity-50"
                     >
+                      <WhatsAppIcon className="w-4 h-4" light />
                       {busy ? "Envoi…" : "Envoyer le lien de paiement WhatsApp"}
                     </button>
                   ) : (

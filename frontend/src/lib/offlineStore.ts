@@ -37,7 +37,7 @@ export interface PendingReservation {
     heure_fin: string;
     joueur_nom: string;
     joueur_telephone: string;
-    format_terrain?: 'moitie' | 'entier';
+    format_terrain?: string;
   };
   token: string | null;
   createdAt: number;

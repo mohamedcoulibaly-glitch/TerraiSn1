@@ -53,6 +53,8 @@ function mountPaymentRoutes(app) {
       target = `${frontend()}/backoffice/superadmin/abonnements?paiement=ok${abonnementId ? `&abonnement_id=${abonnementId}` : ''}`;
     } else if (terrainId > 0 && kind === 'achat') {
       target = `${frontend()}/backoffice/superadmin/abonnements?paiement=ok&kind=achat&terrain_id=${terrainId}`;
+    } else if (kind === 'dette') {
+      target = `${frontend()}/backoffice/gerant/finances?paiement_dette=ok`;
     } else {
       target = id > 0
         ? `${frontend()}/reservation/succes?id=${id}`
@@ -62,6 +64,9 @@ function mountPaymentRoutes(app) {
   });
 
   app.get('/paytech/cancel', (req, res) => {
+    if (String(req.query.kind || '') === 'dette') {
+      return redirectToFrontend(res, `${frontend()}/backoffice/gerant/finances?paiement_dette=annule`);
+    }
     const terrainId = req.query.terrain_id ? `?terrain_id=${encodeURIComponent(String(req.query.terrain_id))}` : '';
     return redirectToFrontend(res, `${frontend()}/reservation/annule${terrainId}`);
   });
@@ -83,6 +88,8 @@ function mountPaymentRoutes(app) {
       target = `${frontend()}/backoffice/superadmin/abonnements?paiement=ok${abonnementId ? `&abonnement_id=${abonnementId}` : ''}`;
     } else if (terrainId > 0 && kind === 'achat') {
       target = `${frontend()}/backoffice/superadmin/abonnements?paiement=ok&kind=achat&terrain_id=${terrainId}`;
+    } else if (kind === 'dette') {
+      target = `${frontend()}/backoffice/gerant/finances?paiement_dette=ok`;
     } else {
       target = id > 0
         ? `${frontend()}/reservation/succes?id=${id}`
@@ -92,6 +99,9 @@ function mountPaymentRoutes(app) {
   });
 
   app.get('/paydunya/cancel', (req, res) => {
+    if (String(req.query.kind || '') === 'dette') {
+      return redirectToFrontend(res, `${frontend()}/backoffice/gerant/finances?paiement_dette=annule`);
+    }
     const terrainId = req.query.terrain_id ? `?terrain_id=${encodeURIComponent(String(req.query.terrain_id))}` : '';
     return redirectToFrontend(res, `${frontend()}/reservation/annule${terrainId}`);
   });
@@ -131,8 +141,15 @@ function mountPaymentRoutes(app) {
       const {
         confirmerAbonnementDepuisIpn,
         confirmerAchatDepuisIpn,
+        confirmerDetteDepuisIpn,
       } = require('./flow');
-      const { kindFromReference, abonnementIdDepuisReference, terrainIdDepuisReferenceAchat } = require('../lib/paymentChannels');
+      const {
+        kindFromReference,
+        abonnementIdDepuisReference,
+        terrainIdDepuisReferenceAchat,
+        gerantIdDepuisReferenceDette,
+        periodeDepuisReferenceDette,
+      } = require('../lib/paymentChannels');
 
       if (!refCommand || !['success', 'cancel', 'failed'].includes(action)) {
         return res.status(400).json({ error: 'Paiement simule invalide' });
@@ -162,6 +179,23 @@ function mountPaymentRoutes(app) {
         }
         await confirmerAchatDepuisIpn(refCommand, { terrainId, montant: req.body.montant });
         return res.json({ redirect_url: `${domain}/backoffice/superadmin/abonnements?paiement=ok&kind=achat&terrain_id=${terrainId}` });
+      }
+
+      if (kind === 'dette') {
+        const gerantId = Number(req.body.gerant_id || gerantIdDepuisReferenceDette(refCommand));
+        const periode = String(req.body.periode || periodeDepuisReferenceDette(refCommand) || '');
+        if (!gerantId || !refCommand.startsWith(`DETTE-${gerantId}-`)) {
+          return res.status(400).json({ error: 'Paiement dette simule invalide' });
+        }
+        if (action !== 'success') {
+          return res.json({ redirect_url: `${domain}/backoffice/gerant/finances?paiement_dette=annule` });
+        }
+        await confirmerDetteDepuisIpn(refCommand, {
+          gerantId,
+          periode,
+          montant: req.body.montant,
+        });
+        return res.json({ redirect_url: `${domain}/backoffice/gerant/finances?paiement_dette=ok` });
       }
 
       const reservationId = Number(req.body.reservation_id || reservationIdDepuisReference(refCommand));
@@ -212,8 +246,21 @@ function mountPaymentRoutes(app) {
         return res.status(400).json({ error: 'reservation_id requis' });
       }
       const db = await getDb();
-      const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+      const reservation = queryOne(
+        db,
+        `SELECT r.*, t.politique_paiement
+         FROM reservations r JOIN terrains t ON t.id = r.terrain_id
+         WHERE r.id = ?`,
+        [reservationId],
+      );
       if (!reservation) return res.status(404).json({ error: 'Réservation introuvable' });
+      const { estSansAvance } = require('../services/politiquePaiement');
+      if (estSansAvance(reservation) || reservation.mode_paiement === 'sans_avance') {
+        return res.status(400).json({
+          error: 'Ce terrain est en mode sans avance — pas de paiement en ligne pour la réservation',
+          code: 'SANS_AVANCE',
+        });
+      }
       if (reservation.statut !== 'en_attente') {
         return res.status(400).json({ error: 'Cette réservation n’est plus en attente de paiement' });
       }

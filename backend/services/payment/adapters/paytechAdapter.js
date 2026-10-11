@@ -143,19 +143,33 @@ async function createCheckout({
 
   const canal = normalizeCanal(preferredChannel);
   const targetPayment = targetPaymentPaytech(canal);
+  // Pour dette/abonnement/achat, reservation_id n'est pas pertinent (évite de polluer le custom)
   const custom = {
-    reservation_id: reservationId || undefined,
+    ...(kind === 'reservation' && reservationId ? { reservation_id: reservationId } : {}),
     ...(customField && typeof customField === 'object' ? customField : {}),
     ...(canal ? { canal_paiement: canal } : {}),
     kind,
   };
 
+  const defaultItem =
+    kind === 'dette'
+      ? `Dette commission — ${terrain?.nom || 'TerrainSN'}`
+      : kind === 'abonnement'
+        ? `Abonnement — ${terrain?.nom || 'Terrain'}`
+        : kind === 'achat'
+          ? `Achat définitif — ${terrain?.nom || 'Terrain'}`
+          : `Avance réservation — ${terrain?.nom || 'Terrain'}`;
+  const defaultCommand =
+    kind === 'dette'
+      ? `Solde dette TerrainSN #${reservationId || ''}`
+      : `Réservation TerrainSN #${reservationId}`;
+
   const body = {
-    item_name: itemName || `Avance réservation — ${terrain?.nom || 'Terrain'}`,
+    item_name: itemName || defaultItem,
     item_price: Math.round(Number(montantAvance || 0)),
     currency: 'XOF',
     ref_command: refCommand,
-    command_name: commandName || `Réservation TerrainSN #${reservationId}`,
+    command_name: commandName || defaultCommand,
     env: process.env.PAYTECH_ENV || (process.env.NODE_ENV === 'production' ? 'prod' : 'test'),
     ipn_url: urls.ipnUrl,
     success_url: urls.successUrl,

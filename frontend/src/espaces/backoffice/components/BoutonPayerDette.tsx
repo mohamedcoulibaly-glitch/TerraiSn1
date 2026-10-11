@@ -17,7 +17,7 @@ function authToken() {
   return localStorage.getItem("terrainsn_token") || localStorage.getItem("access_token") || "";
 }
 
-/** Shell frontend — Mohamed branche la logique backend POST /gerant/dettes/payer */
+/** Paiement en ligne de la dette commission (PayTech / simulation). */
 export default function BoutonPayerDette({ montantDu, periodeId, onPaiementReussi }: BoutonPayerDetteProps) {
   const [loading, setLoading] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
@@ -36,20 +36,25 @@ export default function BoutonPayerDette({ montantDu, periodeId, onPaiementReuss
         body: JSON.stringify({ periode: periodeId, montant: montantDu }),
       });
 
-      if (!res.ok) {
-        let msg = "Paiement échoué";
-        try {
-          const body = await res.json();
-          if (body?.error) msg = String(body.error);
-        } catch {
-          /* ignore */
-        }
-        throw new Error(msg);
+      let body: Record<string, unknown> = {};
+      try {
+        body = await res.json();
+      } catch {
+        /* ignore */
       }
 
-      const data = await res.json();
-      const montantRegle = Number(data.montant_regle ?? montantDu);
-      const soldeRestant = Number(data.solde_restant ?? Math.max(0, montantDu - montantRegle));
+      if (!res.ok) {
+        throw new Error(body?.error ? String(body.error) : "Paiement échoué");
+      }
+
+      const redirectUrl = String(body.redirect_url || body.lien_paiement || "");
+      if (redirectUrl) {
+        window.location.assign(redirectUrl);
+        return;
+      }
+
+      const montantRegle = Number(body.montant_regle ?? montantDu);
+      const soldeRestant = Number(body.solde_restant ?? Math.max(0, montantDu - montantRegle));
       onPaiementReussi(montantRegle, soldeRestant);
     } catch (err) {
       setErreur(err instanceof Error ? err.message : "Paiement impossible pour le moment. Réessaie.");

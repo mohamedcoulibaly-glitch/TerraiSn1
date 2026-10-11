@@ -6,6 +6,8 @@ const {
   previewFormules,
   texteAnnulationJoueur,
 } = require('./calculsPaiement');
+const { essaiActif } = require('./essaiService');
+const { estSansAvance, normaliserPolitiquePaiement } = require('./politiquePaiement');
 
 const CANAL_STATUTS = ['absent', 'saisi', 'test_envoye', 'verifie'];
 const PAYOUT_MODES = ['auto', 'retrait'];
@@ -78,6 +80,9 @@ function mapperContrat(terrain, gerant) {
   const delai = remboursementAutorise
     ? Math.max(0, arrondiFcfa(terrain.delai_remboursement_heures))
     : 0;
+  const enEssai = essaiActif(terrain);
+  const commissionContrat = Number(terrain.commission_pourcentage || 0);
+  const politique = normaliserPolitiquePaiement(terrain.politique_paiement);
   return {
     terrain_id: terrain.id,
     terrain_nom: terrain.nom,
@@ -86,7 +91,15 @@ function mapperContrat(terrain, gerant) {
     gerant_nom: gerant?.nom || null,
     gerant_whatsapp: gerant?.whatsapp_number || gerant?.telephone || null,
     pourcentage_avance: Number(terrain.pourcentage_avance || 0),
-    commission_pourcentage: Number(terrain.commission_pourcentage || 0),
+    /** % stocké au contrat (édition SA) — ne pas écraser pendant l'essai */
+    commission_pourcentage: commissionContrat,
+    commission_pourcentage_contrat: commissionContrat,
+    /** Runtime : calculerDepuisAvance / preview respectent essai_actif */
+    essai_actif: enEssai ? 1 : 0,
+    mode_essai: Number(terrain.mode_essai) === 1 ? 1 : 0,
+    politique_paiement: politique,
+    sans_avance: estSansAvance(politique),
+    delai_paiement_dette_jours: Number(terrain.delai_paiement_dette_jours || 30),
     remboursement_autorise: remboursementAutorise ? 1 : 0,
     delai_remboursement_heures: delai,
     payout_mode: terrain.payout_mode === 'auto' ? 'auto' : 'retrait',
@@ -120,7 +133,13 @@ function chargerContrat(db, terrainId) {
   const contrat = mapperContrat(terrain, gerant);
   contrat.canal_verifie = auMoinsUnCanalVerifie(contrat);
   contrat.payout_destination = numeroPayout(contrat);
-  contrat.preview = previewFormules(contrat, 40000);
+  // Preview runtime : 0 commission si essai actif (payin/payout restent OK)
+  contrat.preview = previewFormules(
+    Number(contrat.essai_actif) === 1
+      ? { ...contrat, commission_pourcentage: 0, essai_actif: 1 }
+      : contrat,
+    40000,
+  );
   return contrat;
 }
 

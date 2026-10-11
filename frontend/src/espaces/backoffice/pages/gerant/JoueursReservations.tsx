@@ -543,11 +543,11 @@ export default function JoueursReservationsPage() {
 
       {onglet === "reservations" ? (
         <>
-          <Pills items={resaSousTabs} value={resaSous} onChange={setResaSous} />
+          <Pills<ResaSous> items={resaSousTabs} value={resaSous} onChange={setResaSous} />
           {resaSous === "matchs" ? (
             <>
               <PhoneSearch value={resaQ} onChange={setResaQ} placeholder="7X XXX XX XX" />
-              <Pills items={RESA_FILTERS} value={resaFilter} onChange={setResaFilter} />
+              <Pills<(typeof RESA_FILTERS)[number]["id"]> items={RESA_FILTERS} value={resaFilter} onChange={setResaFilter} />
               {resaLoading ? (
                 <ListSkeleton />
               ) : resaError ? (
@@ -661,7 +661,7 @@ export default function JoueursReservationsPage() {
       ) : (
         <>
           <PhoneSearch value={joueurQ} onChange={setJoueurQ} placeholder="7X XXX XX XX" />
-          <Pills items={JOUEUR_FILTERS} value={joueurFilter} onChange={setJoueurFilter} />
+          <Pills<(typeof JOUEUR_FILTERS)[number]["id"]> items={JOUEUR_FILTERS} value={joueurFilter} onChange={setJoueurFilter} />
           {joueursLoading ? (
             <ListSkeleton />
           ) : joueursError ? (

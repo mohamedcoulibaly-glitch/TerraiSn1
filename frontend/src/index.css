@@ -269,8 +269,9 @@
 
   html {
     width: 100%;
-    /* Pas d'overflow ici : overflow-x:hidden sur html+body crée 2 scrollports
-       imbriqués et casse le scroll vertical (Chrome/Safari/Android). */
+    /* clip (pas hidden) : n'active pas le pairing overflow-y:auto sur html/body */
+    overflow-x: clip;
+    overflow-y: auto;
     -webkit-text-size-adjust: 100%;
   }
 
@@ -282,11 +283,12 @@
     line-height: 1.6;
     width: 100%;
     min-height: 100dvh;
-    overflow-x: hidden;
-    overflow-y: auto;
+    /* Un seul scrollport = html. body en scrollport + overscroll contain
+       bloquait le trackpad 2 doigts (Windows/Chrome) sur l'espace joueur. */
+    overflow-x: clip;
+    overflow-y: visible;
     overscroll-behavior-x: none;
-    /* contain (pas none) : limite le pull-to-refresh sans tuer le scroll */
-    overscroll-behavior-y: contain;
+    overscroll-behavior-y: auto;
     background-color: var(--bg);
     color: var(--text-primary);
     transition: background-color 0.2s ease, color 0.2s ease;
@@ -295,6 +297,7 @@
   #root {
     width: 100%;
     min-height: 100dvh;
+    overflow-x: clip;
   }
 
   img, video, canvas, svg {
@@ -560,6 +563,8 @@
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
+    overflow-y: clip;
+    overscroll-behavior-y: auto;
   }
 
   .scrollbar-hide::-webkit-scrollbar {
@@ -568,7 +573,9 @@
 
   .mobile-scroll {
     overflow-x: auto;
+    overflow-y: clip;
     overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
     -webkit-overflow-scrolling: touch;
   }
 
@@ -711,6 +718,9 @@
   background-color: var(--bg);
   min-height: 100vh;
   color: var(--text-primary);
+  /* Scroll document (html) — pas de nested overflow */
+  overflow: visible;
+  touch-action: pan-y;
 }
 
 .dark .joueur-app {
@@ -1055,6 +1065,24 @@
   font-family: var(--sa-font), 'Outfit', sans-serif;
   color: var(--sa-text);
   background-color: var(--sa-bg);
+  overflow: visible; /* ne pas bloquer le scroll principal */
+}
+
+/*
+ * Zone contenu superadmin — scroll via le document (body), pas un nested overflow.
+ * Nested overflow-y:auto + h-screen cassait le trackpad 2 doigts (Windows/Chrome).
+ */
+.superadmin-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
+  touch-action: pan-y;
+}
+
+.superadmin-sidebar {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .dark .superadmin-app {
@@ -1492,7 +1520,13 @@
 }
 
 .scrollbar-none::-webkit-scrollbar { display: none; }
-.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  /* Évite qu'un bandeau overflow-x vole le geste vertical trackpad */
+  overflow-y: clip;
+  overscroll-behavior-y: auto;
+}
 
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
 .pb-safe { padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px)); }
@@ -1586,10 +1620,6 @@
 .login-backoffice {
   display: flex;
   flex-direction: column;
-  /* height (pas seulement min-height) : sinon overflow:hidden coupe le contenu
-     sans jamais contraindre .login-sheet → overflow-y:auto ne s'active pas. */
-  height: 100dvh;
-  max-height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
   isolation: isolate;

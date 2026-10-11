@@ -2,6 +2,7 @@ import { lazy, Suspense, type LazyExoticComponent, type ComponentType } from "re
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import RoleGuard, { JoueurSpaceGuard, RequireAnyAuth, RequireJoueurAuth } from "@/auth/RoleGuard";
 import JoueurLayout from "@/espaces/joueur/layout/JoueurLayout";
+import BackofficeLayout from "@/espaces/backoffice/layout/BackofficeLayout";
 import { FieldGridSkeleton } from "@/components/skeletons/TerrainSkeletons";
 import { profileForUser } from "@/auth/roles";
 import { useAuth } from "@/hooks/use-auth";
@@ -39,7 +40,6 @@ const ProfilAide = lazy(() => import("@/espaces/joueur/pages/ProfilAide"));
 const ChangePassword = lazy(() => import("@/espaces/joueur/pages/ChangePassword"));
 const NotFound = lazy(() => import("@/espaces/joueur/pages/NotFound"));
 
-const BackofficeLayout = lazy(() => import("@/espaces/backoffice/layout/BackofficeLayout"));
 const SuperAdminDashboard = lazy(() => import("@/espaces/backoffice/pages/superadmin/Dashboard"));
 const GestionTerrains = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionTerrains"));
 const TerrainFicheAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/TerrainFiche"));
@@ -89,6 +89,10 @@ export default function AppRouter() {
       <Route path="/profil/proprietaire" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(ProfilProprietaire)}</RoleGuard>} />
       <Route path="/profil/admin" element={<RoleGuard roles={["super_admin"]}>{withSuspense(ProfilAdmin)}</RoleGuard>} />
 
+      {/* Simulation PayTech : joueur ET gérant (dettes) — hors layout joueur */}
+      <Route path="/paiement/mock" element={<RequireAnyAuth>{withSuspense(MockPayment)}</RequireAnyAuth>} />
+      <Route path="/simulation/paiement" element={<RequireAnyAuth>{withSuspense(MockPayment)}</RequireAnyAuth>} />
+
       <Route
         element={
           <JoueurSpaceGuard>
@@ -99,12 +103,6 @@ export default function AppRouter() {
         <Route path="/" element={withSuspense(Accueil)} />
         <Route path="/explorer" element={withSuspense(RechercheTerrain)} />
         <Route path="/terrain/:id" element={withSuspense(FicheTerrain)} />
-        {import.meta.env.DEV || import.meta.env.VITE_ENABLE_MOCK_PAYMENT === "true" ? (
-          <>
-            <Route path="/paiement/mock" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
-            <Route path="/simulation/paiement" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
-          </>
-        ) : null}
         <Route path="/paiement/:id" element={<RequireJoueurAuth>{withSuspense(Reservation)}</RequireJoueurAuth>} />
         <Route path="/reservations" element={<RequireJoueurAuth>{withSuspense(MesReservations)}</RequireJoueurAuth>} />
         <Route path="/reservation/confirmation" element={<RequireJoueurAuth>{withSuspense(Confirmation)}</RequireJoueurAuth>} />
@@ -120,9 +118,7 @@ export default function AppRouter() {
         path="/backoffice"
         element={
           <RoleGuard roles={["super_admin", "gerant", "proprietaire"]}>
-            <Suspense fallback={<PageLoader />}>
-              <BackofficeLayout />
-            </Suspense>
+            <BackofficeLayout />
           </RoleGuard>
         }
       >

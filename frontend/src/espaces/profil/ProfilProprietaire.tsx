@@ -1,6 +1,5 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Camera, LogOut } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Camera, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import PushPreferencesPanel from "@/components/pwa/PushPreferencesPanel";
@@ -17,7 +16,6 @@ type Account = {
 };
 
 export default function ProfilProprietaire() {
-  const navigate = useNavigate();
   const { logout, refreshUser } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
   const [account, setAccount] = useState<Account | null>(null);
@@ -130,16 +128,7 @@ export default function ProfilProprietaire() {
 
   return (
     <div className="proprio-app min-h-screen pb-10" style={{ background: "var(--p-bg)" }}>
-      <div className="relative h-40" style={{ background: "var(--p-primary)" }}>
-        <button
-          type="button"
-          onClick={() => navigate("/backoffice/proprietaire")}
-          className="absolute top-3 left-3 min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-white/90"
-          aria-label="Retour"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-      </div>
+      <div className="relative h-40" style={{ background: "var(--p-primary)" }} />
       <div className="max-w-md mx-auto px-4 -mt-12">
         <div className="flex flex-col items-center">
           <div className="relative">
@@ -202,17 +191,11 @@ export default function ProfilProprietaire() {
           ) : (
             <ul className="space-y-2">
               {terrains.map((t) => (
-                <li key={t.id}>
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/backoffice/proprietaire/terrain/${t.id}`)}
-                    className="w-full flex items-center justify-between text-sm min-h-[44px] text-left"
-                  >
-                    <span style={{ color: "var(--p-text)" }}>{t.nom}</span>
-                    <span className="text-[11px]" style={{ color: Number(t.is_active) === 0 ? "var(--p-muted)" : "var(--p-optimal)" }}>
-                      {Number(t.is_active) === 0 ? "Inactif" : "Actif"}
-                    </span>
-                  </button>
+                <li key={t.id} className="flex items-center justify-between text-sm">
+                  <span style={{ color: "var(--p-text)" }}>{t.nom}</span>
+                  <span className="text-[11px]" style={{ color: Number(t.is_active) === 0 ? "var(--p-muted)" : "var(--p-optimal)" }}>
+                    {Number(t.is_active) === 0 ? "Inactif" : "Actif"}
+                  </span>
                 </li>
               ))}
             </ul>

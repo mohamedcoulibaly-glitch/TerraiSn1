@@ -23,22 +23,31 @@ const TABS = [
     label: "Réservation",
     icon: Users,
     route: "/backoffice/gerant/joueurs",
+    end: false,
   },
   {
     id: "finances",
     label: "Finances",
     icon: Wallet,
     route: "/backoffice/gerant/finances",
+    end: false,
   },
   {
     id: "parametres",
     label: "Paramètres",
     icon: Settings,
     route: "/backoffice/gerant/parametres",
+    end: false,
   },
 ] as const;
 
-type HeaderUser = { prenom?: string; nom?: string; photo_url?: string } | null;
+type HeaderUser = {
+  prenom?: string;
+  nom?: string;
+  photo_url?: string;
+  role?: string;
+  accountType?: string;
+} | null;
 type TerrainOption = { id: number; nom: string; est_principal?: number };
 
 function initials(user: HeaderUser) {
@@ -110,11 +119,8 @@ export default function GerantLayout() {
 
   useEffect(() => {
     let cancelled = false;
-    const loadTerrains =
-      typeof gerantApi.terrains === "function"
-        ? gerantApi.terrains()
-        : Promise.reject(new Error("gerantApi.terrains unavailable"));
-    loadTerrains
+    gerantApi
+      .terrains()
       .then((payload) => {
         if (cancelled) return;
         const list = Array.isArray(payload?.terrains) ? payload.terrains : [];
@@ -151,7 +157,6 @@ export default function GerantLayout() {
   // Heartbeat toutes les 30s
   useEffect(() => {
     if (!terrainActif) return;
-    if (typeof gerantApi.heartbeat !== "function") return;
     const tick = () => {
       gerantApi.heartbeat(terrainActif).catch(() => undefined);
     };
@@ -247,7 +252,7 @@ export default function GerantLayout() {
         <WhatsAppInfraBanner visible={waDown} tone="gerant" />
         <WhatsAppGerantSessionBanner />
 
-        <main className="flex-1 p-3 md:p-6">
+        <main className="flex-1 p-3 md:p-6 overflow-auto">
           <div className="max-w-5xl mx-auto" key={terrainActif ?? "default"}>
             <Outlet context={{ terrainActif, terrains }} />
           </div>

@@ -70,7 +70,7 @@ export default function ProfilAdmin() {
   }
 
   return (
-    <ProfileShell account={data.account} roleLabel="Admin" backTo="/backoffice/superadmin">
+    <ProfileShell account={data.account} roleLabel="Admin">
       <form onSubmit={submit} className="mt-8 space-y-3">
         <Input placeholder="Prenom" value={form.prenom} onChange={(e) => setForm({ ...form, prenom: e.target.value })} />
         <Input placeholder="Nom" required value={form.nom} onChange={(e) => setForm({ ...form, nom: e.target.value })} />

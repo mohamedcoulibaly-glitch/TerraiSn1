@@ -68,6 +68,81 @@ function listJoueursSql(todayYmd, since30) {
 }
 
 function mountGerantCrmRoutes(app) {
+  /** Recherche d'un joueur par téléphone (9 derniers chiffres) — pré-remplissage fiche réservation gérant. */
+  app.get('/api/joueurs/telephone/:numero', authMiddleware, requireRole('gerant'), async (req, res) => {
+    try {
+      const db = await getDb();
+      const phoneDigits = digits(req.params.numero);
+      const local9 = phoneDigits.length >= 9 ? phoneDigits.slice(-9) : phoneDigits;
+      if (local9.length !== 9) {
+        return res.status(400).json({ error: 'Numéro invalide', trouve: false, joueur: null });
+      }
+
+      const joueur = queryOne(
+        db,
+        `SELECT id, nom, prenom, telephone, email, photo_url
+         FROM users
+         WHERE COALESCE(role, 'joueur') = 'joueur'
+           AND REPLACE(REPLACE(REPLACE(COALESCE(telephone, ''), ' ', ''), '+', ''), '-', '') LIKE ?
+         ORDER BY id DESC LIMIT 1`,
+        [`%${local9}`],
+      );
+
+      if (!joueur) return res.json({ trouve: false, joueur: null });
+
+      return res.json({
+        trouve: true,
+        joueur: {
+          id: joueur.id,
+          nom: joueur.nom || null,
+          prenom: joueur.prenom || null,
+          display_nom: displayName(joueur),
+          telephone: joueur.telephone || null,
+          email: joueur.email || null,
+          photo_url: joueur.photo_url || null,
+        },
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Erreur serveur', trouve: false, joueur: null });
+    }
+  });
+
+  app.get('/api/joueurs/historique/:numero', authMiddleware, requireRole('gerant'), async (req, res) => {
+    try {
+      const db = await getDb();
+      const terrainId = req.user.terrain_id;
+      if (!terrainId) return res.status(400).json({ error: 'Aucun terrain associé', reservations: [] });
+
+      const phoneDigits = digits(req.params.numero);
+      const local9 = phoneDigits.length >= 9 ? phoneDigits.slice(-9) : phoneDigits;
+      if (local9.length !== 9) {
+        return res.status(400).json({ error: 'Numéro invalide', reservations: [] });
+      }
+
+      const reservations = queryAll(
+        db,
+        `SELECT r.id, r.date, r.heure_debut, r.heure_fin, r.statut, r.montant, r.prix_total,
+                r.montant_avance, r.acompte, r.code_reservation, r.joueur_nom, r.joueur_telephone
+         FROM reservations r
+         LEFT JOIN users u ON u.id = r.joueur_id
+         WHERE r.terrain_id = ?
+           AND (
+             REPLACE(REPLACE(REPLACE(COALESCE(r.joueur_telephone, ''), ' ', ''), '+', ''), '-', '') LIKE ?
+             OR REPLACE(REPLACE(REPLACE(COALESCE(u.telephone, ''), ' ', ''), '+', ''), '-', '') LIKE ?
+           )
+         ORDER BY r.date DESC, r.heure_debut DESC
+         LIMIT 50`,
+        [terrainId, `%${local9}`, `%${local9}`],
+      );
+
+      res.json({ reservations });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Erreur serveur', reservations: [] });
+    }
+  });
+
   app.get('/api/gerant/joueurs', authMiddleware, requireRole('gerant'), async (req, res) => {
     try {
       const db = await getDb();

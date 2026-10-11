@@ -6,6 +6,7 @@ const MAP: Record<StatutDuType, { label: string; color: string; bg: string }> = 
   verse: { label: "Versé ✓", color: "var(--sa-success)", bg: "var(--sa-success-bg)" },
   echec: { label: "Échec", color: "var(--sa-danger)", bg: "var(--sa-danger-bg)" },
   annule_rembourse: { label: "Remboursé", color: "var(--sa-muted)", bg: "var(--sa-surface-2)" },
+  demande_retrait: { label: "Retrait demandé", color: "var(--sa-info)", bg: "var(--sa-info-bg)" },
 };
 
 type Props = {

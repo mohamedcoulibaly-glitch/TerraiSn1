@@ -41,12 +41,14 @@ const REF_PREFIX = Object.freeze({
   RESERVATION: 'TF-',
   ABONNEMENT: 'ABO-',
   ACHAT: 'ACHAT-',
+  DETTE: 'DETTE-',
 });
 
 function kindFromReference(refCommand) {
   const ref = String(refCommand || '');
   if (ref.startsWith(REF_PREFIX.ABONNEMENT)) return 'abonnement';
   if (ref.startsWith(REF_PREFIX.ACHAT)) return 'achat';
+  if (ref.startsWith(REF_PREFIX.DETTE)) return 'dette';
   if (ref.startsWith(REF_PREFIX.RESERVATION)) return 'reservation';
   return 'reservation';
 }
@@ -61,6 +63,17 @@ function terrainIdDepuisReferenceAchat(refCommand) {
   return match ? Number(match[1]) : 0;
 }
 
+/** DETTE-{gerantId}-{periodeYYYY-MM}-{timestamp} */
+function gerantIdDepuisReferenceDette(refCommand) {
+  const match = String(refCommand || '').match(/^DETTE-(\d+)-/);
+  return match ? Number(match[1]) : 0;
+}
+
+function periodeDepuisReferenceDette(refCommand) {
+  const match = String(refCommand || '').match(/^DETTE-\d+-(\d{4}-\d{2})-/);
+  return match ? match[1] : null;
+}
+
 module.exports = {
   CANAUX,
   PAYTECH_TARGET,
@@ -71,4 +84,6 @@ module.exports = {
   kindFromReference,
   abonnementIdDepuisReference,
   terrainIdDepuisReferenceAchat,
+  gerantIdDepuisReferenceDette,
+  periodeDepuisReferenceDette,
 };

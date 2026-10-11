@@ -8,26 +8,28 @@ import { toast } from 'sonner';
 const MockPayment = () => {
   const [params] = useSearchParams();
   const [processing, setProcessing] = useState(false);
-  const reservationId = Number(params.get('id'));
+  const kind = params.get('kind') || 'reservation';
+  const reservationId = Number(params.get('id') || 0);
+  const gerantId = Number(params.get('gerant_id') || 0);
+  const periode = params.get('periode') || '';
   const refCommand = params.get('ref') || '';
-  const terrain = params.get('terrain') || 'TerrainSN';
+  const terrain = params.get('terrain') || (kind === 'dette' ? 'Dette commission' : 'TerrainSN');
   const montant = Number(params.get('montant') || 0);
   const total = Number(params.get('total') || montant);
   const reste = Number(params.get('reste') || 0);
-  const kind = params.get('kind') || 'reservation';
+  const isDette = kind === 'dette' || refCommand.startsWith('DETTE-');
 
   const complete = async (action: 'success' | 'cancel') => {
     setProcessing(true);
     try {
-      const body: Record<string, unknown> = {
-        reservation_id: kind === 'reservation' ? reservationId : undefined,
-        abonnement_id: kind === 'abonnement' ? reservationId : undefined,
-        terrain_id: kind === 'achat' ? reservationId : undefined,
+      const result = await paiementsApi.simulateComplete({
+        reservation_id: reservationId || undefined,
+        gerant_id: gerantId || undefined,
+        periode: periode || undefined,
         ref_command: refCommand,
         action,
         montant,
-      };
-      const result = await paiementsApi.simulateComplete(body as any);
+      });
       window.location.assign(result.redirect_url);
     } catch {
       toast.error("Le paiement n'a pas pu être confirmé. Veuillez réessayer.");
@@ -35,16 +37,13 @@ const MockPayment = () => {
     }
   };
 
-  if (!reservationId || !refCommand) {
+  const lienValide = isDette
+    ? Boolean(refCommand && (gerantId || refCommand.startsWith('DETTE-')))
+    : Boolean(reservationId && refCommand);
+
+  if (!lienValide) {
     return <div className="page-container flex items-center justify-center">Lien de test invalide</div>;
   }
-
-  const titre =
-    kind === 'abonnement'
-      ? 'Paiement abonnement simulé'
-      : kind === 'achat'
-        ? 'Paiement achat définitif simulé'
-        : 'Paiement simulé';
 
   return (
     <div className="page-container flex items-center justify-center p-5">
@@ -53,13 +52,21 @@ const MockPayment = () => {
           MODE SIMULATION — Ne pas utiliser en production
         </div>
         <CreditCard className="mx-auto mt-6 h-14 w-14 text-primary" />
-        <h1 className="mt-3 text-center font-display text-2xl font-bold">{titre}</h1>
+        <h1 className="mt-3 text-center font-display text-2xl font-bold">
+          {isDette ? 'Paiement dette simulé' : 'Paiement PayTech simulé'}
+        </h1>
         <div className="my-6 rounded-xl bg-muted p-4">
           <p className="font-semibold">{terrain}</p>
           <p className="mt-1 text-2xl font-bold text-primary">{montant.toLocaleString()} FCFA</p>
-          {kind === 'reservation' ? (
-            <p className="text-xs text-muted-foreground">Avance sur {total.toLocaleString()} FCFA - reste {reste.toLocaleString()} FCFA</p>
-          ) : null}
+          {isDette ? (
+            <p className="text-xs text-muted-foreground">
+              Solde dette commission{periode ? ` — période ${periode}` : ''}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Avance sur {total.toLocaleString()} FCFA - reste {reste.toLocaleString()} FCFA
+            </p>
+          )}
           <p className="mt-2 text-xs text-muted-foreground">Référence : {refCommand}</p>
         </div>
         <div className="space-y-3">

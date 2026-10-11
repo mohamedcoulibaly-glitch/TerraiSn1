@@ -1,195 +1,68 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Check, Download, Loader2, XCircle } from "lucide-react";
-import { fetchReservationQrDataUrl, reservationsApi } from "@/lib/api";
-import { cacheReservationAccessPass } from "@/lib/offlineStore";
+import { Check, Download } from "lucide-react";
+import { reservationsApi } from "@/lib/api";
 
-type PaymentPhase = "loading" | "pending" | "confirmed" | "cancelled" | "error";
+const API_URL = import.meta.env.VITE_API_URL || "/api";
 
 const ReservationSuccess = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [reservation, setReservation] = useState<any>(null);
   const [error, setError] = useState("");
-  const [phase, setPhase] = useState<PaymentPhase>("loading");
-  const [showAnim, setShowAnim] = useState(false);
+  const [showAnim, setShowAnim] = useState(true);
   const [qrFetched, setQrFetched] = useState<string | null>(null);
 
   useEffect(() => {
     const id = params.get("id") || localStorage.getItem("terrainsn_last_reservation_id");
-    if (!id) {
-      setError("Réservation introuvable");
-      setPhase("error");
-      return;
-    }
-
-    let cancelled = false;
-    let attempts = 0;
-    const maxAttempts = 20;
-
-    const load = async () => {
-      try {
-        const data = await reservationsApi.get(id);
-        if (cancelled) return;
-        setReservation(data);
-        setError("");
-
-        if (data?.statut === "confirme") {
-          setPhase("confirmed");
-          setShowAnim(true);
-          void cacheReservationAccessPass(data);
-          return;
-        }
-        if (data?.statut === "annule") {
-          setPhase("cancelled");
-          return;
-        }
-        if (data?.statut === "en_attente" && attempts < maxAttempts) {
-          setPhase("pending");
-          attempts += 1;
-          setTimeout(load, 1500);
-          return;
-        }
-        // Timeout IPN : reste en attente, pas de faux "confirmé"
-        setPhase("pending");
-      } catch (err) {
-        if (!cancelled) {
-          setError((err as Error).message || "Réservation introuvable");
-          setPhase("error");
-        }
-      }
-    };
-
-    load();
-    return () => {
-      cancelled = true;
-    };
+    if (!id) return setError("Réservation introuvable");
+    reservationsApi.get(id).then(setReservation).catch((err) => setError(err.message));
   }, [params]);
 
   useEffect(() => {
-    if (!showAnim) return;
     const t = setTimeout(() => setShowAnim(false), 1500);
     return () => clearTimeout(t);
-  }, [showAnim]);
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const reservationId = reservation?.id;
-    const code = reservation?.code_reservation;
+    let objectUrl: string | null = null;
     const loadQr = async () => {
-      if (!reservationId || !code || phase !== "confirmed") {
+      if (!reservation?.id || !reservation?.code_reservation) {
         setQrFetched(null);
         return;
       }
       try {
-        const dataUrl = await fetchReservationQrDataUrl(Number(reservationId));
-        if (cancelled) return;
-        if (!dataUrl) {
-          setQrFetched(null);
-          return;
-        }
-        setQrFetched(dataUrl);
-        await cacheReservationAccessPass(
-          {
-            id: reservationId,
-            terrain_id: reservation?.terrain_id,
-            terrain_nom: reservation?.terrain_nom,
-            terrain_ville: reservation?.terrain_ville,
-            date: reservation?.date,
-            heure_debut: reservation?.heure_debut,
-            heure_fin: reservation?.heure_fin,
-            statut: reservation?.statut,
-            code_reservation: code,
-            montant_avance: reservation?.montant_avance,
-            acompte: reservation?.acompte,
-            reste_a_payer: reservation?.reste_a_payer ?? reservation?.montant_restant,
-          },
-          dataUrl,
-        );
+        const token = localStorage.getItem("terrainsn_token");
+        const res = await fetch(`${API_URL}/reservations/${reservation.id}/qr.png`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) throw new Error("QR indisponible");
+        const blob = await res.blob();
+        objectUrl = URL.createObjectURL(blob);
+        setQrFetched(objectUrl);
       } catch {
-        if (!cancelled) setQrFetched(null);
+        setQrFetched(null);
       }
     };
-    void loadQr();
+    loadQr();
     return () => {
-      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [
-    reservation?.id,
-    reservation?.code_reservation,
-    reservation?.terrain_id,
-    reservation?.terrain_nom,
-    reservation?.terrain_ville,
-    reservation?.date,
-    reservation?.heure_debut,
-    reservation?.heure_fin,
-    reservation?.statut,
-    reservation?.montant_avance,
-    reservation?.acompte,
-    reservation?.reste_a_payer,
-    reservation?.montant_restant,
-    phase,
-  ]);
+  }, [reservation?.id, reservation?.code_reservation]);
 
-  if (phase === "error" || error) {
+  if (error) {
     return (
       <div className="page-container flex items-center justify-center">
-        <p className="text-sm text-[var(--color-text-secondary)]">{error || "Erreur"}</p>
+        <p className="text-sm text-[var(--color-text-secondary)]">{error}</p>
       </div>
     );
   }
 
-  if (phase === "loading" || !reservation) {
+  if (!reservation) {
     return (
       <div className="page-container flex items-center justify-center gap-2">
         <div className="skeleton w-10 h-10 rounded-full" />
-        <p className="text-sm text-[var(--color-text-muted)]">Vérification du paiement...</p>
-      </div>
-    );
-  }
-
-  if (phase === "pending") {
-    return (
-      <div className="page-container flex items-center justify-center p-5 page-enter">
-        <div className="bg-[var(--surface)] max-w-md w-full rounded-[var(--radius-xl)] shadow-[var(--shadow-lg)] overflow-hidden border border-[var(--color-border)] p-6 text-center space-y-4">
-          <Loader2 className="w-12 h-12 mx-auto text-[var(--color-primary)] animate-spin" />
-          <h1 className="text-[18px] font-bold" style={{ fontFamily: "var(--font-display)" }}>
-            Paiement en cours…
-          </h1>
-          <p className="text-[13px] text-[var(--color-text-muted)]">
-            Nous attendons la confirmation de la passerelle. Cette page se met à jour automatiquement.
-          </p>
-          <button
-            type="button"
-            onClick={() => navigate("/reservations")}
-            className="w-full h-12 rounded-[var(--radius-md)] border border-[var(--color-border)] text-sm font-medium"
-          >
-            Voir mes réservations
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (phase === "cancelled") {
-    return (
-      <div className="page-container flex items-center justify-center p-5 page-enter">
-        <div className="bg-[var(--surface)] max-w-md w-full rounded-[var(--radius-xl)] border border-[var(--color-border)] p-6 text-center space-y-4">
-          <XCircle className="w-12 h-12 mx-auto text-[var(--color-danger,#c0392b)]" />
-          <h1 className="text-[18px] font-bold" style={{ fontFamily: "var(--font-display)" }}>
-            Paiement non confirmé
-          </h1>
-          <p className="text-[13px] text-[var(--color-text-muted)]">
-            La réservation a été annulée ou le paiement a échoué. Tu peux réessayer depuis Mes réservations.
-          </p>
-          <button
-            type="button"
-            onClick={() => navigate("/reservations")}
-            className="w-full h-12 rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium"
-          >
-            Mes réservations
-          </button>
-        </div>
+        <p className="text-sm text-[var(--color-text-muted)]">Vérification...</p>
       </div>
     );
   }
@@ -207,8 +80,14 @@ const ReservationSuccess = () => {
     );
   }
 
+  const sansAvance =
+    params.get("sans_avance") === "1" ||
+    reservation.sans_avance === true ||
+    reservation.mode_paiement === "sans_avance";
+
   const avance = Number(reservation.montant_avance || reservation.acompte || 0);
   const reste = Number(reservation.montant_restant || reservation.reste_a_payer || 0);
+  const total = Number(reservation.prix_total || reservation.montant || reste || 0);
   const qrUrl = qrFetched || reservation.qr_code_url;
 
   return (
@@ -218,6 +97,11 @@ const ReservationSuccess = () => {
           <h1 className="text-[20px] font-bold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
             C'est confirmé !
           </h1>
+          {sansAvance ? (
+            <p className="mt-2 text-[13px] text-[var(--color-text-secondary)]">
+              Tu paieras {total.toLocaleString()} FCFA sur place le jour du match.
+            </p>
+          ) : null}
         </div>
 
         <div className="p-6 text-center space-y-4">
@@ -246,16 +130,25 @@ const ReservationSuccess = () => {
             Montre ce QR code au gérant le jour du match
           </p>
 
-          <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
-            <p className="flex justify-between">
-              <span className="text-[var(--color-success)] font-medium">Avance payée</span>
-              <span className="text-[var(--color-success)]">{avance.toLocaleString()} FCFA</span>
-            </p>
-            <p className="flex justify-between">
-              <span className="text-[var(--color-text-secondary)]">Reste à payer sur place</span>
-              <span className="text-[var(--color-text-secondary)]">{reste.toLocaleString()} FCFA</span>
-            </p>
-          </div>
+          {sansAvance ? (
+            <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
+              <p className="flex justify-between">
+                <span className="text-[var(--color-text-secondary)]">À régler sur place</span>
+                <span className="font-semibold text-[var(--color-primary)]">{total.toLocaleString()} FCFA</span>
+              </p>
+            </div>
+          ) : (
+            <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
+              <p className="flex justify-between">
+                <span className="text-[var(--color-success)] font-medium">Avance payée</span>
+                <span className="text-[var(--color-success)]">{avance.toLocaleString()} FCFA</span>
+              </p>
+              <p className="flex justify-between">
+                <span className="text-[var(--color-text-secondary)]">Reste à payer sur place</span>
+                <span className="text-[var(--color-text-secondary)]">{reste.toLocaleString()} FCFA</span>
+              </p>
+            </div>
+          )}
 
           {qrUrl && (
             <a

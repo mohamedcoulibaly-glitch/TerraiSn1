@@ -1,8 +1,7 @@
-import { useEffect, useMemo } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { terrainsApi, reservationsApi } from "@/lib/api";
 import { readSwrCache, writeSwrCache } from "@/lib/swrCache";
-import { getCachedReservations, stripQrDataUrls } from "@/lib/offlineStore";
 import { localYmd } from "@/lib/localDate";
 
 /** Cache-first joueur : pas de refetch au focus si la donnée est encore fraîche. */
@@ -117,31 +116,11 @@ export function useTerrainFullDetails(
 }
 
 /**
- * Mes réservations joueur — cache-first (IndexedDB pour QR hors-ligne).
+ * Mes réservations joueur — cache-first.
  */
 export function useMesReservations(enabled = true) {
   const key = joueurKeys.mesReservations();
-  const queryClient = useQueryClient();
   const cached = useMemo(() => readSwrCache<any[]>(key), []);
-
-  useEffect(() => {
-    let cancelled = false;
-    void getCachedReservations().then((rows) => {
-      if (cancelled || !rows.length) return;
-      queryClient.setQueryData(key, (prev: any[] | undefined) => {
-        if (!prev?.length) return rows;
-        const byId = new Map(rows.map((r) => [r.id, r]));
-        return prev.map((row) => {
-          const cachedRow = byId.get(Number(row.id));
-          if (!cachedRow?.qr_code_data_url || row.qr_code_data_url) return row;
-          return { ...row, qr_code_data_url: cachedRow.qr_code_data_url };
-        });
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [key, queryClient]);
 
   const query = useQuery({
     queryKey: key,
@@ -149,7 +128,7 @@ export function useMesReservations(enabled = true) {
     queryFn: async () => {
       const data = await reservationsApi.mes();
       const list = Array.isArray(data) ? data : [];
-      writeSwrCache(key, stripQrDataUrls(list));
+      writeSwrCache(key, list);
       return list;
     },
     initialData: cached?.data,

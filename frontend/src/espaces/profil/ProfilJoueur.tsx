@@ -1,6 +1,4 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { Bell, HelpCircle, Shield } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -165,26 +163,6 @@ export default function ProfilJoueur() {
         </div>
         <ThemeToggle />
       </div>
-
-      <nav className="mt-6 t-card rounded-2xl border divide-y divide-[var(--border)] overflow-hidden">
-        {[
-          { to: "/profil/notifications", label: "Notifications", icon: Bell },
-          { to: "/profil/securite", label: "Sécurité", icon: Shield },
-          { to: "/profil/aide", label: "Aide", icon: HelpCircle },
-        ].map(({ to, label, icon: Icon }) => (
-          <Link
-            key={to}
-            to={to}
-            className="flex items-center gap-3 px-4 py-3.5 text-sm font-medium t-text hover:bg-[var(--muted)]/40 transition-colors"
-          >
-            <Icon size={18} className="t-muted shrink-0" />
-            <span className="flex-1">{label}</span>
-            <span className="t-muted text-lg leading-none" aria-hidden>
-              ›
-            </span>
-          </Link>
-        ))}
-      </nav>
 
       <StatGrid
         stats={[

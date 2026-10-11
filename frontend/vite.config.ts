@@ -9,8 +9,14 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    // Autorise les tunnels ngrok / Cloudflare (sinon 403 Blocked request)
+    allowedHosts: true,
     hmr: {
-      overlay: true,
+      overlay: false,
+      // Derrière ngrok HTTPS
+      protocol: process.env.NGROK_URL ? "wss" : undefined,
+      clientPort: process.env.NGROK_URL ? 443 : undefined,
+      host: process.env.NGROK_HOST || undefined,
     },
     proxy: {
       '/api': {
@@ -74,15 +80,15 @@ export default defineConfig(({ mode }) => ({
         'placeholder.svg',
       ],
       manifest: {
-        name: 'TerrainSN — Réservation de terrains',
-        short_name: 'TerrainSN',
+        name: 'Sénégal Foot Résa',
+        short_name: 'FootRésa',
         description: 'Trouvez et réservez des terrains de football au Sénégal. Paiement Wave et Orange Money.',
         theme_color: '#1E40AF',
         background_color: '#F4F7FB',
         display: 'standalone',
-        orientation: 'portrait-primary',
+        orientation: 'portrait',
         scope: '/',
-        start_url: '/?source=pwa',
+        start_url: '/',
         lang: 'fr',
         dir: 'ltr',
         categories: ['sports', 'lifestyle'],

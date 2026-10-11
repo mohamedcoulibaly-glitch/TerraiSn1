@@ -37,6 +37,11 @@ function essaiEtat(terrain, today = ymd(new Date())) {
   return { etat: 'actif', debut, fin, suspensionAt, jours_restants: rest, nego_restants: nego, duree: delai };
 }
 
+/** Essai en cours : payin/payout OK, commission plateforme = 0. */
+function essaiActif(terrain, today = ymd(new Date())) {
+  return essaiEtat(terrain, today).etat === 'actif';
+}
+
 function publicEssai(terrain) {
   const info = essaiEtat(terrain);
   return {
@@ -53,4 +58,4 @@ function publicEssai(terrain) {
   };
 }
 
-module.exports = { essaiEtat, publicEssai, addDays, ymd };
+module.exports = { essaiEtat, essaiActif, publicEssai, addDays, ymd };

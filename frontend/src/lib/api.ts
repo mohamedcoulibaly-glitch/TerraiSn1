@@ -4,6 +4,8 @@ import {
   queuePendingReservation,
   cacheTerrainsList,
   getCachedTerrainsList,
+  cacheProfile,
+  getCachedProfile,
   cacheRecentTerrain,
   getCachedRecentTerrain,
   isOnline,
@@ -47,9 +49,7 @@ async function enrichReservationsForOffline(
 ): Promise<CachedReservation[]> {
   const previous = await getCachedReservations();
   const prevById = new Map(previous.map((row) => [row.id, row]));
-  const mapped = list.map((raw) =>
-    toCachedReservation(raw, prevById.get(Number(raw.id)) || null),
-  );
+  const mapped = list.map((raw) => toCachedReservation(raw, prevById.get(Number(raw.id)) || null));
 
   const needQr = mapped
     .filter(
@@ -148,7 +148,11 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
     path.includes('/webhook/paytech') ||
     path.includes('simulate');
   const isQrScan = path.includes('/scanner') || path.includes('/scan-qr');
-  const isGerantRoute = path.includes('/gerant/') || path.includes('/renvoyer-lien') || path.includes('/reservations/gerant');
+  const isGerantRoute =
+    path.includes('/gerant/') ||
+    path.includes('/renvoyer-lien') ||
+    path.includes('/renvoyer-confirmation') ||
+    path.includes('/reservations/gerant');
   const isReservation = path.includes('/reservation') && !isQrScan && !isGerantRoute;
 
   if (isPayment) {
@@ -164,27 +168,10 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
     return WHATSAPP_INFRA_MESSAGE;
   }
   if (isAuth) {
-    const isLogin = path.includes('login') || path.includes('register') || path.includes('otp') || path.includes('password');
-    if (status === 401) {
-      return isLogin ? 'Identifiants incorrects.' : 'Session expirée. Reconnectez-vous.';
-    }
-    if (status === 403 && raw && !isTechnicalMessage(raw)) return raw;
-    if (status === 400 && raw && !isTechnicalMessage(raw)) return raw;
-    if (status >= 500 || status === 404) {
-      return 'Le serveur ne répond pas. Vérifiez que l’API est démarrée.';
-    }
-    if (raw && !isTechnicalMessage(raw)) return raw;
-    return isLogin ? 'Impossible de se connecter. Réessayez.' : 'Session expirée. Reconnectez-vous.';
+    return 'Identifiants incorrects ou session expirée.';
   }
   if (isReservation) {
-    if (status === 401) return 'Session expirée. Reconnectez-vous pour réserver.';
-    if (status === 403 && raw && !isTechnicalMessage(raw)) return raw;
     if (status === 409 && raw && !isTechnicalMessage(raw)) return raw;
-    if (status === 400 && raw && !isTechnicalMessage(raw)) return raw;
-    if (raw && !isTechnicalMessage(raw)) return raw;
-    if (/ngrok|tunnel|https|url de redirection|success_url|successRedirectUrl/i.test(raw)) {
-      return 'Lien de paiement indisponible. Vérifiez que ngrok est ouvert, puis réessayez.';
-    }
     return 'Impossible de finaliser la réservation. Veuillez réessayer.';
   }
 
@@ -206,7 +193,6 @@ async function refreshAccessToken(): Promise<string | null> {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) {
         removeToken();
@@ -249,14 +235,12 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
-  const isPublicAuth =
-    endpoint === '/auth/login' ||
-    endpoint === '/auth/register' ||
-    endpoint === '/auth/refresh' ||
-    endpoint === '/auth/verify-otp' ||
-    endpoint === '/auth/resend-otp';
-  if (token && !isPublicAuth) {
+  if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+  const terrainActif = getGerantTerrainActif();
+  if (terrainActif && !headers['X-Terrain-Id']) {
+    headers['X-Terrain-Id'] = String(terrainActif);
   }
 
   let res: Response;
@@ -267,8 +251,11 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
       headers,
       credentials: 'include',
     });
-  } catch {
-    throw new Error('Connexion au serveur impossible. Vérifiez que l’API tourne sur le port 3001.');
+  } catch (err) {
+    if (options.method === 'GET' || !options.method) {
+      throw new Error('Connexion au serveur impossible. Vérifiez votre connexion.');
+    }
+    throw err;
   }
 
   if (res.status === 401) {
@@ -308,6 +295,9 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
       match_date?: string;
       match_time?: string;
       qr_code_scanne_at?: string;
+      priorite_reservation_id?: number;
+      priorite_heure?: string;
+      priorite_joueur?: string;
     };
     if (typeof data.code === 'string') err.code = data.code;
     if (typeof data.telephone === 'string') err.telephone = data.telephone;
@@ -316,6 +306,9 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
     if (typeof data.match_date === 'string') err.match_date = data.match_date;
     if (typeof data.match_time === 'string') err.match_time = data.match_time;
     if (typeof data.qr_code_scanne_at === 'string') err.qr_code_scanne_at = data.qr_code_scanne_at;
+    if (typeof data.priorite_reservation_id === 'number') err.priorite_reservation_id = data.priorite_reservation_id;
+    if (typeof data.priorite_heure === 'string') err.priorite_heure = data.priorite_heure;
+    if (typeof data.priorite_joueur === 'string') err.priorite_joueur = data.priorite_joueur;
     err.status = res.status;
     throw err;
   }
@@ -478,12 +471,18 @@ export const terrainsApi = {
   },
 
   async get(id: number | string) {
-    return await request(`/terrains/${id}`);
+    try {
+      const data = await request(`/terrains/${id}`);
+      await cacheRecentTerrain(id, data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedRecentTerrain(id);
+      if (cached) return cached;
+      throw err;
+    }
   },
 
-  /**
-   * Fiche consolidée (terrain + planning jour) — fallback si /full-details absent.
-   */
+  /** Un seul round-trip : terrain + photos + créneaux du jour. */
   async getFullDetails(
     id: number | string,
     opts?: { date?: string; duree_minutes?: number },
@@ -497,43 +496,31 @@ export const terrainsApi = {
       await cacheRecentTerrain(id, data);
       return data;
     } catch (err) {
-      try {
-        const date = opts?.date || new Date().toISOString().slice(0, 10);
-        const [terrain, creneauxPayload] = await Promise.all([
-          request(`/terrains/${id}`),
-          request(`/terrains/${id}/creneaux?date=${encodeURIComponent(date)}`).catch(() => ({
-            creneaux: [],
-            ferme: false,
-          })),
-        ]);
-        const payload = {
-          ...(terrain as object),
-          planning: {
-            date,
-            terrain_id: Number(id),
-            creneaux: Array.isArray((creneauxPayload as { creneaux?: unknown[] })?.creneaux)
-              ? (creneauxPayload as { creneaux: unknown[] }).creneaux
-              : [],
-            ...(typeof creneauxPayload === 'object' && creneauxPayload ? creneauxPayload : {}),
-          },
-        };
-        await cacheRecentTerrain(id, payload);
-        return payload;
-      } catch {
-        const cached = await getCachedRecentTerrain(id);
-        if (cached) return cached;
-        throw err;
-      }
+      const cached = await getCachedRecentTerrain(id);
+      if (cached) return cached;
+      throw err;
     }
   },
 
-  async getCreneaux(id: number | string, date: string) {
-    return await request(`/terrains/${id}/creneaux?date=${date}`);
+  async commoditesCatalog() {
+    return await request('/commodites');
+  },
+
+  async getCreneaux(
+    id: number | string,
+    date: string,
+    opts?: { duree_minutes?: number; inclure_passes?: boolean; vue?: "gerant" },
+  ) {
+    const q = new URLSearchParams({ date });
+    if (opts?.duree_minutes != null) q.set("duree_minutes", String(opts.duree_minutes));
+    if (opts?.inclure_passes) q.set("inclure_passes", "1");
+    if (opts?.vue) q.set("vue", opts.vue);
+    return await request(`/terrains/${id}/creneaux?${q.toString()}`);
   },
 
   async getDevis(
     id: number | string,
-    params: { date: string; heure_debut: string; heure_fin: string; format?: 'moitie' | 'entier' },
+    params: { date: string; heure_debut: string; heure_fin: string; format?: string },
   ) {
     const q = new URLSearchParams({
       date: params.date,
@@ -581,17 +568,7 @@ export const terrainsApi = {
 // RESERVATIONS
 // ============================================================
 export const reservationsApi = {
-  async create(data: {
-    terrain_id: number;
-    date: string;
-    heure_debut: string;
-    heure_fin: string;
-    joueur_nom: string;
-    joueur_telephone: string;
-    format_terrain?: 'moitie' | 'entier';
-    methode_paiement?: 'wave' | 'orange_money';
-    canal_paiement?: 'wave' | 'orange_money';
-  }) {
+  async create(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: string }) {
     try {
       return await request('/reservations', { method: 'POST', body: JSON.stringify(data) });
     } catch (err) {
@@ -612,10 +589,18 @@ export const reservationsApi = {
   async mes() {
     try {
       const data = await request('/reservations/mes');
-      const list = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
-      const enriched = await enrichReservationsForOffline(list);
-      await cacheReservations(enriched);
-      return enriched;
+      if (Array.isArray(data) && data.length > 0) {
+        // Cache hors-ligne (pass d'accès stade) : QR préchargé en data URL.
+        const enriched = await enrichReservationsForOffline(data as Record<string, unknown>[]);
+        await cacheReservations(enriched);
+        const qrById = new Map(enriched.map((row) => [row.id, row.qr_code_data_url]));
+        // On renvoie la payload complète de l'API (champs UI conservés) + QR local si dispo.
+        return (data as Record<string, unknown>[]).map((row) => {
+          const qr = qrById.get(Number(row.id));
+          return qr && !row.qr_code_data_url ? { ...row, qr_code_data_url: qr } : row;
+        });
+      }
+      return data;
     } catch (err) {
       const cached = await getCachedReservations();
       if (cached.length > 0) return cached;
@@ -631,11 +616,6 @@ export const reservationsApi = {
     return await request(`/reservations/${id}`);
   },
 
-  /** Prévisualise la politique de remboursement avant confirmation d'annulation. */
-  async politiqueAnnulation(id: number | string) {
-    return await request(`/reservations/${id}/politique-annulation`);
-  },
-
   async createGerant(data: {
     terrain_id: number;
     date: string;
@@ -644,12 +624,35 @@ export const reservationsApi = {
     joueur_nom: string;
     joueur_prenom?: string;
     joueur_telephone?: string;
-    format_terrain?: 'moitie' | 'entier';
+    format_terrain?: string;
     joueur_id?: number;
     mode?: 'paiement' | 'bloquer' | 'manuel';
     anonyme?: boolean;
   }) {
     return await request('/reservations/gerant', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async verifierDisponibilite(data: {
+    terrain_id: number;
+    date: string;
+    heure_debut: string;
+    heure_fin: string;
+    exclure_reservation_id?: number;
+  }) {
+    return await request('/reservations/verifier-disponibilite', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }) as {
+      disponible: boolean;
+      duree_minutes?: number;
+      duree_label?: string;
+      conflits?: Array<{
+        heure_debut: string;
+        heure_fin: string;
+        duree_minutes?: number;
+        joueur_nom?: string | null;
+      }>;
+    };
   },
 
   async renvoyerLienWhatsApp(id: number | string) {
@@ -666,6 +669,10 @@ export const reservationsApi = {
 
   async annuler(id: number | string) {
     return await request(`/reservations/${id}/annuler`, { method: 'PUT' });
+  },
+
+  async politiqueAnnulation(id: number | string) {
+    return await request(`/reservations/${id}/politique-annulation`);
   },
 
   async annulerGerant(id: number | string) {
@@ -703,11 +710,11 @@ export const paiementsApi = {
 
   async simulateComplete(data: {
     reservation_id?: number;
-    abonnement_id?: number;
-    terrain_id?: number;
+    gerant_id?: number;
+    periode?: string;
+    montant?: number;
     ref_command: string;
     action: 'success' | 'cancel' | 'failed';
-    montant?: number;
   }) {
     return await request('/webhook/paytech/simulate', { method: 'POST', body: JSON.stringify(data) });
   },
@@ -741,10 +748,6 @@ export const proprietaireApi = {
     const sp = new URLSearchParams({ periode });
     if (terrainId != null && terrainId !== '' && terrainId !== 'all') sp.set('terrain_id', String(terrainId));
     return await request(`/proprietaire/finances?${sp.toString()}`);
-  },
-
-  async contrat(terrainId: number | string) {
-    return await request(`/proprietaire/contrat/${terrainId}`);
   },
 
   async santeTerrain(terrainId: number | string) {
@@ -794,19 +797,57 @@ export const gerantApi = {
     return await request('/gerant/dashboard');
   },
 
-  /** Terrains gérés + terrain actif (sélecteur multi-terrains). */
-  async terrains() {
-    return await request('/gerant/terrains') as {
-      terrains: { id: number; nom: string; est_principal?: number }[];
-      terrain_actif?: number | null;
+  /** Grille du jour pour la file / blocages / express (heures passées incluses). */
+  async disponibilites(date?: string, opts?: { duree_minutes?: number }) {
+    const q = new URLSearchParams();
+    if (date) q.set('date', date);
+    if (opts?.duree_minutes != null) q.set('duree_minutes', String(opts.duree_minutes));
+    const qs = q.toString();
+    return await request(`/gerant/disponibilites${qs ? `?${qs}` : ''}`) as {
+      date: string;
+      terrain_id: number;
+      creneaux?: Array<{
+        heure?: string;
+        heure_debut?: string;
+        heure_fin?: string;
+        disponible?: boolean;
+        statut?: string;
+      }>;
+      ferme?: boolean;
+      motif?: string | null;
     };
   },
 
-  async heartbeat(terrainId: number | string) {
+  async terrains() {
+    return await request('/gerant/terrains') as {
+      terrains: Array<{
+        id: number;
+        nom: string;
+        adresse?: string;
+        ville?: string;
+        est_principal?: number;
+        note?: string | null;
+      }>;
+      terrain_actif: number | null;
+      terrains_ids: number[];
+    };
+  },
+
+  async planning() {
+    return await request('/gerant/planning');
+  },
+
+  async heartbeat(terrainId?: number) {
     return await request('/gerant/heartbeat', {
       method: 'POST',
-      body: JSON.stringify({ terrain_id: Number(terrainId) }),
-    });
+      body: JSON.stringify(terrainId != null ? { terrain_id: terrainId } : {}),
+    }) as { ok: boolean; autres_gerants?: Array<{ gerant_id: number; prenom?: string; nom?: string }> };
+  },
+
+  async gerantsEnLigne(terrainId: number) {
+    return await request(`/gerant/terrain/${terrainId}/gerants-en-ligne`) as {
+      gerants: Array<{ gerant_id: number; prenom?: string; nom?: string }>;
+    };
   },
 
   async reservationsToday(date?: string) {
@@ -857,8 +898,23 @@ export const gerantApi = {
         prenom: string | null;
         display_nom: string;
         telephone: string | null;
+        photo_url?: string | null;
       } | null;
     };
+  },
+
+  /**
+   * Historique manuel d'un numéro (joueur sans compte). Tolérant : si l'API ne
+   * l'expose pas (404), on retourne une liste vide pour laisser le flux « nouveau joueur ».
+   */
+  async joueurHistorique(numero: string) {
+    try {
+      return (await request(`/gerant/joueurs/historique/${encodeURIComponent(numero)}`)) as {
+        reservations: Array<{ joueur_nom?: string | null; joueur_telephone?: string | null }>;
+      };
+    } catch {
+      return { reservations: [] as Array<{ joueur_nom?: string | null; joueur_telephone?: string | null }> };
+    }
   },
 
   async joueurDetail(id: number | string) {
@@ -930,30 +986,18 @@ export const gerantApi = {
     return await request('/gerant/dettes');
   },
 
+  /** Shell — Mohamed branche la logique backend POST /gerant/dettes/payer */
+  async payerDette(body: { periode: string; montant: number; methode?: string }) {
+    return await request('/gerant/dettes/payer', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
   async confirmerManuellement(id: number | string, note?: string) {
     return await request(`/gerant/reservations/${id}/confirmer-manuellement`, {
       method: 'POST',
       body: JSON.stringify({ note }),
-    });
-  },
-
-  async contrat() {
-    return await request('/gerant/contrat');
-  },
-
-  async retirer() {
-    return await request('/gerant/portefeuille/retirer', { method: 'POST', body: JSON.stringify({}) });
-  },
-
-  async demandeChangementNumero(data: {
-    wave_numero?: string;
-    om_numero?: string;
-    numeros_identiques_whatsapp?: boolean;
-    motif?: string;
-  }) {
-    return await request('/gerant/numeros/demande-changement', {
-      method: 'POST',
-      body: JSON.stringify(data),
     });
   },
 
@@ -975,16 +1019,18 @@ export const gerantApi = {
     });
   },
 
-  /** Alias UI pairing — délègue à /gerant/whatsapp/connect avec téléphone. */
-  async whatsappRequestPairing(opts: { telephone: string; force?: boolean }) {
+  /**
+   * Alias UI « code de jumelage » — le backend n'expose plus /request-pairing
+   * (OpenWA) : on délègue à /gerant/whatsapp/connect avec force + telephone.
+   */
+  async whatsappRequestPairing(opts: { telephone: string; force?: boolean; gerant_id?: number }) {
     const data = (await this.whatsappConnect({
       force: opts.force !== false,
       telephone: opts.telephone,
       mode: 'pairing',
     })) as Record<string, unknown>;
-    const raw = String(data.pairingCode || data.pairingCodeRaw || '').replace(/\s/g, '');
-    const display =
-      raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw || null;
+    const raw = String(data.pairingCode || data.pairingCodeRaw || '').replace(/[\s-]/g, '');
+    const display = raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw || null;
     return {
       ...data,
       pairingCode: raw || null,
@@ -1000,29 +1046,6 @@ export const gerantApi = {
 
   async whatsappDisconnect() {
     return await request('/gerant/whatsapp/disconnect', { method: 'POST' });
-  },
-
-  /**
-   * Créneaux du terrain actif du gérant (réutilise /terrains/:id/creneaux).
-   * `duree_minutes` est accepté pour compat UI ; les slots restent horaires terrain.
-   */
-  async disponibilites(date: string, opts?: { duree_minutes?: number }) {
-    let terrainId = getGerantTerrainActif();
-    if (!terrainId) {
-      const payload = await this.terrains();
-      terrainId =
-        payload?.terrain_actif != null
-          ? Number(payload.terrain_actif)
-          : payload?.terrains?.[0]?.id != null
-            ? Number(payload.terrains[0].id)
-            : null;
-    }
-    if (!terrainId) {
-      throw new Error('Aucun terrain actif pour charger les disponibilités');
-    }
-    const sp = new URLSearchParams({ date: String(date).slice(0, 10) });
-    if (opts?.duree_minutes != null) sp.set('duree_minutes', String(opts.duree_minutes));
-    return await request(`/terrains/${terrainId}/creneaux?${sp.toString()}`);
   },
 
   async terrainCommodites() {
@@ -1045,10 +1068,14 @@ export const gerantApi = {
     form.append('photos', file);
     if (estPrincipale) form.append('est_principale', 'true');
     const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const terrainActif = getGerantTerrainActif();
+    if (terrainActif) headers['X-Terrain-Id'] = String(terrainActif);
     const res = await fetch(`${API_URL}/gerant/terrain/photos`, {
       method: 'POST',
       body: form,
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers,
       credentials: 'include',
       cache: 'no-store',
     });
@@ -1152,13 +1179,13 @@ export const gerantApi = {
     date: string;
     heure_debut: string;
     heure_fin: string;
-    format?: 'moitie' | 'entier';
+    format?: string;
   }) {
     const q = new URLSearchParams({
       date: params.date,
       heure_debut: params.heure_debut,
       heure_fin: params.heure_fin,
-      format: params.format || 'entier',
+      format: params.format || "entier",
     });
     return await request(`/gerant/devis?${q.toString()}`);
   },
@@ -1221,7 +1248,7 @@ export const pushApi = {
     return await request('/push/preferences');
   },
 
-  async updatePreferences(prefs: Record<string, boolean>) {
+  async updatePreferences(prefs: Record<string, boolean | number>) {
     return await request('/push/preferences', { method: 'PUT', body: JSON.stringify(prefs) });
   },
 
@@ -1231,6 +1258,15 @@ export const pushApi = {
 
   async unsubscribe(endpoint: string) {
     return await request('/push/unsubscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) });
+  },
+
+  async getLogs(params?: Record<string, string | number | undefined>) {
+    const sp = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v != null && v !== '') sp.set(k, String(v));
+    });
+    const q = sp.toString();
+    return await request(`/push/logs${q ? `?${q}` : ''}`);
   },
 };
 
@@ -1281,19 +1317,51 @@ export const adminApi = {
 // ============================================================
 export const profilApi = {
   async get() {
-    return await request('/profil');
+    try {
+      const data = await request('/profil');
+      await cacheProfile('me', data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedProfile('me');
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async getJoueur() {
-    return await request('/profil/joueur');
+    try {
+      const data = await request('/profil/joueur');
+      await cacheProfile('joueur', data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedProfile('joueur');
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async getGerant() {
-    return await request('/profil/gerant');
+    try {
+      const data = await request('/profil/gerant');
+      await cacheProfile('gerant', data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedProfile('gerant');
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async getProprietaire() {
-    return await request('/profil/proprietaire');
+    try {
+      const data = await request('/profil/proprietaire');
+      await cacheProfile('proprietaire', data);
+      return data;
+    } catch (err) {
+      const cached = await getCachedProfile('proprietaire');
+      if (cached) return cached;
+      throw err;
+    }
   },
 
   async getAdmin() {

@@ -5,7 +5,6 @@ import { resolvePhotoPrincipale, fieldImageForId } from "@/espaces/joueur/compon
 import { Badge, type BadgeTone } from "@/espaces/joueur/components/Badge";
 import { formatTerrainType } from "@/lib/commodites";
 import { cn, formatFcfaPerHour } from "@/lib/utils";
-import { favKey, isTerrainFavorite, loadFavoriteIds, toggleFavorite } from "@/lib/favoris";
 
 export type PitchCardVariant =
   | "horizontal"
@@ -33,7 +32,17 @@ function resolvePhotos(pitch: any): string[] {
   return principale ? [principale] : [fieldImageForId(pitch?.id)];
 }
 
-export { favKey, isTerrainFavorite };
+export function favKey(id: number | string) {
+  return `terrainsn_fav_${id}`;
+}
+
+export function isTerrainFavorite(id: number | string): boolean {
+  try {
+    return localStorage.getItem(favKey(id)) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function dispoInfo(pitch: any): { label: string; tone: DispoTone } {
   const inactive =
@@ -67,7 +76,6 @@ function FavoriteButton({
       onClick={onToggle}
       className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/40 text-white backdrop-blur-md transition-colors active:text-red-400"
       aria-label={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
-      title={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
     >
       <Heart className={cn("h-3.5 w-3.5", fav && "fill-red-400 text-red-400")} />
     </button>
@@ -181,20 +189,22 @@ export function PitchCard({
 
   const [fav, setFav] = useState(false);
   useEffect(() => {
-    setFav(isTerrainFavorite(data.id));
-    let cancelled = false;
-    loadFavoriteIds().then((ids) => {
-      if (!cancelled) setFav(ids.includes(Number(data.id)));
-    });
-    return () => {
-      cancelled = true;
-    };
+    try {
+      setFav(localStorage.getItem(favKey(data.id)) === "1");
+    } catch {
+      setFav(false);
+    }
   }, [data.id]);
 
-  const toggleFav = async (e: React.MouseEvent) => {
+  const toggleFav = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const next = await toggleFavorite(data.id);
+    const next = !fav;
     setFav(next);
+    try {
+      localStorage.setItem(favKey(data.id), next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
     onFavoriteChange?.(next);
   };
 

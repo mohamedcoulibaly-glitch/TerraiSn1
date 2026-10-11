@@ -1,6 +1,8 @@
 const { queryAll, queryOne } = require('./database');
 const { hourlySlots, parseHour, veilleJour, jourDepuisDate } = require('./scheduleService');
 const { bornesHorairesSemaine } = require('./scheduleService');
+const { essaiActif } = require('./services/essaiService');
+const { estSansAvance } = require('./services/politiquePaiement');
 
 const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 const JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi'];
@@ -132,6 +134,17 @@ function calculerPrixReservation(database, terrain, date, heureDebut, heureFin, 
 
 function calculerMontantAvance(terrain, prixChoisi) {
   const montant = Number(prixChoisi || 0);
+  if (estSansAvance(terrain)) return 0;
+  const pourcentageAvance = Number(terrain?.pourcentage_avance);
+  if (Number.isFinite(pourcentageAvance) && pourcentageAvance > 0) {
+    return Math.min(montant, Math.round((montant * pourcentageAvance) / 100));
+  }
+  return Math.min(montant, Number(terrain?.acompte || terrain?.montant_acompte || 5000));
+}
+
+/** Avance de référence (même si sans_avance) — base de calcul commission / dette. */
+function calculerAvanceReference(terrain, prixChoisi) {
+  const montant = Number(prixChoisi || 0);
   const pourcentageAvance = Number(terrain?.pourcentage_avance);
   if (Number.isFinite(pourcentageAvance) && pourcentageAvance > 0) {
     return Math.min(montant, Math.round((montant * pourcentageAvance) / 100));
@@ -159,7 +172,10 @@ function calculerDevis(database, terrain, { date, heure_debut, heure_fin, format
     };
   });
   const montant = detail.reduce((sum, row) => sum + Number(row.prix || 0), 0);
-  const montant_avance = calculerMontantAvance(terrain, montant);
+  const sans_avance = estSansAvance(terrain);
+  const avance_reference = calculerAvanceReference(terrain, montant);
+  const montant_avance = sans_avance ? 0 : avance_reference;
+  const commission_estimee = calculerCommissionPrelevee(terrain, avance_reference);
   const sources = [...new Set(detail.map((d) => d.source))];
   return {
     terrain_id: terrain.id,
@@ -171,6 +187,11 @@ function calculerDevis(database, terrain, { date, heure_debut, heure_fin, format
     montant_avance,
     montant_restant: Math.max(0, montant - montant_avance),
     pourcentage_avance: Number(terrain.pourcentage_avance || 12.5),
+    politique_paiement: sans_avance ? 'sans_avance' : 'avance',
+    sans_avance,
+    avance_reference,
+    commission_estimee,
+    essai_actif: essaiActif(terrain) ? 1 : 0,
     nom_tarif: detail.length === 1 ? detail[0].nom_tarif : (sources.length === 1 ? detail[0].nom_tarif : 'Tarif mixte'),
     source_prix: sources.length === 1 ? sources[0] : 'mixte',
     detail,
@@ -273,6 +294,9 @@ function sauvegarderGrille(database, terrainId, payload) {
 }
 
 function calculerCommissionPrelevee(terrain, montantAvance) {
+  // Mode essai actif : payin/payout OK, plateforme ne prélève rien
+  if (essaiActif(terrain)) return 0;
+  if (Number(terrain?.essai_actif) === 1) return 0;
   if (terrain?.modele_revenus && terrain.modele_revenus !== 'commission') return 0;
   const commissionPourcentage = Number(terrain?.commission_pourcentage);
   if (Number.isFinite(commissionPourcentage) && commissionPourcentage > 0) {
@@ -291,6 +315,7 @@ module.exports = {
   calculerPrixReservation,
   calculerDevis,
   calculerMontantAvance,
+  calculerAvanceReference,
   calculerCommissionPrelevee,
   grilleTarifs,
   sauvegarderGrille,

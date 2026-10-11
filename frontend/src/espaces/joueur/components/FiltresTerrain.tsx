@@ -1,5 +1,8 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { Calendar } from "lucide-react";
 import Select2 from "@/components/Select2";
+import DatePickerSheet from "@/espaces/backoffice/components/DatePickerSheet";
+import { addDaysYmd, localYmd } from "@/lib/localDate";
 
 export type FiltresTerrainValues = {
   date: string;
@@ -52,6 +55,19 @@ function Pill({
   );
 }
 
+function formatDateLabel(ymd: string) {
+  if (!ymd) return "Choisir une date";
+  const d = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  if (ymd === localYmd()) return "Aujourd'hui";
+  const raw = d.toLocaleDateString("fr-FR", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
 export default function FiltresTerrain({
   value,
   onChange,
@@ -60,6 +76,7 @@ export default function FiltresTerrain({
   geoAccordee,
   quartiers = [],
 }: Props) {
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const set = <K extends keyof FiltresTerrainValues>(key: K, v: FiltresTerrainValues[K]) => {
     onChange({ ...value, [key]: v });
   };
@@ -67,15 +84,37 @@ export default function FiltresTerrain({
   return (
     <div className="glass-card p-4 space-y-4 border border-[var(--color-border)] rounded-[var(--radius-lg)] bg-[var(--surface)]">
       <div>
-        <label htmlFor="filtre-date" className="text-xs font-medium text-[var(--color-text-muted)] mb-1.5 block">
-          Date souhaitée
-        </label>
-        <input
-          id="filtre-date"
-          type="date"
-          value={value.date}
-          onChange={(e) => set("date", e.target.value)}
-          className="w-full h-11 px-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2,#f5f5f5)] text-sm outline-none"
+        <p className="text-xs font-medium text-[var(--color-text-muted)] mb-1.5">Date souhaitée</p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setCalendarOpen(true)}
+            className="flex-1 min-h-[48px] px-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2,#f5f5f5)] text-sm font-semibold inline-flex items-center gap-2 text-left active:scale-[0.99] transition-transform"
+          >
+            <Calendar className="w-5 h-5 shrink-0 text-[var(--color-primary)]" />
+            <span className={value.date ? "text-[var(--color-text-primary)]" : "text-[var(--color-text-muted)]"}>
+              {formatDateLabel(value.date)}
+            </span>
+          </button>
+          {value.date ? (
+            <button
+              type="button"
+              onClick={() => set("date", "")}
+              className="shrink-0 min-h-[48px] px-3 rounded-[var(--radius-md)] border border-[var(--color-border)] text-sm font-medium text-[var(--color-text-secondary)]"
+            >
+              Effacer
+            </button>
+          ) : null}
+        </div>
+        <DatePickerSheet
+          open={calendarOpen}
+          onClose={() => setCalendarOpen(false)}
+          value={value.date || localYmd()}
+          min={localYmd()}
+          max={addDaysYmd(localYmd(), 90)}
+          onSelect={(ymd) => set("date", ymd)}
+          title="Date souhaitée"
+          appClass="joueur-app"
         />
       </div>
 

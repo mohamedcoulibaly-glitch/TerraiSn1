@@ -14,15 +14,16 @@ import {
   LogOut,
   ExternalLink,
   Sparkles,
-  MessageCircle,
-  KeyRound,
   CircleDot,
   ClipboardList,
   UserCog,
   Building2,
   Shield,
   ChevronDown,
+  KeyRound,
 } from "lucide-react";
+import { WhatsAppLucideIcon } from "@/components/WhatsAppIcon";
+import type { LucideIcon } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
@@ -71,8 +72,8 @@ const FALLBACK_CRUMBS: Record<string, string> = {
   abonnements: "Abonnements",
   commodites: "Commodités",
   whatsapp: "WhatsApp",
-  integrations: "Intégrations",
   audit: "Audit",
+  integrations: "Intégrations",
 };
 
 type NavLinkItem = { kind: "link"; to: string; label: string; icon: typeof LayoutDashboard; end?: boolean };
@@ -122,8 +123,8 @@ const SECTIONS: { title: string; items: NavEntry[] }[] = [
     items: [
       { kind: "link", to: "/backoffice/superadmin/commodites", label: "Commodités", icon: Sparkles },
       { kind: "link", to: "/backoffice/superadmin/audit", label: "Audit", icon: ClipboardList },
+      { kind: "link", to: "/backoffice/superadmin/whatsapp", label: "WhatsApp", icon: WhatsAppLucideIcon as LucideIcon },
       { kind: "link", to: "/backoffice/superadmin/integrations", label: "Intégrations", icon: KeyRound },
-      { kind: "link", to: "/backoffice/superadmin/whatsapp", label: "WhatsApp", icon: MessageCircle },
     ],
   },
 ];
@@ -157,7 +158,7 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
 
   return (
     <aside
-      className="sa-sidebar flex flex-col h-full shrink-0 overflow-x-hidden overflow-y-auto"
+      className="sa-sidebar superadmin-sidebar flex flex-col h-full shrink-0"
       style={{
         width: "var(--sa-sidebar-width)",
         minWidth: "var(--sa-sidebar-width)",
@@ -387,9 +388,10 @@ export default function SuperadminLayout() {
           </div>
         ) : null}
 
+        {/* Scroll page naturel (body) — pas de nested overflow : trackpad 2 doigts OK */}
         <div className="sa-shell-main min-h-screen flex flex-col">
           <header
-            className="sticky top-0 z-30 flex items-center justify-between gap-3 px-5 md:px-8"
+            className="sticky top-0 shrink-0 z-30 flex items-center justify-between gap-3 px-5 md:px-8"
             style={{
               height: "var(--sa-header-height)",
               background: "var(--sa-surface)",
@@ -433,8 +435,7 @@ export default function SuperadminLayout() {
                 to="/backoffice/superadmin"
                 className="relative inline-flex items-center justify-center w-9 h-9 rounded-lg"
                 style={{ color: "var(--sa-text-2)" }}
-                aria-label="Tableau de bord"
-                title="Tableau de bord"
+                aria-label="Alertes"
               >
                 <Bell size={18} />
                 {alertCount > 0 ? (

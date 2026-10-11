@@ -95,7 +95,7 @@ export const superAdminApi = {
     }),
   politiquePaiement: (
     terrainId: number,
-    data: { politique_paiement: "avance" | "sans_avance"; delai_paiement_dette_jours?: number },
+    data: { politique_paiement?: "avance" | "sans_avance"; delai_paiement_dette_jours?: number },
   ) =>
     adminRequest(`/admin/terrains/${terrainId}/politique-paiement`, {
       method: "PATCH",
@@ -194,6 +194,12 @@ export const superAdminApi = {
   getIntegrations: () => adminRequest("/admin/integrations"),
   saveIntegrations: (body: Record<string, string>) =>
     adminRequest("/admin/integrations", { method: "PUT", body: JSON.stringify(body) }),
+  /** Régénère la paire VAPID (invalide tous les abonnements push). Confirmation obligatoire. */
+  regenerateVapid: () =>
+    adminRequest("/admin/integrations/vapid/regenerate", {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    }),
   whatsappStatus: () => adminRequest("/admin/whatsapp/status"),
   whatsappQr: () => adminRequest("/admin/whatsapp/qr"),
   whatsappConnect: (force = false, opts?: { telephone?: string; changeNumber?: boolean }) =>
@@ -290,6 +296,14 @@ export const superAdminApi = {
     const q = sp.toString();
     return adminRequest(`/push/logs${q ? `?${q}` : ""}`);
   },
+  locationConfig: (
+    terrainId: number,
+    body: { types_location?: "les_deux" | "entier" | "moitie"; duree_min_minutes?: number },
+  ) =>
+    adminRequest(`/admin/terrains/${terrainId}/location-config`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   // Contrats / canaux (adminPaiements)
   getContrat: (terrainId: number) => adminRequest(`/admin/terrains/${terrainId}/contrat`),
@@ -360,6 +374,16 @@ export const superAdminApi = {
   tickFenetres: () => adminRequest("/admin/caisse/tick-fenetres", { method: "POST" }),
   rapprochement: () => adminRequest("/admin/rapprochement"),
   revenusPaiements: () => adminRequest("/admin/revenus-paiements"),
+
+  // Demandes de changement de numéro (gérants)
+  demandesNumero: () => adminRequest("/admin/demandes-numero"),
+  validerDemandeNumero: (id: number | string) =>
+    adminRequest(`/admin/demandes-numero/${id}/valider`, { method: "POST" }),
+  refuserDemandeNumero: (id: number | string, motif?: string) =>
+    adminRequest(`/admin/demandes-numero/${id}/refuser`, {
+      method: "POST",
+      body: JSON.stringify({ motif: motif || "" }),
+    }),
 };
 
 export type TerrainGerant = {

@@ -1,5 +1,8 @@
 const { queryAll, queryOne } = require('../database');
-const { calculerCommissionPrelevee } = require('../pricingService');
+const {
+  calculerCommissionPrelevee,
+  calculerAvanceReference,
+} = require('../pricingService');
 const { crediterPortefeuilleGerant } = require('./portefeuilleService');
 const {
   confirmerCreneauxReservation,
@@ -8,6 +11,8 @@ const {
 } = require('../reservationLockService');
 const { calculerFenetreCheckIn } = require('./checkInFenetre');
 const { serializeQrPayload } = require('./qrPayload');
+const { dateEcheanceDette } = require('./politiquePaiement');
+const { essaiActif } = require('./essaiService');
 
 function genererCodeReservation(db) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -49,11 +54,78 @@ function instructionsPaiementDette(db) {
   );
 }
 
+const TERRAIN_COMMISSION_COLS = `
+  t.commission_pourcentage, t.pourcentage_avance, t.modele_revenus, t.commission,
+  t.acompte, t.montant_acompte, t.politique_paiement, t.delai_paiement_dette_jours,
+  t.mode_essai, t.essai_debut_at, t.essai_fin_at, t.essai_suspendu_auto, t.essai_duree_jours,
+  t.delai_negociation_jours, t.gerant_id
+`;
+
+/**
+ * Crée une dette commission pour une résa confirmée sans payin joueur
+ * (politique sans_avance, ou confirmation manuelle).
+ * Commission = % de l'avance de référence ; 0 si essai actif.
+ */
+function creerDettePourReservation(db, {
+  reservation,
+  terrain,
+  gerantId,
+  note = null,
+  source = 'sans_avance',
+}) {
+  if (!reservation?.id || !terrain?.id) return null;
+  const existingDette = queryOne(db, 'SELECT id FROM dettes_commissions WHERE reservation_id = ?', [reservation.id]);
+  if (existingDette) return existingDette;
+
+  const prix = Number(reservation.prix_total || reservation.montant || 0);
+  const avanceRef = Number(reservation.montant_avance || reservation.acompte || 0) > 0
+    ? Number(reservation.montant_avance || reservation.acompte || 0)
+    : calculerAvanceReference(terrain, prix);
+  const commission = calculerCommissionPrelevee(terrain, avanceRef);
+  // En essai : pas de dette commission (plateforme ne facture rien)
+  if (commission <= 0 && essaiActif(terrain)) {
+    return { id: null, skipped: true, reason: 'essai_actif', commission: 0, montantAvance: avanceRef };
+  }
+  if (commission <= 0) {
+    return { id: null, skipped: true, reason: 'commission_zero', commission: 0, montantAvance: avanceRef };
+  }
+
+  const periode = periodeCivile();
+  const echeance = dateEcheanceDette(terrain);
+  const noteFinale = note
+    ? String(note).slice(0, 500)
+    : (source === 'sans_avance'
+      ? `Sans avance — commission sur avance de référence ${avanceRef} FCFA`
+      : null);
+
+  const gid = Number(gerantId || terrain.gerant_id || 0);
+  if (!gid) {
+    const error = new Error('Aucun gérant pour enregistrer la dette commission');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  db.run(
+    `INSERT INTO dettes_commissions
+       (terrain_id, gerant_id, reservation_id, montant_commission, montant_avance_manuelle,
+        statut, periode, note, date_echeance)
+     VALUES (?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)`,
+    [terrain.id, gid, reservation.id, commission, avanceRef, periode, noteFinale, echeance],
+  );
+  const detteId = lastInsertId(db);
+  db.run(
+    `INSERT INTO audit_dette
+       (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
+     VALUES (?, ?, 'creation', ?, ?, 'systeme', ?)`,
+    [detteId, terrain.id, commission, gid, `Source=${source}. Avance réf. ${avanceRef} FCFA`],
+  );
+  return { id: detteId, commission, montantAvance: avanceRef, periode, date_echeance: echeance };
+}
+
 function confirmerManuellement(db, { reservationId, gerantId, note }) {
   const reservation = queryOne(
     db,
-    `SELECT r.*, t.commission_pourcentage, t.pourcentage_avance, t.modele_revenus, t.commission,
-            t.acompte, t.montant_acompte
+    `SELECT r.*, ${TERRAIN_COMMISSION_COLS}
      FROM reservations r
      JOIN terrains t ON t.id = r.terrain_id
      JOIN employes e ON e.terrain_id = t.id AND e.id = ?
@@ -74,9 +146,13 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
     throw error;
   }
 
-  const montantAvance = Number(reservation.montant_avance || reservation.acompte || 0);
+  const prix = Number(reservation.prix_total || reservation.montant || 0);
+  const montantAvance = Number(reservation.montant_avance || reservation.acompte || 0) > 0
+    ? Number(reservation.montant_avance || reservation.acompte || 0)
+    : calculerAvanceReference(reservation, prix);
   const commission = calculerCommissionPrelevee(reservation, montantAvance);
   const periode = periodeCivile();
+  const echeance = dateEcheanceDette(reservation);
   const noteGerant = note ? String(note).slice(0, 500) : null;
 
   let code = reservation.code_reservation;
@@ -128,32 +204,36 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
 
   const loserIds = annulerReservationsConcurrentes(db, { ...reservation, id: reservationId });
 
-  db.run(
-    `INSERT INTO dettes_commissions
-       (terrain_id, gerant_id, reservation_id, montant_commission, montant_avance_manuelle, statut, periode, note)
-     VALUES (?, ?, ?, ?, ?, 'en_attente', ?, ?)`,
-    [reservation.terrain_id, gerantId, reservationId, commission, montantAvance, periode, noteGerant],
-  );
-  const detteId = lastInsertId(db);
+  let detteId = null;
+  if (commission > 0) {
+    db.run(
+      `INSERT INTO dettes_commissions
+         (terrain_id, gerant_id, reservation_id, montant_commission, montant_avance_manuelle,
+          statut, periode, note, date_echeance)
+       VALUES (?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)`,
+      [reservation.terrain_id, gerantId, reservationId, commission, montantAvance, periode, noteGerant, echeance],
+    );
+    detteId = lastInsertId(db);
 
-  db.run(
-    `INSERT INTO audit_dette
-       (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
-     VALUES (?, ?, 'creation', ?, ?, 'gerant', ?)`,
-    [
-      detteId,
-      reservation.terrain_id,
-      commission,
-      gerantId,
-      `Confirmation manuelle. Avance reçue hors PayTech : ${montantAvance} FCFA`,
-    ],
-  );
+    db.run(
+      `INSERT INTO audit_dette
+         (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
+       VALUES (?, ?, 'creation', ?, ?, 'gerant', ?)`,
+      [
+        detteId,
+        reservation.terrain_id,
+        commission,
+        gerantId,
+        `Confirmation manuelle. Avance reçue hors PayTech : ${montantAvance} FCFA`,
+      ],
+    );
+  }
 
   db.run(
     `INSERT INTO paiements
        (reservation_id, montant, methode, statut, reference_externe, montant_acompte, montant_commission, montant_reverse, statut_reversement)
-     VALUES (?, ?, 'manuel', 'paye', ?, ?, 0, ?, 'effectue')`,
-    [reservationId, montantAvance, `MANUEL-GERANT-${reservationId}-${Date.now()}`, montantAvance, montantAvance],
+     VALUES (?, ?, 'manuel', 'paye', ?, ?, ?, ?, 'effectue')`,
+    [reservationId, montantAvance, `MANUEL-GERANT-${reservationId}-${Date.now()}`, montantAvance, commission, Math.max(0, montantAvance - commission)],
   );
 
   crediterPortefeuilleGerant(db, {
@@ -487,9 +567,105 @@ function appliquerCompensationDette(db, { terrainId, lignes, faitPar, roleFaitPa
   return { soldées, montant };
 }
 
+/**
+ * Marque toutes les dettes en_attente d'un gérant/période comme payées (après payin dette).
+ */
+function confirmerPaiementDetteEnLigne(db, {
+  gerantId,
+  periode,
+  reference,
+  montantPaye,
+  faitPar = null,
+}) {
+  const p = periode || periodeCivile();
+  const pending = queryOne(
+    db,
+    `SELECT COUNT(*) AS nb, COALESCE(SUM(montant_commission), 0) AS total
+     FROM dettes_commissions
+     WHERE gerant_id = ? AND statut = 'en_attente' AND periode = ?`,
+    [Number(gerantId), p],
+  );
+  const total = Number(pending?.total || 0);
+  if (!Number(pending?.nb) || total <= 0) {
+    return { action: 'already_paid', periode: p, montant: 0 };
+  }
+
+  const rows = queryAll(
+    db,
+    `SELECT id, terrain_id, montant_commission FROM dettes_commissions
+     WHERE gerant_id = ? AND statut = 'en_attente' AND periode = ?`,
+    [Number(gerantId), p],
+  );
+
+  db.run(
+    `UPDATE dettes_commissions SET
+       statut = 'payee',
+       payee_at = CURRENT_TIMESTAMP,
+       montant_regle = montant_commission,
+       derniere_mise_a_jour = CURRENT_TIMESTAMP
+     WHERE gerant_id = ? AND statut = 'en_attente' AND periode = ?`,
+    [Number(gerantId), p],
+  );
+
+  for (const row of rows) {
+    db.run(
+      `INSERT INTO audit_dette
+         (dette_id, terrain_id, action, montant_concerne, fait_par, role_fait_par, detail)
+       VALUES (?, ?, 'paiement_total', ?, ?, 'gerant', ?)`,
+      [
+        row.id,
+        row.terrain_id,
+        Number(row.montant_commission || 0),
+        faitPar || Number(gerantId),
+        `Paiement en ligne dette. Ref=${reference || '—'}. Montant IPN=${Number(montantPaye || total)}`,
+      ],
+    );
+  }
+
+  db.run(
+    `UPDATE paiements_dettes SET statut = 'paye', payee_at = CURRENT_TIMESTAMP
+     WHERE reference = ? AND statut = 'en_attente'`,
+    [String(reference || '')],
+  );
+
+  return {
+    action: 'confirm',
+    periode: p,
+    montant: total,
+    nb: rows.length,
+    gerant_id: Number(gerantId),
+  };
+}
+
+function enregistrerPaiementDettePending(db, {
+  gerantId,
+  terrainId,
+  periode,
+  montant,
+  reference,
+}) {
+  db.run(
+    `UPDATE paiements_dettes SET statut = 'annule'
+     WHERE gerant_id = ? AND periode = ? AND statut = 'en_attente'`,
+    [Number(gerantId), String(periode)],
+  );
+  db.run(
+    `INSERT INTO paiements_dettes
+       (terrain_id, gerant_id, periode, montant, reference, statut)
+     VALUES (?, ?, ?, ?, ?, 'en_attente')`,
+    [terrainId ? Number(terrainId) : null, Number(gerantId), String(periode), Number(montant), String(reference)],
+  );
+  return queryOne(db, 'SELECT * FROM paiements_dettes WHERE reference = ?', [String(reference)]);
+}
+
+function paiementDetteParReference(db, reference) {
+  return queryOne(db, 'SELECT * FROM paiements_dettes WHERE reference = ?', [String(reference || '')]);
+}
+
 module.exports = {
   periodeCivile,
   confirmerManuellement,
+  creerDettePourReservation,
   resumeGerant,
   resumeSuperadminMois,
   listDettesAdmin,
@@ -501,4 +677,7 @@ module.exports = {
   detteOuverteTerrain,
   preparerCompensationDette,
   appliquerCompensationDette,
+  confirmerPaiementDetteEnLigne,
+  enregistrerPaiementDettePending,
+  paiementDetteParReference,
 };

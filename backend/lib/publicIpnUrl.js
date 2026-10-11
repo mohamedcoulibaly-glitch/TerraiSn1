@@ -96,7 +96,18 @@ function successQueryForKind(entityId, kind = 'reservation') {
   const id = Number(entityId || 0);
   if (kind === 'abonnement') return id > 0 ? `abonnement_id=${id}` : 'kind=abonnement';
   if (kind === 'achat') return id > 0 ? `terrain_id=${id}&kind=achat` : 'kind=achat';
+  if (kind === 'dette') {
+    // entityId = gerant_id (optionnel) — le kind suffit pour la redirection front
+    return id > 0 ? `kind=dette&gerant_id=${id}` : 'kind=dette';
+  }
   return id > 0 ? `id=${id}` : '';
+}
+
+function cancelQueryForKind(kind = 'reservation') {
+  if (kind === 'dette') return 'kind=dette';
+  if (kind === 'abonnement') return 'kind=abonnement';
+  if (kind === 'achat') return 'kind=achat';
+  return '';
 }
 
 /**
@@ -130,26 +141,36 @@ async function resoudreUrlsPaiement(reservationId, gateway = activeGateway(), op
   let successUrl;
   let cancelUrl;
   const successQs = successQueryForKind(reservationId, kind);
+  const cancelQs = cancelQueryForKind(kind);
 
   if (publicBase && isPublicHttps(publicBase)) {
     ipnUrl = `${publicBase}${paths.webhook}`;
     successUrl = successQs
       ? `${publicBase}${paths.success}?${successQs}`
       : `${publicBase}${paths.success}`;
-    cancelUrl = `${publicBase}${paths.cancel}`;
+    cancelUrl = cancelQs
+      ? `${publicBase}${paths.cancel}?${cancelQs}`
+      : `${publicBase}${paths.cancel}`;
     persisterEnv(paths.envIpn, ipnUrl);
     persisterEnv(paths.envSuccess, `${publicBase}${paths.success}`);
-    persisterEnv(paths.envCancel, cancelUrl);
+    persisterEnv(paths.envCancel, `${publicBase}${paths.cancel}`);
   } else {
     ipnUrl = stripSlash(process.env[paths.envIpn] || '');
     const successBase = stripSlash(process.env[paths.envSuccess] || '');
-    cancelUrl = stripSlash(process.env[paths.envCancel] || '');
+    const cancelBase = stripSlash(process.env[paths.envCancel] || '');
     if (successBase && successQs) {
       successUrl = successBase.includes('?')
         ? `${successBase}&${successQs}`
         : `${successBase}?${successQs}`;
     } else {
       successUrl = successBase;
+    }
+    if (cancelBase && cancelQs) {
+      cancelUrl = cancelBase.includes('?')
+        ? `${cancelBase}&${cancelQs}`
+        : `${cancelBase}?${cancelQs}`;
+    } else {
+      cancelUrl = cancelBase;
     }
   }
 

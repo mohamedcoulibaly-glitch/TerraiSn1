@@ -69,7 +69,7 @@ export default function EnAttentePaiementActions({
     try {
       await gerantApi.confirmerManuellement(
         reservationId,
-        "Avance reçue hors paiement en ligne (confirmation manuelle)",
+        "Avance reçue hors PayTech (confirmation manuelle)",
       );
       toast.success("Réservation confirmée — commission mise en dette");
       setConfirmManualOpen(false);
@@ -161,7 +161,7 @@ export default function EnAttentePaiementActions({
 
         {!compact && canConfirmManual ? (
           <p className="text-[11px] text-center" style={{ color: "var(--g-muted, var(--color-text-muted))" }}>
-            Confirmation manuelle = avance déjà reçue hors paiement en ligne. La commission TerrainSN passe en dette.
+            Confirmation manuelle = avance déjà reçue hors PayTech. La commission TerrainSN passe en dette.
           </p>
         ) : null}
       </section>

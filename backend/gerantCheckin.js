@@ -16,6 +16,17 @@ function localDateYmd(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
+/** Fenêtre glissante de 7 jours à partir d'aujourd'hui ; toTech = +1 jour pour inclure la nuit prolongée du 7e jour. */
+function next7DaysBoundsYmd(from = new Date()) {
+  const d = new Date(from);
+  d.setHours(12, 0, 0, 0);
+  const end = new Date(d);
+  end.setDate(d.getDate() + 6);
+  const endTech = new Date(d);
+  endTech.setDate(d.getDate() + 7);
+  return { from: localDateYmd(d), to: localDateYmd(end), toTech: localDateYmd(endTech) };
+}
+
 function formatQrScanneAtFr(value) {
   if (!value) return '';
   const raw = String(value).trim();
@@ -403,6 +414,50 @@ function mountGerantCheckinRoutes(app) {
 
       res.json({
         date,
+        terrain_id: terrain.id,
+        terrain_nom: terrain.nom,
+        reservations: rows.map(mapReservationGerantRow),
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  /** Fenêtre glissante : les 7 prochains jours (aujourd'hui inclus), réservations confirmées / jouées / en attente de paiement valide. */
+  app.get('/api/gerant/reservations/week', authMiddleware, requireRole('gerant'), async (req, res) => {
+    try {
+      const db = await getDb();
+      const terrainId = req.user.terrain_id;
+      if (!terrainId) return res.status(400).json({ error: 'Aucun terrain associé à ce gérant' });
+
+      const terrain = queryOne(db, 'SELECT id, nom FROM terrains WHERE id = ?', [terrainId]);
+      if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
+
+      const { from, to, toTech } = next7DaysBoundsYmd();
+      const rows = queryAll(db, `
+        SELECT r.*, t.nom AS terrain_nom,
+               COALESCE(r.joueur_nom, u.nom) AS joueur_nom,
+               COALESCE(r.joueur_telephone, u.telephone) AS joueur_telephone,
+               COALESCE(u.is_banned, 0) AS is_banned,
+               COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
+        FROM reservations r
+        JOIN terrains t ON t.id = r.terrain_id
+        LEFT JOIN users u ON u.id = r.joueur_id
+        LEFT JOIN creneaux c ON c.id = r.creneau_id
+        WHERE r.terrain_id = ?
+          AND r.date >= ? AND r.date <= ?
+          AND (
+            r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
+            OR (r.statut = 'en_attente' AND (r.verrou_expire_at IS NULL OR r.verrou_expire_at > ?))
+          )
+        ORDER BY r.date ASC, r.heure_debut ASC, r.heure_fin ASC
+      `, [terrainId, from, toTech, Date.now()]);
+
+      res.json({
+        from,
+        to,
+        fenetre: '7_prochains_jours',
         terrain_id: terrain.id,
         terrain_nom: terrain.nom,
         reservations: rows.map(mapReservationGerantRow),

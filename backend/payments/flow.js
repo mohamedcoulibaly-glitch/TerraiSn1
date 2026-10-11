@@ -7,8 +7,11 @@ const {
   kindFromReference,
   abonnementIdDepuisReference,
   terrainIdDepuisReferenceAchat,
+  gerantIdDepuisReferenceDette,
+  periodeDepuisReferenceDette,
   normalizeCanal,
 } = require('../lib/paymentChannels');
+const detteCommissionService = require('../services/detteCommissionService');
 const notificationService = require('../notificationService');
 const pushService = require('../pushService');
 const logger = require('../logger');
@@ -316,6 +319,33 @@ async function confirmerAchatDepuisIpn(refCommand, options = {}) {
   return { action: 'confirm', kind: 'achat', terrainId };
 }
 
+async function confirmerDetteDepuisIpn(refCommand, options = {}) {
+  const gerantId = gerantIdDepuisReferenceDette(refCommand)
+    || Number(options.gerantId || 0);
+  const periode = periodeDepuisReferenceDette(refCommand)
+    || options.periode
+    || detteCommissionService.periodeCivile();
+  if (!gerantId) return { action: 'missing', kind: 'dette' };
+
+  const db = await getDb();
+  const pending = detteCommissionService.paiementDetteParReference(db, refCommand);
+  if (pending?.statut === 'paye') {
+    return { action: 'already_confirmed', kind: 'dette', gerantId, periode };
+  }
+
+  let result;
+  transaction(db, () => {
+    result = detteCommissionService.confirmerPaiementDetteEnLigne(db, {
+      gerantId,
+      periode,
+      reference: refCommand,
+      montantPaye: options.montant,
+      faitPar: gerantId,
+    });
+  });
+  return { kind: 'dette', gerantId, periode, ...result };
+}
+
 function resoudreReservationDepuisIpn(db, payload) {
   const custom = paytechService.decoderCustomField(payload.custom_field);
   const refCommand = payload.ref_command || payload.refCommand;
@@ -386,7 +416,7 @@ async function handlePaytechIpn(payload, headers) {
 
   const kind = custom.kind || kindFromReference(refCommand);
 
-  if (kind === 'abonnement' || kind === 'achat') {
+  if (kind === 'abonnement' || kind === 'achat' || kind === 'dette') {
     if (typeEvent === 'sale_canceled') {
       return { received: true, event: typeEvent, kind, action: 'canceled' };
     }
@@ -397,6 +427,14 @@ async function handlePaytechIpn(payload, headers) {
       const result = await confirmerAbonnementDepuisIpn(refCommand, {
         abonnementId: custom.abonnement_id,
         canal,
+      });
+      return { received: true, event: typeEvent, ...result };
+    }
+    if (kind === 'dette') {
+      const result = await confirmerDetteDepuisIpn(refCommand, {
+        gerantId: custom.gerant_id,
+        periode: custom.periode,
+        montant: custom.montant ?? payload.final_item_price ?? payload.item_price,
       });
       return { received: true, event: typeEvent, ...result };
     }
@@ -466,7 +504,7 @@ async function handlePaydunyaIpn(body = {}) {
   const refCommand = custom.ref_command || token;
   const kind = custom.kind || kindFromReference(refCommand);
 
-  if (kind === 'abonnement' || kind === 'achat') {
+  if (kind === 'abonnement' || kind === 'achat' || kind === 'dette') {
     if (status === 'cancelled' || status === 'canceled' || status === 'failed') {
       return { received: true, event: status, provider: 'paydunya', kind, action: 'canceled' };
     }
@@ -477,6 +515,14 @@ async function handlePaydunyaIpn(body = {}) {
       const result = await confirmerAbonnementDepuisIpn(refCommand, {
         abonnementId: custom.abonnement_id,
         canal: custom.canal_paiement,
+      });
+      return { received: true, event: 'completed', provider: 'paydunya', ...result };
+    }
+    if (kind === 'dette') {
+      const result = await confirmerDetteDepuisIpn(refCommand, {
+        gerantId: custom.gerant_id,
+        periode: custom.periode,
+        montant: custom.montant,
       });
       return { received: true, event: 'completed', provider: 'paydunya', ...result };
     }
@@ -636,6 +682,7 @@ module.exports = {
   annulerReservationApresAnnulationPaytech,
   confirmerAbonnementDepuisIpn,
   confirmerAchatDepuisIpn,
+  confirmerDetteDepuisIpn,
   resoudreReservationDepuisIpn,
   montantIpnCoherent,
   handlePaytechIpn,

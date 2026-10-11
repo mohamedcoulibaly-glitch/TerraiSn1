@@ -43,7 +43,7 @@ const ProfilNotifications = () => {
     try {
       const [notifs, prefs] = await Promise.all([
         notificationsApi.list(),
-        pushApi.getPreferences().catch(() => null),
+        pushSupported ? pushApi.getPreferences().catch(() => null) : Promise.resolve(null),
       ]);
       setNotifications(Array.isArray(notifs) ? notifs : []);
       if (prefs) setSettings(prefs as Record<PrefKey, boolean>);
@@ -54,7 +54,7 @@ const ProfilNotifications = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pushSupported]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -84,12 +84,13 @@ const ProfilNotifications = () => {
     setSettings(updated);
 
     try {
-      const meta = notificationTypes.find((t) => t.id === key);
-      if (meta?.requiresPush && next && pushSupported && !pushEnabled) {
-        await enablePush();
+      if (pushSupported && notificationTypes.find((t) => t.id === key)?.requiresPush) {
+        if (next && !pushEnabled) {
+          await enablePush();
+        }
+        await pushApi.updatePreferences(updated);
       }
-      await pushApi.updatePreferences(updated);
-      toast.success(next ? 'Préférence enregistrée' : 'Préférence désactivée');
+      toast.success(next ? 'Notification activée' : 'Notification désactivée');
     } catch (err: unknown) {
       setSettings(settings);
       toast.error(err instanceof Error ? err.message : 'Erreur de mise à jour');

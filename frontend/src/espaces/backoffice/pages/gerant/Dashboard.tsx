@@ -1,5 +1,6 @@
-﻿import {
+import {
   Banknote,
+  Calendar,
   CalendarCog,
   CalendarDays,
   Clock,
@@ -22,7 +23,7 @@ import {
   calculerFlagsMatch,
   idPrioriteScannable,
 } from "@/lib/checkInFenetre";
-import { localYmd, weekDates, formatJourCourt } from "@/lib/localDate";
+import { localYmd, next7Days, addDaysYmd, formatJourCourt } from "@/lib/localDate";
 import { useTerrainEvents } from "@/hooks/useTerrainEvents";
 import {
   useGerantDashboard,
@@ -32,6 +33,7 @@ import {
 } from "@/hooks/useGerantLiveData";
 import { estNuitProlongee, getJourPercu, trierCreneaux } from "@/utils/creneauLabel";
 import BloquerCreneauModal from "@/espaces/backoffice/components/BloquerCreneauModal";
+import DatePickerSheet from "@/espaces/backoffice/components/DatePickerSheet";
 import ReservationExpressModal from "@/espaces/backoffice/components/ReservationExpressModal";
 import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
 import ScannerModal from "@/espaces/backoffice/components/ScannerModal";
@@ -568,6 +570,13 @@ function formatJourHeader(ymd: string) {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
+/** Date technique DB pour un créneau libre (nuit prolongée = lendemain). */
+function slotTechDate(dayDate: string, heureDebut: string, slotDate?: string) {
+  const h = String(heureDebut || "").slice(0, 5);
+  if (slotDate) return String(slotDate).slice(0, 10);
+  return estNuitProlongee(h) ? addDaysYmd(dayDate, 1) : dayDate;
+}
+
 function hourKeysBetween(debut: string, fin: string) {
   const start = timeToMinutes(debut);
   let end = timeToMinutes(fin);
@@ -679,7 +688,7 @@ function buildQueueBlocks({
     .filter((s) => {
       const h = String(s.heure_debut).slice(0, 5);
       if (reservedHours.has(h) || blockedHours.has(h)) return false;
-      return !isSlotInPast(dayDate, h, nowMs);
+      return !isSlotInPast(slotTechDate(dayDate, h), h, nowMs);
     })
     .map((s, idx) => ({
       id: -1000 - idx,
@@ -910,15 +919,18 @@ const ManagerDashboard = () => {
     refetch: refetchDashboard,
   } = useGerantDashboard(isGerant);
 
+  const [vueActive, setVueActive] = useState<"aujourd_hui" | "semaine" | "jour">("aujourd_hui");
   const [selectedDay, setSelectedDay] = useState(localYmd());
+  const [calendarOpen, setCalendarOpen] = useState(false);
+
+  /** Vue calendrier = un jour précis (au-delà des 7 prochains jours ou choix libre). */
+  const todayQueryDate = vueActive === "jour" ? selectedDay : undefined;
   const {
     todayPayload,
     isInitialLoading: todayInitial,
     isRefetching: todayRefetching,
     refetch: refetchToday,
-  } = useGerantToday(undefined, isGerant);
-
-  const [vueActive, setVueActive] = useState<"aujourd_hui" | "semaine">("aujourd_hui");
+  } = useGerantToday(todayQueryDate, isGerant);
   const {
     weekReservations,
     isInitialLoading: weekInitial,
@@ -947,8 +959,9 @@ const ManagerDashboard = () => {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const [freeSlots, setFreeSlots] = useState<
-    { heure_debut: string; heure_fin: string; disponible?: boolean }[]
+    { heure_debut: string; heure_fin: string; date?: string; disponible?: boolean }[]
   >([]);
+  const [dayFerme, setDayFerme] = useState(false);
 
   const isInitialLoading = dashInitial && !dashboard;
   const isSyncing = dashRefetching || todayRefetching || (vueActive === "semaine" && weekRefetching);
@@ -964,14 +977,29 @@ const ManagerDashboard = () => {
   const loadFreeSlots = useCallback(async (terrainId?: number, date?: string) => {
     if (!terrainId || !date) {
       setFreeSlots([]);
+      setDayFerme(false);
       return;
     }
     setFreeSlots([]); // évite d'afficher les créneaux libres d'un autre jour pendant le fetch
     try {
       // Endpoint gérant : journée complète (le filtre « passé » se fait dans buildQueueBlocks)
       const data = (await gerantApi.disponibilites(date)) as {
-        creneaux?: { heure?: string; heure_debut?: string; heure_fin?: string; disponible?: boolean; statut?: string }[];
+        ferme?: boolean;
+        creneaux?: {
+          heure?: string;
+          heure_debut?: string;
+          heure_fin?: string;
+          date?: string;
+          disponible?: boolean;
+          statut?: string;
+        }[];
       };
+      if (data?.ferme) {
+        setDayFerme(true);
+        setFreeSlots([]);
+        return;
+      }
+      setDayFerme(false);
       const libres = (data?.creneaux || [])
         .filter((c) => c.disponible !== false && c.statut !== "occupe" && c.statut !== "bloque" && c.statut !== "reserve")
         .map((c) => {
@@ -980,12 +1008,16 @@ const ManagerDashboard = () => {
             const h = parseInt(debut.split(":")[0], 10);
             return `${String(h + 1).padStart(2, "0")}:00`;
           })();
-          return { heure_debut: debut, heure_fin: fin, disponible: true };
+          const slotDate =
+            String(c.date || "").slice(0, 10) ||
+            (estNuitProlongee(debut) ? addDaysYmd(date, 1) : date);
+          return { heure_debut: debut, heure_fin: fin, date: slotDate, disponible: true };
         })
         .filter((c) => c.heure_debut);
       setFreeSlots(libres);
     } catch {
       setFreeSlots([]);
+      setDayFerme(false);
     }
   }, []);
 
@@ -996,8 +1028,27 @@ const ManagerDashboard = () => {
       setFiltreJourSemaine("tous");
       void refetchWeek();
     } else {
+      setSelectedDay(localYmd());
       void refetchToday();
     }
+  };
+
+  const choisirDateCalendrier = (ymd: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
+    const today = localYmd();
+    if (ymd < today) {
+      toast.error("Impossible de sélectionner une date passée");
+      return;
+    }
+    if (ymd === today) {
+      setVueActive("aujourd_hui");
+      setSelectedDay(today);
+      void refetchToday();
+      return;
+    }
+    setSelectedDay(ymd);
+    setVueActive("jour");
+    setFiltreJourSemaine("tous");
   };
 
   useEffect(() => {
@@ -1007,8 +1058,8 @@ const ManagerDashboard = () => {
   }, [isAuthenticated, user, navigate]);
 
   useEffect(() => {
-    if (todayPayload?.date) setSelectedDay(todayPayload.date);
-  }, [todayPayload?.date]);
+    if (vueActive !== "jour" && todayPayload?.date) setSelectedDay(todayPayload.date);
+  }, [todayPayload?.date, vueActive]);
 
   // Rechargement silencieux quand le terrain actif change
   useEffect(() => {
@@ -1044,20 +1095,33 @@ const ManagerDashboard = () => {
 
   useEffect(() => {
     const terrainId = dashboard?.terrain?.id;
-    if (vueActive === "semaine" && filtreJourSemaine !== "tous" && terrainId) {
+    if (!terrainId) return;
+    if (vueActive === "semaine" && filtreJourSemaine !== "tous") {
       void loadFreeSlots(terrainId, filtreJourSemaine);
       return;
     }
+    if (vueActive === "jour" && selectedDay) {
+      void loadFreeSlots(terrainId, selectedDay);
+      return;
+    }
     const date = todayPayload?.date || selectedDay;
-    if (terrainId && date) void loadFreeSlots(terrainId, date);
+    if (date) void loadFreeSlots(terrainId, date);
   }, [dashboard?.terrain?.id, todayPayload?.date, selectedDay, vueActive, filtreJourSemaine, loadFreeSlots]);
 
   useTerrainEvents(dashboard?.terrain?.id, () => {
     refreshLive();
   });
 
-  const todayList = (todayPayload?.reservations || []) as TodayReservation[];
-  const dayDate = todayPayload?.date || selectedDay || localYmd();
+  const dayDate =
+    vueActive === "jour" ? selectedDay : todayPayload?.date || selectedDay || localYmd();
+  const todayList = useMemo(() => {
+    const list = (todayPayload?.reservations || []) as TodayReservation[];
+    if (vueActive === "jour" && todayPayload?.date && todayPayload.date !== selectedDay) {
+      return [];
+    }
+    return list;
+  }, [todayPayload, vueActive, selectedDay]);
+  const terrainFermeAujourdhui = Boolean(todayPayload?.ferme) || dayFerme;
 
   const allBlocages = useMemo(() => {
     return ((dashboard?.blocages || []) as Array<{
@@ -1089,33 +1153,27 @@ const ManagerDashboard = () => {
     [todayList, freeSlots, dayDate, dayBlocages, nowMs],
   );
 
+  const joursProchains = useMemo(() => next7Days(dayDate), [dayDate]);
+
   const parJour = useMemo(() => {
+    const fenetre = new Set(joursProchains);
     const acc: Record<string, TodayReservation[]> = {};
-    const addDays = (ymd: string, delta: number) => {
-      const d = new Date(`${ymd}T12:00:00`);
-      d.setDate(d.getDate() + delta);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
-    };
+    for (const ymd of joursProchains) acc[ymd] = [];
+
     for (const r of weekReservations as TodayReservation[]) {
       const dateTech = String(r.date || "").slice(0, 10);
       if (!dateTech) continue;
       // Nuit prolongée → jour perçu (veille)
-      const datePercue = estNuitProlongee(r.heure_debut) ? addDays(dateTech, -1) : dateTech;
-      if (!acc[datePercue]) acc[datePercue] = [];
+      const datePercue = estNuitProlongee(r.heure_debut) ? addDaysYmd(dateTech, -1) : dateTech;
+      if (!fenetre.has(datePercue)) continue;
       acc[datePercue].push(r);
     }
-    return Object.keys(acc)
-      .sort()
-      .map((date) => ({
-        date,
-        reservations: trierCreneaux(acc[date]),
-      }));
-  }, [weekReservations]);
+    return joursProchains.map((date) => ({
+      date,
+      reservations: trierCreneaux(acc[date] || []),
+    }));
+  }, [weekReservations, joursProchains]);
 
-  const joursSemaine = useMemo(() => weekDates(dayDate), [dayDate]);
   const joursAffiches = useMemo(() => {
     if (filtreJourSemaine === "tous") return parJour;
     const existing = parJour.find((j) => j.date === filtreJourSemaine);
@@ -1178,7 +1236,15 @@ const ManagerDashboard = () => {
   };
 
   const openExpress = (prefill?: { date?: string; heure_debut?: string; heure_fin?: string } | null) => {
-    setExpressPrefill(prefill || null);
+    if (prefill) {
+      setExpressPrefill(prefill);
+    } else if (vueActive === "jour" && selectedDay) {
+      setExpressPrefill({ date: selectedDay });
+    } else if (vueActive === "semaine" && filtreJourSemaine !== "tous") {
+      setExpressPrefill({ date: filtreJourSemaine });
+    } else {
+      setExpressPrefill(null);
+    }
     setExpressOpen(true);
   };
 
@@ -1350,30 +1416,58 @@ const ManagerDashboard = () => {
         ))}
       </div>
 
-      {/* TOGGLE */}
-      <div className="flex gap-2">
-        {(
-          [
-            { id: "aujourd_hui" as const, label: "Aujourd'hui" },
-            { id: "semaine" as const, label: "Cette semaine" },
-          ] as const
-        ).map((t) => {
-          const actif = vueActive === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => void basculerVue(t.id)}
-              className="flex-1 min-h-[44px] rounded-full text-sm font-semibold"
-              style={{
-                background: actif ? "var(--g-primary)" : "var(--g-surface-2)",
-                color: actif ? "#fff" : "var(--g-muted)",
-              }}
-            >
-              {t.label}
-            </button>
-          );
-        })}
+      {/* TOGGLE + calendrier (jour éloigné → même flux réservation) */}
+      <div className="flex gap-2 items-stretch">
+        <div className="flex flex-1 gap-2 min-w-0">
+          {(
+            [
+              { id: "aujourd_hui" as const, label: "Aujourd'hui" },
+              { id: "semaine" as const, label: "7 prochains jours" },
+            ] as const
+          ).map((t) => {
+            const actif = vueActive === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => void basculerVue(t.id)}
+                className="flex-1 min-h-[44px] rounded-full text-sm font-semibold"
+                style={{
+                  background: actif ? "var(--g-primary)" : "var(--g-surface-2)",
+                  color: actif ? "#fff" : "var(--g-muted)",
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={() => setCalendarOpen(true)}
+          className="shrink-0 min-h-[44px] min-w-[48px] px-3 rounded-full inline-flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform"
+          style={{
+            background: vueActive === "jour" ? "var(--g-primary)" : "var(--g-surface-2)",
+            color: vueActive === "jour" ? "#fff" : "var(--g-muted)",
+            boxShadow: vueActive === "jour" ? "0 0 0 2px var(--g-primary-glow)" : undefined,
+          }}
+          aria-label="Choisir une date"
+          aria-expanded={calendarOpen}
+          title={
+            vueActive === "jour"
+              ? formatJourHeader(selectedDay)
+              : "Choisir une date (réservation normale)"
+          }
+        >
+          <Calendar className="w-5 h-5" />
+          {vueActive === "jour" ? (
+            <span className="text-[10px] font-bold leading-none tabular-nums">
+              {formatJourCourt(selectedDay).day}
+            </span>
+          ) : (
+            <span className="text-[9px] font-semibold leading-none opacity-80">Date</span>
+          )}
+        </button>
       </div>
 
       {vueActive === "semaine" ? (
@@ -1389,7 +1483,7 @@ const ManagerDashboard = () => {
           >
             Tous
           </button>
-          {joursSemaine.map((ymd) => {
+          {joursProchains.map((ymd) => {
             const meta = formatJourCourt(ymd);
             const actif = filtreJourSemaine === ymd;
             const isToday = ymd === localYmd();
@@ -1415,7 +1509,11 @@ const ManagerDashboard = () => {
       {/* FILE D'ATTENTE */}
       <section>
         <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--g-text)" }}>
-          {vueActive === "semaine" ? "File d'attente de la semaine" : "File d'attente du jour"}
+          {vueActive === "semaine"
+            ? "File d'attente — 7 prochains jours"
+            : vueActive === "jour"
+              ? `File d'attente — ${formatJourHeader(dayDate)}`
+              : "File d'attente du jour"}
         </h2>
 
         {weekNeedsFirstPaint ? (
@@ -1426,7 +1524,7 @@ const ManagerDashboard = () => {
               queueBlocks={emptyQueueBlocks()}
               dayDate={dayDate}
               nowMs={nowMs}
-              emptyTitle="Aucun match cette semaine"
+              emptyTitle="Aucun match sur les 7 prochains jours"
               features={dashboard?.features || null}
               onScan={openScanner}
               onExpress={openExpress}
@@ -1475,12 +1573,41 @@ const ManagerDashboard = () => {
               })}
             </div>
           )
+        ) : terrainFermeAujourdhui ? (
+          <div
+            className="text-center py-12 px-4 rounded-2xl"
+            style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}
+          >
+            <p className="text-4xl mb-3" aria-hidden>
+              🔒
+            </p>
+            <p className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>
+              {vueActive === "jour"
+                ? `Terrain fermé le ${formatJourHeader(dayDate)} 🔒`
+                : "Terrain fermé aujourd'hui 🔒"}
+            </p>
+            <p className="text-xs mt-2 max-w-sm mx-auto" style={{ color: "var(--g-muted)" }}>
+              Tu as configuré ce jour comme non ouvrable dans les paramètres.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/backoffice/gerant/parametres?section=horaires")}
+              className="mt-4 min-h-[44px] px-4 rounded-xl text-sm font-semibold underline"
+              style={{ color: "var(--g-primary)" }}
+            >
+              Modifier les horaires
+            </button>
+          </div>
         ) : (
           <FileAttenteBlocks
             queueBlocks={queueBlocks}
             dayDate={dayDate}
             nowMs={nowMs}
-            emptyTitle="Aucun créneau aujourd'hui"
+            emptyTitle={
+              vueActive === "jour"
+                ? `Aucun créneau le ${formatJourHeader(dayDate)}`
+                : "Aucun créneau aujourd'hui"
+            }
             features={dashboard?.features || null}
             onScan={openScanner}
             onExpress={openExpress}
@@ -1493,6 +1620,17 @@ const ManagerDashboard = () => {
         )}
       </section>
 
+      <DatePickerSheet
+        open={calendarOpen}
+        onClose={() => setCalendarOpen(false)}
+        value={vueActive === "jour" ? selectedDay : localYmd()}
+        min={localYmd()}
+        max={addDaysYmd(localYmd(), 90)}
+        onSelect={choisirDateCalendrier}
+        title="Date de réservation"
+        appClass="gerant-app"
+      />
+
       <ReservationExpressModal
         open={expressOpen}
         onClose={() => setExpressOpen(false)}
@@ -1500,7 +1638,14 @@ const ManagerDashboard = () => {
         prefill={expressPrefill}
         onCreated={() => {
           refreshLive();
-          void loadFreeSlots(dashboard?.terrain?.id, dayDate);
+          void loadFreeSlots(
+            dashboard?.terrain?.id,
+            vueActive === "jour"
+              ? selectedDay
+              : vueActive === "semaine" && filtreJourSemaine !== "tous"
+                ? filtreJourSemaine
+                : dayDate,
+          );
         }}
       />
 
@@ -1512,7 +1657,14 @@ const ManagerDashboard = () => {
         features={dashboard?.features || null}
         onChanged={() => {
           refreshLive();
-          void loadFreeSlots(dashboard?.terrain?.id, dayDate);
+          void loadFreeSlots(
+            dashboard?.terrain?.id,
+            vueActive === "jour"
+              ? selectedDay
+              : vueActive === "semaine" && filtreJourSemaine !== "tous"
+                ? filtreJourSemaine
+                : dayDate,
+          );
         }}
       />
 

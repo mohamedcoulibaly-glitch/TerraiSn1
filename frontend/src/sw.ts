@@ -136,7 +136,12 @@ self.addEventListener('push', (event) => {
       ...(notif.data || {}),
     };
 
-    await self.registration.showNotification(notif.title || 'TerrainSN', {
+    // `vibrate` est supporté par les navigateurs mais absent de NotificationOptions (lib.dom).
+    const options: NotificationOptions & {
+      vibrate?: number[];
+      renotify?: boolean;
+      actions?: Array<{ action: string; title: string; icon?: string }>;
+    } = {
       body: notif.body || 'Nouvelle notification',
       icon: notif.icon || '/icons/icon-192.png',
       badge: notif.badge || '/icons/icon-72.png',
@@ -146,7 +151,8 @@ self.addEventListener('push', (event) => {
       requireInteraction: Boolean(notif.requireInteraction),
       data,
       actions: notif.actions || [],
-    });
+    };
+    await self.registration.showNotification(notif.title || 'TerrainSN', options);
   })());
 });
 
