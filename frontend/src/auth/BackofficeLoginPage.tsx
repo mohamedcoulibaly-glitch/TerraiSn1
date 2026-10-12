@@ -114,6 +114,7 @@ export default function BackofficeLoginPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
+          credentials: "include",
         });
       } catch {
         throw new Error("Connexion au serveur impossible. Vérifiez votre connexion.");

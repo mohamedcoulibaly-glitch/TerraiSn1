@@ -14,7 +14,18 @@ export type TerrainPhoto = {
   uploaded_by_role?: string | null;
 };
 
-async function adminRequest(endpoint: string, options: RequestInit = {}) {
+function isTokenExpireError(data: unknown): boolean {
+  const err = typeof (data as { error?: unknown })?.error === "string"
+    ? String((data as { error: string }).error)
+    : "";
+  return (
+    err === "TOKEN_EXPIRE" ||
+    /token.?expir/i.test(err) ||
+    /jwt expired/i.test(err)
+  );
+}
+
+async function adminRequest(endpoint: string, options: RequestInit = {}, retried = false): Promise<any> {
   const token = authApi.getToken() || localStorage.getItem("admin_token");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -22,19 +33,81 @@ async function adminRequest(endpoint: string, options: RequestInit = {}) {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${endpoint}`, { cache: "no-store", ...options, headers });
+  const res = await fetch(`${API_URL}${endpoint}`, {
+    cache: "no-store",
+    ...options,
+    headers,
+    credentials: "include",
+  });
+
+  if (res.status === 401 && !retried && endpoint !== "/admin/auth/login") {
+    let body: Record<string, unknown> = {};
+    try {
+      body = await res.clone().json();
+    } catch {
+      body = {};
+    }
+    if (isTokenExpireError(body) || !body.error) {
+      const next = await authApi.refresh();
+      if (next) {
+        localStorage.setItem("admin_token", next);
+        return adminRequest(endpoint, options, true);
+      }
+    }
+  }
+
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Erreur serveur");
+  if (!res.ok) {
+    const raw = typeof (data as { error?: string }).error === "string"
+      ? (data as { error: string }).error
+      : "Erreur serveur";
+    if (isTokenExpireError(data)) {
+      throw new Error("Session expirée. Reconnectez-vous.");
+    }
+    throw new Error(raw);
+  }
   return data;
 }
 
-async function adminFormData(endpoint: string, form: FormData) {
+async function adminFormData(endpoint: string, form: FormData, retried = false): Promise<any> {
   const token = authApi.getToken() || localStorage.getItem("admin_token");
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${API_URL}${endpoint}`, { method: "POST", body: form, headers, cache: "no-store" });
+
+  const res = await fetch(`${API_URL}${endpoint}`, {
+    method: "POST",
+    body: form,
+    headers,
+    cache: "no-store",
+    credentials: "include",
+  });
+
+  if (res.status === 401 && !retried) {
+    let body: Record<string, unknown> = {};
+    try {
+      body = await res.clone().json();
+    } catch {
+      body = {};
+    }
+    if (isTokenExpireError(body) || !body.error) {
+      const next = await authApi.refresh();
+      if (next) {
+        localStorage.setItem("admin_token", next);
+        return adminFormData(endpoint, form, true);
+      }
+    }
+  }
+
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Erreur serveur");
+  if (!res.ok) {
+    const raw = typeof (data as { error?: string }).error === "string"
+      ? (data as { error: string }).error
+      : "Erreur serveur";
+    if (isTokenExpireError(data)) {
+      throw new Error("Session expirée. Reconnectez-vous.");
+    }
+    throw new Error(raw);
+  }
   return data;
 }
 
@@ -76,8 +149,25 @@ export const superAdminApi = {
   removeTerrainPhoto: (id: number, photoId: number) =>
     adminRequest(`/admin/terrains/${id}/photos/${photoId}`, { method: "DELETE" }),
   users: () => adminRequest("/admin/users"),
-  createUser: (data: unknown) =>
-    adminRequest("/admin/users", { method: "POST", body: JSON.stringify(data) }),
+  createUser: (data: {
+    nom: string;
+    prenom?: string;
+    telephone: string;
+    email?: string;
+    role: "gerant" | "proprietaire";
+    terrain_id?: number | null;
+  }) => adminRequest("/admin/users", { method: "POST", body: JSON.stringify(data) }),
+  createGerant: (data: {
+    nom: string;
+    prenom?: string;
+    telephone: string;
+    email?: string;
+    terrain_id: number;
+  }) =>
+    adminRequest("/admin/users", {
+      method: "POST",
+      body: JSON.stringify({ ...data, role: "gerant" }),
+    }),
   revenus: (periode: string) => adminRequest(`/admin/revenus?periode=${periode}`),
   finances: () => adminRequest("/admin/finances"),
   abonnements: () => adminRequest("/admin/abonnements"),

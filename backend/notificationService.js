@@ -399,7 +399,27 @@ async function envoyerReversement({
 
 const envoyerReversementGerant = envoyerReversement;
 
+/**
+ * Toast in-app (+ push si abonné) pour le gérant du contrat — jamais bloquant.
+ * Complète les messages WhatsApp ci-dessous sans toucher au flux paiement.
+ */
+async function notifierGerantInApp(contrat, notif) {
+  try {
+    if (!contrat?.gerant_id) return;
+    const pushService = require('./pushService');
+    await pushService.notifyAccount({
+      userId: contrat.gerant_id,
+      accountType: 'employe',
+      url: '/backoffice/gerant/finances',
+      ...notif,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
 async function envoyerDuAccumuleGerant({ contrat, du, reservationId }) {
+  // Pas de toast in-app ici : la « nouvelle réservation » (pushService) couvre déjà l'événement.
   if (!contrat?.gerant_whatsapp) return;
   const mode = contrat.payout_mode === 'auto' ? 'auto' : 'retrait';
   await envoyerWhatsApp(
@@ -417,6 +437,14 @@ async function envoyerDuAccumuleGerant({ contrat, du, reservationId }) {
 }
 
 async function envoyerPayoutAutoEnCours({ contrat, du }) {
+  await notifierGerantInApp(contrat, {
+    type: 'reversement_en_cours',
+    titre: 'Reversement en cours',
+    corps: `${formaterMontant(du?.du_gerant)} en route vers ton Wave/OM.`,
+    level: 'info',
+    tag: `payout-cours-${du?.id || du?.reservation_id || ''}`,
+    prefColumn: 'push_reversement',
+  });
   if (!contrat?.gerant_whatsapp) return;
   await envoyerWhatsApp(
     contrat.gerant_whatsapp,
@@ -427,8 +455,17 @@ async function envoyerPayoutAutoEnCours({ contrat, du }) {
 }
 
 async function envoyerPayoutAutoOk({ contrat, du, dest }) {
+  const suffixeInApp = masquerNumero(dest?.numero || contrat?.wave_numero || contrat?.om_numero);
+  await notifierGerantInApp(contrat, {
+    type: 'reversement_ok',
+    titre: 'Reversement reçu ✅',
+    corps: `${formaterMontant(du?.du_gerant)} envoyés sur ${suffixeInApp}.`,
+    level: 'success',
+    tag: `payout-ok-${du?.id || du?.reservation_id || ''}`,
+    prefColumn: 'push_reversement',
+  });
   if (!contrat?.gerant_whatsapp) return;
-  const suffixe = masquerNumero(dest?.numero || contrat.wave_numero || contrat.om_numero);
+  const suffixe = suffixeInApp;
   await envoyerWhatsApp(
     contrat.gerant_whatsapp,
     `${formaterMontant(du.du_gerant)} envoyés sur ${suffixe}.`,
@@ -438,6 +475,13 @@ async function envoyerPayoutAutoOk({ contrat, du, dest }) {
 }
 
 async function envoyerPayoutManuelOk({ contrat, montant, numero }) {
+  await notifierGerantInApp(contrat, {
+    type: 'reversement_ok',
+    titre: 'Retrait versé ✅',
+    corps: `${formaterMontant(montant)} envoyés sur ${masquerNumero(numero)}.`,
+    level: 'success',
+    prefColumn: 'push_reversement',
+  });
   if (!contrat?.gerant_whatsapp) return;
   await envoyerWhatsApp(
     contrat.gerant_whatsapp,
@@ -451,6 +495,14 @@ async function envoyerEchecPayout({ contrat, du, raison }) {
   const msg =
     `Échec du reversement auto (${formaterMontant(du?.du_gerant)}). Dû inchangé. ` +
     `Corriger le numéro Wave/OM si besoin. ${raison || ''}`.trim();
+  await notifierGerantInApp(contrat, {
+    type: 'reversement_echec',
+    titre: 'Échec du reversement',
+    corps: `${formaterMontant(du?.du_gerant)} non versés. Vérifie ton numéro Wave/OM.`,
+    level: 'error',
+    tag: `payout-echec-${du?.id || du?.reservation_id || ''}`,
+    prefColumn: 'push_reversement',
+  });
   if (contrat?.gerant_whatsapp) {
     await envoyerWhatsApp(contrat.gerant_whatsapp, msg, undefined, {
       destinataire_type: 'gerant',

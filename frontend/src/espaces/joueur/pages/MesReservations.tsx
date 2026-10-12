@@ -409,7 +409,8 @@ const Reservations = () => {
                         heureDebut={r.heure_debut}
                         heureFin={r.heure_fin}
                       />
-                      {r.code_reservation && (
+                      {r.code_reservation &&
+                        ["confirme", "match_joue", "joue", "acceptee"].includes(String(r.statut)) && (
                         <p className="text-[12px] text-[var(--color-text-muted)]">Code {r.code_reservation}</p>
                       )}
                       <div className="flex items-center justify-between gap-2">

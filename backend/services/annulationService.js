@@ -183,6 +183,11 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
     .envoyerAnnulation(reservation.id, { rembourse, politique, remboursementManuel })
     .catch((error) => logger.error('annulationService.js', 'Notification annulation', error));
 
+  // Toasts in-app / push : joueur (annulation + remboursement) et gérants si annulation côté joueur
+  await require('../pushService')
+    .notifierAnnulation(reservation.id, { rembourse, parGerant: Boolean(traitePar), remboursementManuel })
+    .catch((error) => logger.error('annulationService.js', 'Push annulation', error));
+
   return { rembourse, politique, remboursementManuel };
 }
 

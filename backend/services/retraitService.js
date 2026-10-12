@@ -186,6 +186,15 @@ async function demanderRetrait(db, { terrainId, gerantId, now = Date.now() }) {
     logger.error('retraitService.js', 'WhatsApp équipe dév', error);
   });
 
+  await require('../pushService').notifierDemandeRetrait({
+    gerantId,
+    terrainNom: contrat.terrain_nom,
+    montant: montantNet,
+    demandeId,
+  }).catch((error) => {
+    logger.error('retraitService.js', 'Notif in-app demande retrait', error);
+  });
+
   logger.info(
     'retraitService.js',
     `Demande retrait #${demandeId} — brut=${compensation.montant_brut} dette=${compensation.montant_compense} net=${montantNet}`,

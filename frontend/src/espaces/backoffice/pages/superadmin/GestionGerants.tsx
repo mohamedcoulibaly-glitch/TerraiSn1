@@ -104,7 +104,7 @@ export default function GestionGerants() {
     <div className="space-y-5 max-w-[1200px]">
       <SaPageHeader
         titre="Gérants des terrains"
-        sousTitre="Assignez un ou plusieurs gérants par terrain, définissez le principal et le planning de garde"
+        sousTitre="Créez un compte gérant (accès WhatsApp), assignez-le à un terrain, définissez le principal et le planning"
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 items-start">

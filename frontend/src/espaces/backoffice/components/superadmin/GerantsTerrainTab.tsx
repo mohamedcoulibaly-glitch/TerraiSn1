@@ -335,6 +335,7 @@ function AjouterGerantModal({
   onClose: () => void;
   onDone: () => Promise<void>;
 }) {
+  const [mode, setMode] = useState<"existant" | "creer">("creer");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any[]>([]);
   const [selected, setSelected] = useState<any | null>(null);
@@ -343,8 +344,10 @@ function AjouterGerantModal({
   const [dateDebut, setDateDebut] = useState(() => new Date().toISOString().slice(0, 10));
   const [dateFin, setDateFin] = useState("");
   const [saving, setSaving] = useState(false);
+  const [createForm, setCreateForm] = useState({ prenom: "", nom: "", telephone: "" });
 
   useEffect(() => {
+    if (mode !== "existant") return;
     const t = setTimeout(() => {
       superAdminApi
         .searchGerants(q)
@@ -352,23 +355,49 @@ function AjouterGerantModal({
         .catch(() => setResults([]));
     }, 250);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, mode]);
 
   async function submit() {
-    if (!selected?.id) {
-      toast.error("Choisissez un gérant");
-      return;
-    }
     setSaving(true);
     try {
-      await superAdminApi.addTerrainGerant(terrainId, {
-        gerant_id: selected.id,
-        est_principal: estPrincipal ? 1 : 0,
-        note: note.trim() || null,
-        date_debut: dateDebut || null,
-        date_fin: dateFin || null,
-      });
-      toast.success("Gérant ajouté");
+      if (mode === "creer") {
+        const prenom = createForm.prenom.trim();
+        const nom = createForm.nom.trim();
+        const telephone = createForm.telephone.trim();
+        if (!nom || !telephone) {
+          toast.error("Nom et téléphone obligatoires");
+          setSaving(false);
+          return;
+        }
+        const created = await superAdminApi.createGerant({
+          prenom: prenom || undefined,
+          nom,
+          telephone,
+          terrain_id: terrainId,
+        });
+        if (estPrincipal && created?.id) {
+          try {
+            await superAdminApi.setGerantPrincipal(terrainId, created.id);
+          } catch {
+            // compte créé même si le passage en principal échoue
+          }
+        }
+        toast.success(`Compte créé ✓ — Accès envoyés à ${telephone}`);
+      } else {
+        if (!selected?.id) {
+          toast.error("Choisissez un gérant");
+          setSaving(false);
+          return;
+        }
+        await superAdminApi.addTerrainGerant(terrainId, {
+          gerant_id: selected.id,
+          est_principal: estPrincipal ? 1 : 0,
+          note: note.trim() || null,
+          date_debut: dateDebut || null,
+          date_fin: dateFin || null,
+        });
+        toast.success("Gérant ajouté");
+      }
       await onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ajout impossible");
@@ -388,6 +417,59 @@ function AjouterGerantModal({
           Ajouter un gérant à {terrainNom}
         </h3>
 
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            className="sa-btn sa-btn-sm"
+            style={{
+              background: mode === "creer" ? "var(--sa-primary)" : "var(--sa-surface-2)",
+              color: mode === "creer" ? "#fff" : "var(--sa-text)",
+            }}
+            onClick={() => setMode("creer")}
+          >
+            Créer un compte
+          </button>
+          <button
+            type="button"
+            className="sa-btn sa-btn-sm"
+            style={{
+              background: mode === "existant" ? "var(--sa-primary)" : "var(--sa-surface-2)",
+              color: mode === "existant" ? "#fff" : "var(--sa-text)",
+            }}
+            onClick={() => setMode("existant")}
+          >
+            Gérant existant
+          </button>
+        </div>
+
+        {mode === "creer" ? (
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input
+              className="sa-input"
+              placeholder="Prénom"
+              value={createForm.prenom}
+              onChange={(e) => setCreateForm({ ...createForm, prenom: e.target.value })}
+            />
+            <input
+              className="sa-input"
+              placeholder="Nom *"
+              required
+              value={createForm.nom}
+              onChange={(e) => setCreateForm({ ...createForm, nom: e.target.value })}
+            />
+            <input
+              className="sa-input sm:col-span-2"
+              placeholder="Téléphone WhatsApp *"
+              required
+              value={createForm.telephone}
+              onChange={(e) => setCreateForm({ ...createForm, telephone: e.target.value })}
+            />
+            <p className="sm:col-span-2 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+              Un mot de passe temporaire sera généré et envoyé par WhatsApp.
+            </p>
+          </div>
+        ) : (
+          <>
         <label className="block mt-4 text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
           Choisir un gérant existant
         </label>
@@ -422,6 +504,8 @@ function AjouterGerantModal({
             </p>
           ) : null}
         </div>
+          </>
+        )}
 
         <p className="mt-4 text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
           Rôle sur ce terrain
@@ -442,43 +526,47 @@ function AjouterGerantModal({
           </p>
         ) : null}
 
-        <label className="block mt-4 text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
-          Note (optionnel)
-        </label>
-        <input
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder='Ex: "Gérant matin"'
-          className="mt-1 w-full rounded-lg px-3 py-2 text-sm"
-          style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface-2)" }}
-        />
+        {mode === "existant" ? (
+          <>
+            <label className="block mt-4 text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
+              Note (optionnel)
+            </label>
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder='Ex: "Gérant matin"'
+              className="mt-1 w-full rounded-lg px-3 py-2 text-sm"
+              style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface-2)" }}
+            />
 
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
-              Date de début
-            </label>
-            <input
-              type="date"
-              value={dateDebut}
-              onChange={(e) => setDateDebut(e.target.value)}
-              className="mt-1 w-full rounded-lg px-3 py-2 text-sm"
-              style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface-2)" }}
-            />
-          </div>
-          <div>
-            <label className="text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
-              Date de fin (optionnel)
-            </label>
-            <input
-              type="date"
-              value={dateFin}
-              onChange={(e) => setDateFin(e.target.value)}
-              className="mt-1 w-full rounded-lg px-3 py-2 text-sm"
-              style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface-2)" }}
-            />
-          </div>
-        </div>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
+                  Date de début
+                </label>
+                <input
+                  type="date"
+                  value={dateDebut}
+                  onChange={(e) => setDateDebut(e.target.value)}
+                  className="mt-1 w-full rounded-lg px-3 py-2 text-sm"
+                  style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface-2)" }}
+                />
+              </div>
+              <div>
+                <label className="text-[12px] font-medium" style={{ color: "var(--sa-muted)" }}>
+                  Date de fin (optionnel)
+                </label>
+                <input
+                  type="date"
+                  value={dateFin}
+                  onChange={(e) => setDateFin(e.target.value)}
+                  className="mt-1 w-full rounded-lg px-3 py-2 text-sm"
+                  style={{ border: "1px solid var(--sa-border)", background: "var(--sa-surface-2)" }}
+                />
+              </div>
+            </div>
+          </>
+        ) : null}
 
         <div className="mt-5 flex gap-2 justify-end">
           <button type="button" className="px-4 py-2 rounded-lg text-[13px]" onClick={onClose}>
@@ -491,7 +579,7 @@ function AjouterGerantModal({
             onClick={() => void submit()}
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-            Ajouter le gérant
+            {mode === "creer" ? "Créer et envoyer les accès" : "Ajouter le gérant"}
           </button>
         </div>
       </div>

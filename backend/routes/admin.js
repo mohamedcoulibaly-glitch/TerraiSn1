@@ -1,10 +1,15 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const { getDb, queryAll, queryOne, runSql, saveDb, transaction } = require('../database');
-const { authMiddleware, requireRole } = require('../middleware/auth');
+const {
+  authMiddleware,
+  requireRole,
+  genererAccessToken,
+  genererRefreshToken,
+  hashRefreshToken,
+} = require('../middleware/auth');
 const { envoyerAcces } = require('../accessNotificationService');
 const {
   GRACE_DAYS,
@@ -78,8 +83,36 @@ router.post('/auth/login', async (req, res) => {
     const normalized = String(telephone || '').replace(/\D/g, '');
     const user = queryAll(db, "SELECT * FROM users WHERE (role = 'super_admin' OR role = 'superadmin') AND is_active = 1").find((item) => String(item.telephone || '').replace(/\D/g, '') === normalized);
     if (!user || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Acces refuse' });
-    const token = jwt.sign({ id: user.id, telephone: user.telephone, role: 'super_admin', accountType: 'user' }, process.env.JWT_SECRET || 'terrainsn_secret_key_2026', { expiresIn: '8h' });
-    res.json({ token, user: { id: user.id, nom: user.nom, telephone: user.telephone, role: 'super_admin', accountType: 'user' } });
+
+    const tokenPayload = {
+      id: user.id,
+      telephone: user.telephone,
+      email: user.email,
+      role: 'super_admin',
+      accountType: 'user',
+    };
+    const accessToken = genererAccessToken(tokenPayload);
+    const refreshToken = genererRefreshToken(tokenPayload);
+    runSql(
+      db,
+      `UPDATE users SET refresh_token = ?, refresh_token_expire_at = datetime('now', '+30 days') WHERE id = ?`,
+      [hashRefreshToken(refreshToken), user.id],
+    );
+    const sameSiteRaw = String(process.env.COOKIE_SAMESITE || 'lax').toLowerCase();
+    const sameSite = ['strict', 'lax', 'none'].includes(sameSiteRaw) ? sameSiteRaw : 'lax';
+    res.cookie('refresh_token', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production' || sameSite === 'none',
+      sameSite,
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    res.json({
+      token: accessToken,
+      accessToken,
+      user: { id: user.id, nom: user.nom, telephone: user.telephone, role: 'super_admin', accountType: 'user' },
+    });
   } catch (error) {
     res.status(500).json({ error: 'Erreur serveur' });
   }
@@ -844,8 +877,13 @@ router.get('/gerants/search', async (req, res) => {
 router.post('/users', async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, telephone, role, terrain_id } = req.body;
-    if (!nom || !telephone || !['gerant', 'proprietaire'].includes(role)) return res.status(400).json({ error: 'Donnees invalides' });
+    const { nom, prenom, telephone, role, terrain_id } = req.body;
+    const nomClean = String(nom || '').trim();
+    const prenomClean = String(prenom || '').trim();
+    const telClean = String(telephone || '').trim();
+    if (!nomClean || !telClean || !['gerant', 'proprietaire'].includes(role)) {
+      return res.status(400).json({ error: 'Donnees invalides' });
+    }
     if (role === 'gerant' && !terrain_id) return res.status(400).json({ error: 'Terrain obligatoire pour un gerant' });
     const temporaryPassword = crypto.randomBytes(6).toString('base64url');
     const passwordHash = bcrypt.hashSync(temporaryPassword, 12);
@@ -853,15 +891,17 @@ router.post('/users', async (req, res) => {
     let id;
     transaction(db, () => {
       if (role === 'proprietaire') {
-        db.run(`INSERT INTO proprietaires (nom, email, telephone, password_hash, statut, must_change_password)
-          VALUES (?, ?, ?, ?, 'actif', 1)`, [nom, email, telephone, passwordHash]);
+        db.run(`INSERT INTO proprietaires (nom, prenom, email, telephone, password_hash, statut, must_change_password)
+          VALUES (?, ?, ?, ?, ?, 'actif', 1)`, [nomClean, prenomClean || null, email, telClean, passwordHash]);
         id = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
         if (terrain_id) db.run('UPDATE terrains SET proprietaire_id = ? WHERE id = ?', [id, terrain_id]);
       } else {
         const terrain = queryOne(db, 'SELECT proprietaire_id FROM terrains WHERE id = ?', [terrain_id]);
         if (!terrain) throw new Error('Terrain introuvable');
-        db.run(`INSERT INTO employes (proprietaire_id, terrain_id, nom, email, telephone, whatsapp_number, password_hash, is_active, must_change_password)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)`, [terrain.proprietaire_id, terrain_id, nom, email, telephone, telephone, passwordHash]);
+        db.run(`INSERT INTO employes (proprietaire_id, terrain_id, nom, prenom, email, telephone, whatsapp_number, password_hash, is_active, must_change_password)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)`, [
+          terrain.proprietaire_id, terrain_id, nomClean, prenomClean || null, email, telClean, telClean, passwordHash,
+        ]);
         id = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
         // Multi-gérants : liaison gerants_terrains (principal si le terrain n'en a pas encore)
         const hasPrincipal = queryOne(
@@ -876,8 +916,17 @@ router.post('/users', async (req, res) => {
         );
       }
     });
-    await envoyerAcces({ telephone, motDePasse: temporaryPassword, role });
-    res.status(201).json({ id, nom, telephone, role, terrain_id, must_change_password: true });
+    await envoyerAcces({ telephone: telClean, motDePasse: temporaryPassword, role });
+    res.status(201).json({
+      id,
+      nom: nomClean,
+      prenom: prenomClean || null,
+      telephone: telClean,
+      role,
+      terrain_id,
+      must_change_password: true,
+      message: `Compte créé — Accès envoyés à ${telClean}`,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message || 'Erreur serveur' });
   }

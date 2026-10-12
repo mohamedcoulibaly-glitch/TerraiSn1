@@ -51,10 +51,12 @@ const {
 const {
   UPLOAD_ROOT,
   listTerrainPhotos,
+  listPhotosByTerrainIds,
   createTerrainPhoto,
   updateTerrainPhoto,
   deleteTerrainPhoto,
 } = require('./terrainPhotoService');
+const commoditesService = require('./services/commoditesService');
 const { saveProfilePhoto } = require('./profilePhotoService');
 const { logActivite } = require('./services/auditService');
 const { resumeListeTerrain } = require('./services/contratService');
@@ -193,7 +195,7 @@ function parsePhotos(raw) {
   return [];
 }
 
-function serializeTerrain(terrain) {
+function serializeTerrain(terrain, photoRows, commodites) {
   if (!terrain) return terrain;
   const {
     wave_numero,
@@ -210,11 +212,27 @@ function serializeTerrain(terrain) {
     numeros_identiques_whatsapp,
     ...publicFields
   } = terrain;
+  const rows = Array.isArray(photoRows) ? photoRows : [];
+  const urls = rows.length ? rows.map((p) => p.url).filter(Boolean) : parsePhotos(terrain.photos);
+  const photos = rows.length
+    ? rows.map((p) => ({
+      id: p.id,
+      url: p.url,
+      est_principale: p.est_principale,
+      ordre: p.ordre,
+    }))
+    : urls;
   const remboursementAutorise = Number(terrain.remboursement_autorise) === 1;
   const delai = remboursementAutorise ? Number(terrain.delai_remboursement_heures || 0) : 0;
   return {
     ...publicFields,
-    photos: parsePhotos(terrain.photos),
+    photos,
+    terrain_photos: rows,
+    commodites: Array.isArray(commodites)
+      ? commodites
+      : (typeof terrain.commodites === 'string'
+        ? (() => { try { return JSON.parse(terrain.commodites); } catch { return []; } })()
+        : (Array.isArray(terrain.commodites) ? terrain.commodites : [])),
     politique_annulation: {
       remboursement_autorise: remboursementAutorise && delai > 0,
       delai_remboursement_heures: delai,
@@ -223,6 +241,23 @@ function serializeTerrain(terrain) {
         : 'Annulation sans remboursement',
     },
   };
+}
+
+function attachPhotosToTerrains(database, terrains) {
+  const list = Array.isArray(terrains) ? terrains : [];
+  const photos = listPhotosByTerrainIds(database, list.map((t) => t.id));
+  const byId = new Map();
+  for (const photo of photos) {
+    const key = Number(photo.terrain_id);
+    if (!byId.has(key)) byId.set(key, []);
+    byId.get(key).push(photo);
+  }
+  const commoditesMap = commoditesService.publicCommoditesByTerrainIds(database, list.map((t) => t.id));
+  return list.map((terrain) => serializeTerrain(
+    terrain,
+    byId.get(Number(terrain.id)) || [],
+    commoditesMap.get(Number(terrain.id)) || [],
+  ));
 }
 
 function profileTableFor(accountType) {
@@ -252,6 +287,15 @@ function selectProfileAccount(db, reqUser) {
 function splitDisplayName(account) {
   const prenom = String(account?.prenom || '').trim();
   const nom = String(account?.nom || '').trim();
+  if (prenom && nom) {
+    const prenomLower = prenom.toLowerCase();
+    const nomLower = nom.toLowerCase();
+    if (nomLower === prenomLower) return { prenom, nom: '' };
+    if (nomLower.startsWith(`${prenomLower} `)) {
+      return { prenom, nom: nom.slice(prenom.length).trim() };
+    }
+    return { prenom, nom };
+  }
   if (prenom || !nom.includes(' ')) return { prenom, nom };
   const parts = nom.split(/\s+/);
   return { prenom: parts.shift() || '', nom: parts.join(' ') || nom };
@@ -517,7 +561,8 @@ app.post('/api/auth/register', otpRateLimit, validateBody(validateRegisterBody),
     }
 
     const phoneDigits = otpService.normalizeTelephone(telephone);
-    const fullName = [prenom, nom].filter(Boolean).join(' ').trim();
+    const prenomClean = String(prenom || '').trim();
+    const nomClean = String(nom || '').trim();
 
     const existingPhone = queryAll(db, 'SELECT id, telephone, telephone_verified, role FROM users').find(
       (u) => otpService.normalizeTelephone(u.telephone) === phoneDigits
@@ -536,7 +581,7 @@ app.post('/api/auth/register', otpRateLimit, validateBody(validateRegisterBody),
         db,
         `UPDATE users SET nom = ?, prenom = ?, password_hash = ?, email = ?, role = 'joueur', is_active = 1, telephone_verified = 0
          WHERE id = ?`,
-        [fullName, prenom || null, password_hash, generatedEmail, existingPhone.id]
+        [nomClean || null, prenomClean || null, password_hash, generatedEmail, existingPhone.id]
       );
       userId = existingPhone.id;
     } else {
@@ -547,7 +592,7 @@ app.post('/api/auth/register', otpRateLimit, validateBody(validateRegisterBody),
         db,
         `INSERT INTO users (nom, prenom, email, password_hash, telephone, role, is_active, telephone_verified)
          VALUES (?, ?, ?, ?, ?, 'joueur', 1, 0)`,
-        [fullName, prenom || null, generatedEmail, password_hash, otpService.formatDisplayPhone(phoneDigits)]
+        [nomClean || null, prenomClean || null, generatedEmail, password_hash, otpService.formatDisplayPhone(phoneDigits)]
       );
       userId = result.lastInsertRowid;
     }
@@ -583,10 +628,11 @@ app.post('/api/auth/verify-otp', otpRateLimit, validateBody(validateVerifyOtpBod
     runSql(db, 'UPDATE users SET telephone_verified = 1 WHERE id = ?', [user.id]);
     await otpService.invalidateOtps(db, telephoneDigits);
 
+    const name = splitDisplayName(user);
     const safeUser = {
       id: user.id,
-      nom: user.nom,
-      prenom: user.prenom,
+      nom: name.nom || user.nom,
+      prenom: user.prenom || name.prenom,
       email: user.email,
       telephone: user.telephone,
       role: 'joueur',
@@ -606,6 +652,37 @@ app.post('/api/auth/verify-otp', otpRateLimit, validateBody(validateVerifyOtpBod
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Mot de passe oublié — OTP pour comptes déjà vérifiés (contrairement à resend-otp)
+app.post('/api/auth/forgot-password', otpRateLimit, async (req, res) => {
+  try {
+    const db = await getDb();
+    const { telephone } = req.body;
+    if (!telephone) return res.status(400).json({ error: 'Téléphone obligatoire' });
+    if (!otpService.isValidSenegalMobile(telephone)) {
+      return res.status(400).json({ error: 'Numéro invalide. Format attendu : 7X XXX XX XX' });
+    }
+
+    const phoneDigits = otpService.normalizeTelephone(telephone);
+    const user = queryAll(db, 'SELECT id, prenom, telephone, telephone_verified, is_active, statut FROM users')
+      .find((u) => otpService.normalizeTelephone(u.telephone) === phoneDigits);
+
+    if (!user || Number(user.is_active) === 0 || isAccountBlocked(user, 'user')) {
+      return res.status(404).json({ error: 'Aucun compte pour ce numéro' });
+    }
+
+    await otpService.createAndSendOtp(db, {
+      telephone: phoneDigits,
+      userId: user.id,
+      prenom: user.prenom,
+    });
+
+    res.json({ success: true, message: 'Code envoyé' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -1201,25 +1278,27 @@ app.get('/api/terrains', async (req, res) => {
 
     if (hasGeo) {
       const distanceMax = parseFloat(distance_max);
-      const maxKm = Number.isFinite(distanceMax) && distanceMax > 0 ? distanceMax : 10;
-      terrains = terrains
-        .map((t) => {
-          const tLat = Number(t.latitude);
-          const tLng = Number(t.longitude);
-          const distance_km = Number.isFinite(tLat) && Number.isFinite(tLng)
-            ? Math.round(haversineKm(userLat, userLng, tLat, tLng) * 10) / 10
-            : null;
-          return { ...t, distance_km };
-        })
-        .filter((t) => t.distance_km === null || t.distance_km <= maxKm)
-        .sort((a, b) => {
-          if (a.distance_km === null) return 1;
-          if (b.distance_km === null) return -1;
-          return a.distance_km - b.distance_km;
-        });
+      const hasDistanceFilter = Number.isFinite(distanceMax) && distanceMax > 0;
+      terrains = terrains.map((t) => {
+        const tLat = Number(t.latitude);
+        const tLng = Number(t.longitude);
+        const distance_km = Number.isFinite(tLat) && Number.isFinite(tLng)
+          ? Math.round(haversineKm(userLat, userLng, tLat, tLng) * 10) / 10
+          : null;
+        return { ...t, distance_km };
+      });
+      // Ne filtre par rayon que si distance_max est explicitement fourni (babacar_sene)
+      if (hasDistanceFilter) {
+        terrains = terrains.filter((t) => t.distance_km === null || t.distance_km <= distanceMax);
+      }
+      terrains = terrains.sort((a, b) => {
+        if (a.distance_km === null) return 1;
+        if (b.distance_km === null) return -1;
+        return a.distance_km - b.distance_km;
+      });
     }
 
-    res.json(terrains);
+    res.json(attachPhotosToTerrains(db, terrains));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -1248,7 +1327,7 @@ app.get('/api/terrains/:id', async (req, res) => {
     const avis = queryAll(db, 'SELECT a.*, u.nom as joueur_nom FROM avis a LEFT JOIN users u ON u.id = a.joueur_id WHERE a.terrain_id = ? ORDER BY a.created_at DESC', [terrain.id]);
     const employe = queryOne(db, 'SELECT whatsapp_number, nom FROM employes WHERE terrain_id = ? AND is_active = 1 LIMIT 1', [terrain.id]);
 
-    res.json({ ...serializeTerrain(terrain), horaires, avis, employe });
+    res.json({ ...attachPhotosToTerrains(db, [terrain])[0], horaires, avis, employe });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -2037,7 +2116,10 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
         heure_fin: heureFinNorm,
         joueur_telephone: telephoneNorm,
         joueur_nom: joueur_nom,
-        code_reservation: reservation.code_reservation || null,
+        code_reservation:
+          statutInitial === 'en_attente' || statutInitial === 'en_attente_paiement'
+            ? null
+            : (reservation.code_reservation || null),
         statut: statutInitial,
         whatsapp_sent,
         whatsapp_error,
@@ -2256,6 +2338,15 @@ app.post('/api/reservations/:id(\\d+)/renvoyer-confirmation', authMiddleware, re
 });
 
 // Recharger une réservation (utile pour refresh / accès direct)
+function maskCodeReservationForJoueur(reservation) {
+  if (!reservation) return reservation;
+  const statut = String(reservation.statut || '');
+  if (statut === 'en_attente' || statut === 'en_attente_paiement') {
+    return { ...reservation, code_reservation: null, qr_code_url: null, qr_code_payload: null };
+  }
+  return reservation;
+}
+
 app.get('/api/reservations/:id(\\d+)', optionalAuth, async (req, res) => {
   try {
     const db = await getDb();
@@ -2280,7 +2371,41 @@ app.get('/api/reservations/:id(\\d+)', optionalAuth, async (req, res) => {
       reservation.duree = endH - startH;
     }
 
-    res.json(reservation);
+    const role = req.user?.role === 'superadmin' ? 'super_admin' : req.user?.role;
+    const isStaff = role && role !== 'joueur' && role !== 'user';
+    res.json(isStaff ? reservation : maskCodeReservationForJoueur(reservation));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+/** Statut paiement / réservation — polling page succès PayTech */
+app.get('/api/paiement/statut/:reservationId', optionalAuth, async (req, res) => {
+  try {
+    const db = await getDb();
+    const reservation = queryOne(
+      db,
+      `SELECT id, joueur_id, statut, code_reservation, reference_paytech, montant_avance, montant_restant, prix_total
+       FROM reservations WHERE id = ?`,
+      [Number(req.params.reservationId)],
+    );
+    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
+    if (
+      req.user
+      && reservation.joueur_id
+      && Number(reservation.joueur_id) !== Number(req.user.id)
+      && req.user.role === 'joueur'
+    ) {
+      return res.status(403).json({ error: 'Accès interdit' });
+    }
+    const masked = maskCodeReservationForJoueur(reservation);
+    res.json({
+      id: masked.id,
+      statut: masked.statut,
+      confirme: ['confirme', 'match_joue', 'joue', 'acceptee'].includes(String(masked.statut)),
+      code_reservation: masked.code_reservation,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -2347,7 +2472,7 @@ app.get('/api/reservations/mes', optionalAuth, async (req, res) => {
       FROM reservations r JOIN terrains t ON t.id = r.terrain_id
       WHERE r.joueur_id = ? ORDER BY r.created_at DESC
     `, [req.user.id]);
-    res.json(reservations);
+    res.json(reservations.map(maskCodeReservationForJoueur));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -3188,6 +3313,40 @@ app.get('/api/push/logs', authMiddleware, requireRole('super_admin'), async (req
   }
 });
 
+/**
+ * Notifications manquées du compte connecté (24 h, statut envoye/pending/echec, clique=0).
+ * Tous rôles (joueur, gérant, propriétaire, super_admin). Réponse non mise en cache.
+ */
+app.get('/api/push/missed', authMiddleware, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const missed = await pushService.listMissedNotifications({
+      userId: req.user.id,
+      accountType: pushService.accountTypeDepuisJwt(req.user.accountType),
+      limit: req.query.limit,
+    });
+    res.json(missed);
+  } catch (err) {
+    logger.error('index.js', 'GET push missed', err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+/** Marque des notifications manquées comme vues après affichage (body : { ids: number[] }). */
+app.post('/api/push/missed/seen', authMiddleware, async (req, res) => {
+  try {
+    const result = await pushService.marquerNotificationsVues({
+      userId: req.user.id,
+      accountType: pushService.accountTypeDepuisJwt(req.user.accountType),
+      ids: req.body?.ids,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    logger.error('index.js', 'POST push missed/seen', err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // ============================================================
 // PORTAGE BABACAR — disponibilités, blocages, santé WhatsApp, dettes
 // ============================================================
@@ -4007,10 +4166,17 @@ async function start() {
   await appliquerSuspensionsAbonnements().catch((error) => {
     logger.error('index.js', 'Suspension abonnements au demarrage', error);
   });
+  require('./services/rappelsEcheances').executerRappelsEcheances().catch((error) => {
+    logger.error('index.js', 'Rappels echeances au demarrage', error);
+  });
   if (cron) {
     cron.schedule('15 0 * * *', async () => {
       await appliquerSuspensionsAbonnements().catch((error) => {
         logger.error('index.js', 'Suspension abonnements planifiee', error);
+      });
+      // Rappels in-app : fin d'essai (J-7/3/1) + dettes commission (J-7/3/1/retard) — même cron quotidien
+      await require('./services/rappelsEcheances').executerRappelsEcheances().catch((error) => {
+        logger.error('index.js', 'Rappels echeances (essai / dettes)', error);
       });
     });
     cron.schedule('*/5 * * * *', async () => {

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Check, Download } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { reservationsApi } from "@/lib/api";
 
-const API_URL = import.meta.env.VITE_API_URL || "/api";
+const STATUTS_CONFIRMES = new Set(["confirme", "match_joue", "joue", "acceptee"]);
+const STATUTS_ATTENTE = new Set(["en_attente", "en_attente_paiement"]);
 
 const ReservationSuccess = () => {
   const [params] = useSearchParams();
@@ -11,44 +12,54 @@ const ReservationSuccess = () => {
   const [reservation, setReservation] = useState<any>(null);
   const [error, setError] = useState("");
   const [showAnim, setShowAnim] = useState(true);
-  const [qrFetched, setQrFetched] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
+
+  const reservationId =
+    params.get("id") || localStorage.getItem("terrainsn_last_reservation_id") || "";
 
   useEffect(() => {
-    const id = params.get("id") || localStorage.getItem("terrainsn_last_reservation_id");
-    if (!id) return setError("Réservation introuvable");
-    reservationsApi.get(id).then(setReservation).catch((err) => setError(err.message));
-  }, [params]);
+    if (!reservationId) {
+      setError("Réservation introuvable");
+      return;
+    }
+    let cancelled = false;
+    reservationsApi
+      .get(reservationId)
+      .then((data) => {
+        if (!cancelled) setReservation(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reservationId]);
 
   useEffect(() => {
     const t = setTimeout(() => setShowAnim(false), 1500);
     return () => clearTimeout(t);
   }, []);
 
+  // Polling tant que le webhook PayTech n'a pas confirmé
   useEffect(() => {
-    let objectUrl: string | null = null;
-    const loadQr = async () => {
-      if (!reservation?.id || !reservation?.code_reservation) {
-        setQrFetched(null);
-        return;
-      }
-      try {
-        const token = localStorage.getItem("terrainsn_token");
-        const res = await fetch(`${API_URL}/reservations/${reservation.id}/qr.png`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+    if (!reservationId || !reservation) return;
+    const statut = String(reservation.statut || "");
+    if (!STATUTS_ATTENTE.has(statut)) {
+      setPolling(false);
+      return;
+    }
+    setPolling(true);
+    const id = window.setInterval(() => {
+      reservationsApi
+        .get(reservationId)
+        .then((data) => setReservation(data))
+        .catch(() => {
+          /* ignore — on continue le polling */
         });
-        if (!res.ok) throw new Error("QR indisponible");
-        const blob = await res.blob();
-        objectUrl = URL.createObjectURL(blob);
-        setQrFetched(objectUrl);
-      } catch {
-        setQrFetched(null);
-      }
-    };
-    loadQr();
-    return () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [reservation?.id, reservation?.code_reservation]);
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [reservationId, reservation?.statut]);
 
   if (error) {
     return (
@@ -80,6 +91,9 @@ const ReservationSuccess = () => {
     );
   }
 
+  const statut = String(reservation.statut || "");
+  const enAttente = STATUTS_ATTENTE.has(statut);
+  const confirme = STATUTS_CONFIRMES.has(statut);
   const sansAvance =
     params.get("sans_avance") === "1" ||
     reservation.sans_avance === true ||
@@ -88,16 +102,22 @@ const ReservationSuccess = () => {
   const avance = Number(reservation.montant_avance || reservation.acompte || 0);
   const reste = Number(reservation.montant_restant || reservation.reste_a_payer || 0);
   const total = Number(reservation.prix_total || reservation.montant || reste || 0);
-  const qrUrl = qrFetched || reservation.qr_code_url;
 
   return (
     <div className="page-container flex items-center justify-center p-5 page-enter">
       <div className="bg-[var(--surface)] max-w-md w-full rounded-[var(--radius-xl)] shadow-[var(--shadow-lg)] overflow-hidden border border-[var(--color-border)]">
         <div className="bg-[var(--color-primary-glow)] px-6 py-5 text-center">
-          <h1 className="text-[20px] font-bold text-[var(--color-primary)]" style={{ fontFamily: "var(--font-display)" }}>
-            C'est confirmé !
+          <h1
+            className="text-[20px] font-bold text-[var(--color-primary)]"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            {enAttente
+              ? "Paiement en cours de confirmation..."
+              : confirme
+                ? "Confirmé !"
+                : "Réservation enregistrée"}
           </h1>
-          {sansAvance ? (
+          {sansAvance && confirme ? (
             <p className="mt-2 text-[13px] text-[var(--color-text-secondary)]">
               Tu paieras {total.toLocaleString()} FCFA sur place le jour du match.
             </p>
@@ -112,32 +132,27 @@ const ReservationSuccess = () => {
             </p>
           </div>
 
-          {reservation.code_reservation && (
+          {enAttente || polling ? (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary)]" />
+              <p className="text-[13px] text-[var(--color-text-secondary)]">
+                On attend la confirmation du paiement…
+              </p>
+            </div>
+          ) : null}
+
+          {confirme ? (
             <div className="rounded-[var(--radius-md)] bg-[var(--color-primary-glow)] py-4 px-3">
-              <p className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">Code réservation</p>
-              <p className="text-[28px] font-bold text-[var(--color-primary)] mt-1" style={{ fontFamily: "var(--font-display)" }}>
-                {reservation.code_reservation}
+              <p className="text-[14px] font-medium text-[var(--color-primary)]">
+                Ton QR code arrive par WhatsApp
+              </p>
+              <p className="text-[12px] text-[var(--color-text-muted)] mt-1">
+                Le code de réservation t&apos;est envoyé uniquement par WhatsApp.
               </p>
             </div>
-          )}
+          ) : null}
 
-          {qrUrl && (
-            <div className="inline-block p-3 border-2 border-[var(--color-primary)] rounded-[var(--radius-lg)] bg-[var(--surface)]">
-              <img src={qrUrl} alt="QR code" className="w-[180px] h-[180px] object-contain" />
-            </div>
-          )}
-          <p className="text-[12px] text-[var(--color-text-muted)]">
-            Montre ce QR code au gérant le jour du match
-          </p>
-
-          {sansAvance ? (
-            <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
-              <p className="flex justify-between">
-                <span className="text-[var(--color-text-secondary)]">À régler sur place</span>
-                <span className="font-semibold text-[var(--color-primary)]">{total.toLocaleString()} FCFA</span>
-              </p>
-            </div>
-          ) : (
+          {confirme && !sansAvance ? (
             <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
               <p className="flex justify-between">
                 <span className="text-[var(--color-success)] font-medium">Avance payée</span>
@@ -148,18 +163,18 @@ const ReservationSuccess = () => {
                 <span className="text-[var(--color-text-secondary)]">{reste.toLocaleString()} FCFA</span>
               </p>
             </div>
-          )}
+          ) : null}
 
-          {qrUrl && (
-            <a
-              href={qrUrl}
-              download
-              className="flex items-center justify-center gap-2 w-full h-12 rounded-[var(--radius-md)] border-2 border-[var(--color-primary)] text-[var(--color-primary)] text-sm font-medium"
-            >
-              <Download className="w-4 h-4" />
-              Télécharger le QR code
-            </a>
-          )}
+          {confirme && sansAvance ? (
+            <div className="text-left space-y-2 text-sm border-t border-[var(--color-border)] pt-4">
+              <p className="flex justify-between">
+                <span className="text-[var(--color-text-secondary)]">À régler sur place</span>
+                <span className="font-semibold text-[var(--color-primary)]">
+                  {total.toLocaleString()} FCFA
+                </span>
+              </p>
+            </div>
+          ) : null}
 
           <button
             type="button"

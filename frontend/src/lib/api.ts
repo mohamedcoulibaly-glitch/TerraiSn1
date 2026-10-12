@@ -367,6 +367,11 @@ export const authApi = {
     return await request('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ telephone }) });
   },
 
+  /** Mot de passe oublié — OTP pour comptes déjà vérifiés. */
+  async forgotPassword(telephone: string) {
+    return await request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ telephone }) });
+  },
+
   async me() {
     return await request('/auth/me');
   },
@@ -1258,6 +1263,16 @@ export const pushApi = {
 
   async unsubscribe(endpoint: string) {
     return await request('/push/unsubscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) });
+  },
+
+  /** Notifications non vues des dernières 24 h (tous rôles). */
+  async getMissed() {
+    return await request('/push/missed');
+  },
+
+  /** Marque des notifications comme vues après affichage. */
+  async markMissedSeen(ids: number[]) {
+    return await request('/push/missed/seen', { method: 'POST', body: JSON.stringify({ ids }) });
   },
 
   async getLogs(params?: Record<string, string | number | undefined>) {

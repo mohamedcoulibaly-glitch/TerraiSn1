@@ -1,6 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { authApi } from "@/lib/api";
 import SkeletonSession from "@/components/skeletons/SkeletonSession";
+import {
+  checkMissedNotificationsForUser,
+  resetMissedNotificationsState,
+} from "@/lib/missedNotifications";
 
 interface User {
   id: number;
@@ -168,6 +172,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Notifications manquées (push non vus / sans abonnement) → toasts à la connexion ou restauration de session
+  const missedKey = user?.id != null ? `${user.accountType || "user"}:${user.id}` : "";
+  useEffect(() => {
+    if (!missedKey || booting) {
+      if (!missedKey) resetMissedNotificationsState();
+      return;
+    }
+    checkMissedNotificationsForUser(missedKey);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") checkMissedNotificationsForUser(missedKey, { force: true });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [missedKey, booting]);
 
   const setSession = (nextUser: User, token?: string) => {
     setUser(nextUser);

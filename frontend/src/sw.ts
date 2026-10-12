@@ -45,7 +45,9 @@ registerRoute(
     request.method === 'GET' &&
     url.pathname.startsWith('/api/') &&
     !url.pathname.includes('/events') &&
-    !url.pathname.includes('/stream'),
+    !url.pathname.includes('/stream') &&
+    // notifications manquées : toujours fraîches (sinon SWR rejouerait des notifs déjà vues)
+    !url.pathname.includes('/push/missed'),
   new StaleWhileRevalidate({
     cacheName: 'terrainsn-api-v2',
     plugins: [
@@ -115,6 +117,8 @@ interface PushPayload {
   requireInteraction?: boolean;
   url?: string;
   type?: string;
+  /** id de la ligne push_logs côté serveur (permet de marquer la notif comme cliquée) */
+  logId?: number;
   data?: Record<string, unknown>;
   actions?: { action: string; title: string }[];
 }
@@ -133,6 +137,7 @@ self.addEventListener('push', (event) => {
     const data = {
       url: (notif.data?.url as string) || notif.url || '/',
       type: notif.type || (notif.data?.type as string) || '',
+      logId: notif.logId ?? (notif.data?.logId as number | undefined),
       ...(notif.data || {}),
     };
 
@@ -168,6 +173,19 @@ self.addEventListener('notificationclick', (event) => {
     url = String(payload.url || '/reservations');
   } else if (action === 'voir' || action === 'traiter') {
     url = String(payload.url || '/');
+  }
+
+  // Marque la notif comme cliquée côté serveur : la page consomme ?push_log=ID au chargement
+  // (src/lib/missedNotifications.ts → POST /api/push/missed/seen) pour ne pas la rejouer en toast.
+  const logId = Number(payload.logId);
+  if (Number.isInteger(logId) && logId > 0) {
+    try {
+      const target = new URL(url, self.location.origin);
+      target.searchParams.set('push_log', String(logId));
+      url = `${target.pathname}${target.search}${target.hash}`;
+    } catch {
+      /* URL invalide : on garde l'originale */
+    }
   }
 
   event.waitUntil(

@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/hooks/use-auth";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { ToastProvider } from "@/contexts/ToastContext";
 import AppRouter from "@/router/AppRouter";
 import InstallPrompt from "@/components/pwa/InstallPrompt";
 import OfflineBanner from "@/components/pwa/OfflineBanner";
@@ -18,18 +19,21 @@ const queryClient = new QueryClient({
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider>
-      <AuthProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <OfflineBanner />
-          <PushPermissionBanner />
-          <BrowserRouter>
-            <AppRouter />
-            <InstallPrompt />
-          </BrowserRouter>
-        </TooltipProvider>
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <TooltipProvider>
+            <Toaster />
+            {/* Toaster sonner unique : tous les rôles (couleurs, icônes, sons, 3 max, 4 s) */}
+            <Sonner />
+            <OfflineBanner />
+            <PushPermissionBanner />
+            <BrowserRouter>
+              <AppRouter />
+              <InstallPrompt />
+            </BrowserRouter>
+          </TooltipProvider>
+        </AuthProvider>
+      </ToastProvider>
     </ThemeProvider>
   </QueryClientProvider>
 );

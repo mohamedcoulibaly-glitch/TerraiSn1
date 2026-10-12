@@ -79,7 +79,7 @@ export default function MotDePasseOublie({
     setSubmitting(true);
     setErreur("");
     try {
-      await authApi.resendOtp(toLocal9(telephone));
+      await authApi.forgotPassword(toLocal9(telephone));
       setEtape(2);
       setOtp("");
       setTimer(30);
@@ -95,7 +95,7 @@ export default function MotDePasseOublie({
     setSubmitting(true);
     setErreur("");
     try {
-      await authApi.resendOtp(toLocal9(telephone));
+      await authApi.forgotPassword(toLocal9(telephone));
       setTimer(30);
     } catch (e) {
       setErreur(messageErreurAuth(e, "forgot"));

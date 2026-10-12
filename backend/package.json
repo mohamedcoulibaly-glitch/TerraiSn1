@@ -15,6 +15,7 @@
     "whatsapp:test": "node scripts/test-whatsapp.js",
     "test": "node scripts/test-schedule.js && node scripts/test-pricing.js && node scripts/test-otp-auth.js && node scripts/test-reservation-lock.js && node scripts/test-gaps-p0-p2.js && node scripts/test-parcours-complet.js && node scripts/test-parcours-tous-roles.js && node scripts/test-integration-api-parcours.js && node scripts/test-integration-api-tous-roles.js && node scripts/test-cdc-paiements.js && node scripts/test-cdc-integration.js && node scripts/test-gerant-module.js && node scripts/test-kanban-rules.js && node scripts/test-checkin-rules.js && node scripts/test-paydunya-ipn.js && node scripts/test-liens-paiement.js && node scripts/test-dettes-commissions.js && node scripts/run-paydunya-whatsapp-suite.js",
     "test:unit": "node scripts/test-schedule.js && node scripts/test-pricing.js && node scripts/test-otp-auth.js && node scripts/test-reservation-lock.js && node scripts/test-gaps-p0-p2.js && node scripts/test-kanban-rules.js && node scripts/test-checkin-rules.js",
+    "test:push": "node scripts/test-push-missed.js",
     "test:money": "npm run test:cdc && npm run test:paiement",
     "test:parcours": "node scripts/test-parcours-complet.js && node scripts/test-parcours-tous-roles.js",
     "test:parcours-roles": "node scripts/test-parcours-tous-roles.js",

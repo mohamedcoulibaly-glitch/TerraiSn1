@@ -173,14 +173,17 @@ async function regenerateVapidKeys() {
   };
 }
 
-/** Journalise un envoi push (best-effort, ne bloque jamais l'envoi). */
+/**
+ * Journalise un envoi push (best-effort, ne bloque jamais l'envoi).
+ * @returns {Promise<number|null>} id de la ligne push_logs (ou null si échec d'écriture)
+ */
 async function logPush({ userId, accountType = 'user', type, titre, corps, data = null, statut = 'envoye', erreur = null }) {
   try {
     const db = await getDb();
-    runSql(
+    const result = runSql(
       db,
-      `INSERT INTO push_logs (user_id, account_type, type_notif, titre, corps, data, statut, erreur)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO push_logs (user_id, account_type, type_notif, titre, corps, data, statut, erreur, clique)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       [
         userId != null ? Number(userId) : null,
         accountType,
@@ -192,9 +195,108 @@ async function logPush({ userId, accountType = 'user', type, titre, corps, data 
         erreur ? String(erreur).slice(0, 500) : null,
       ],
     );
+    return Number(result?.lastInsertRowid || 0) || null;
   } catch (err) {
     logger.warn('pushService', `push_logs : ${err.message}`);
+    return null;
   }
+}
+
+async function updatePushLogStatut(logId, statut, erreur = null) {
+  if (!logId) return;
+  try {
+    const db = await getDb();
+    runSql(db, 'UPDATE push_logs SET statut = ?, erreur = ? WHERE id = ?', [
+      statut,
+      erreur ? String(erreur).slice(0, 500) : null,
+      Number(logId),
+    ]);
+  } catch (err) {
+    logger.warn('pushService', `push_logs update : ${err.message}`);
+  }
+}
+
+const NIVEAUX_TOAST = ['success', 'error', 'warning', 'info'];
+
+/** Niveau de toast déduit du type de notification quand le log n'en porte pas. */
+function niveauDepuisType(type) {
+  const t = String(type || '').toLowerCase();
+  if (/echec|erreur|error|refus|rejet/.test(t)) return 'error';
+  if (/retard|annul|expire|essai|dette|alerte|warning|remboursement/.test(t)) return 'warning';
+  if (/confirm|succes|success|reversement|checkin|valide|ok$/.test(t)) return 'success';
+  return 'info';
+}
+
+function parseLogData(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Convertit un type de compte JWT en valeur `push_logs.account_type`. */
+function accountTypeDepuisJwt(accountType) {
+  if (accountType === 'employe') return 'employe';
+  if (accountType === 'proprietaire') return 'proprietaire';
+  return 'user';
+}
+
+/**
+ * Notifications push/in-app non encore vues (24 h) pour le compte connecté.
+ * Statuts retenus : envoye (push reçu mais peut-être non vu), pending (pas d'abonnement push),
+ * echec (envoi push échoué). `clique = 0` uniquement.
+ */
+async function listMissedNotifications({ userId, accountType = 'user', limit = 20 } = {}) {
+  if (userId == null || userId === '') return [];
+  const db = await getDb();
+  const max = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  const rows = queryAll(
+    db,
+    `SELECT id, user_id, account_type, type_notif, titre, corps, data, statut, created_at
+       FROM push_logs
+      WHERE user_id = ?
+        AND COALESCE(account_type, 'user') = ?
+        AND COALESCE(clique, 0) = 0
+        AND statut IN ('envoye', 'pending', 'echec')
+        AND created_at >= datetime('now', '-24 hours')
+      ORDER BY created_at DESC, id DESC
+      LIMIT ${max}`,
+    [Number(userId), accountType],
+  );
+  return rows.map((row) => {
+    const data = parseLogData(row.data);
+    const level = NIVEAUX_TOAST.includes(data?.level) ? data.level : niveauDepuisType(row.type_notif);
+    return {
+      id: row.id,
+      type: row.type_notif,
+      titre: row.titre,
+      corps: row.corps,
+      statut: row.statut,
+      level,
+      url: data?.url || null,
+      created_at: row.created_at,
+    };
+  });
+}
+
+/** Marque des notifications comme vues/cliquées (propriétaire du log uniquement). */
+async function marquerNotificationsVues({ userId, accountType = 'user', ids = [] } = {}) {
+  const safeIds = (Array.isArray(ids) ? ids : [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .slice(0, 100);
+  if (!safeIds.length || userId == null) return { updated: 0 };
+  const db = await getDb();
+  const placeholders = safeIds.map(() => '?').join(',');
+  runSql(
+    db,
+    `UPDATE push_logs SET clique = 1
+      WHERE user_id = ? AND COALESCE(account_type, 'user') = ? AND id IN (${placeholders})`,
+    [Number(userId), accountType, ...safeIds],
+  );
+  return { updated: safeIds.length };
 }
 
 /** Liste filtrée des envois push (superadmin). */
@@ -316,17 +418,61 @@ async function getSubscriptionsForUser(userId) {
   return queryAll(db, 'SELECT * FROM push_subscriptions WHERE user_id = ?', [userId]);
 }
 
-async function sendToUser(userId, payload, preferenceKey = null) {
-  if (!ensureConfigured()) return { sent: 0, failed: 0 };
+/**
+ * Envoie une notification à un compte et la journalise dans push_logs.
+ *
+ * - `accountType 'user'` (joueur / super_admin) : Web Push vers les abonnements existants.
+ * - autres types (employe / proprietaire) ou aucun abonnement : la ligne reste `pending`
+ *   et sera affichée en toast à la prochaine connexion (GET /api/push/missed).
+ *
+ * @param {number} userId
+ * @param {{title?:string, body?:string, url?:string, tag?:string, type?:string, level?:string}} payload
+ * @param {string|null} preferenceKey clé push_preferences (joueur uniquement)
+ * @param {{accountType?:string}} [options]
+ */
+async function sendToUser(userId, payload, preferenceKey = null, options = {}) {
+  const accountType = options.accountType || 'user';
+  if (userId == null) return { sent: 0, failed: 0 };
 
-  if (preferenceKey) {
+  if (preferenceKey && accountType === 'user') {
     const prefs = await getPreferences(userId);
     if (!prefs[preferenceKey]) return { sent: 0, failed: 0, skipped: true };
   }
 
-  const subscriptions = await getSubscriptionsForUser(userId);
+  const pushReady = ensureConfigured();
+  const subscriptions = pushReady && accountType === 'user'
+    ? await getSubscriptionsForUser(userId)
+    : [];
+
+  // Anti-doublon : même tag déjà en attente (cron de rappel rejoué toutes les 15 min)
+  if (payload?.tag && !subscriptions.length) {
+    const db = await getDb();
+    const existing = queryOne(
+      db,
+      `SELECT id FROM push_logs
+        WHERE user_id = ? AND COALESCE(account_type, 'user') = ? AND statut = 'pending'
+          AND data LIKE ? AND created_at >= datetime('now', '-24 hours')
+        LIMIT 1`,
+      [Number(userId), accountType, `%"tag":${JSON.stringify(String(payload.tag))}%`],
+    );
+    if (existing) return { sent: 0, failed: 0, deduped: true, logId: existing.id };
+  }
+
+  const type = payload?.type || preferenceKey || 'generic';
+  const level = NIVEAUX_TOAST.includes(payload?.level) ? payload.level : niveauDepuisType(type);
+  const logId = await logPush({
+    userId,
+    accountType,
+    type,
+    titre: payload?.title,
+    corps: payload?.body,
+    data: { url: payload?.url || null, tag: payload?.tag || null, level },
+    statut: 'pending',
+  });
+
   let sent = 0;
   let failed = 0;
+  const wirePayload = JSON.stringify({ ...payload, level, logId });
 
   for (const sub of subscriptions) {
     try {
@@ -335,7 +481,7 @@ async function sendToUser(userId, payload, preferenceKey = null) {
           endpoint: sub.endpoint,
           keys: { p256dh: sub.p256dh, auth: sub.auth },
         },
-        JSON.stringify(payload),
+        wirePayload,
       );
       sent++;
     } catch (err) {
@@ -348,26 +494,123 @@ async function sendToUser(userId, payload, preferenceKey = null) {
     }
   }
 
-  if (sent > 0 || failed > 0) {
-    await logPush({
-      userId,
-      type: payload?.type || preferenceKey || 'generic',
-      titre: payload?.title,
-      corps: payload?.body,
-      data: payload?.url ? { url: payload.url, tag: payload.tag } : null,
-      statut: sent > 0 ? 'envoye' : 'echec',
-      erreur: failed > 0 ? `${failed} abonnement(s) en échec` : null,
-    });
+  if (sent > 0) {
+    await updatePushLogStatut(logId, 'envoye', failed > 0 ? `${failed} abonnement(s) en échec` : null);
+  } else if (failed > 0) {
+    await updatePushLogStatut(logId, 'echec', `${failed} abonnement(s) en échec`);
   }
+  // sinon : reste `pending` (pas d'abonnement push → toast in-app à la prochaine connexion)
 
-  return { sent, failed };
+  return { sent, failed, logId };
+}
+
+/** Notification in-app pour un compte non-joueur (gérant/propriétaire) ou super_admin. Jamais bloquant. */
+async function notifyAccount({
+  userId,
+  accountType = 'user',
+  type,
+  titre,
+  corps,
+  url = null,
+  level = 'info',
+  tag = null,
+  prefColumn = null,
+}) {
+  try {
+    if (!userId) return { skipped: true };
+    if (prefColumn && /^push_[a-z_]+$/.test(prefColumn)) {
+      const db = await getDb();
+      const row = queryOne(
+        db,
+        `SELECT ${prefColumn} AS actif FROM notif_preferences WHERE user_id = ? AND account_type = ?`,
+        [Number(userId), accountType],
+      );
+      if (row && Number(row.actif) === 0) return { skipped: true };
+    }
+    return await sendToUser(
+      Number(userId),
+      { title: titre, body: corps, url, tag, type, level },
+      null,
+      { accountType },
+    );
+  } catch (err) {
+    logger.warn('pushService', `notifyAccount(${type}) : ${err.message}`);
+    return { sent: 0, failed: 0, error: err.message };
+  }
+}
+
+/** Gérants actifs, propriétaire d'un terrain (+ super_admins optionnels) — destinataires in-app. */
+async function destinatairesTerrain(terrainId, { gerants = true, proprietaire = true } = {}) {
+  const db = await getDb();
+  const out = [];
+  if (!terrainId) return out;
+  const terrain = queryOne(db, 'SELECT proprietaire_id FROM terrains WHERE id = ?', [Number(terrainId)]);
+  if (gerants) {
+    const rows = queryAll(
+      db,
+      `SELECT DISTINCT e.id FROM employes e
+        WHERE COALESCE(e.is_active, 1) = 1
+          AND (e.terrain_id = ?
+            OR e.id IN (SELECT gerant_id FROM gerants_terrains WHERE terrain_id = ? AND actif = 1))`,
+      [Number(terrainId), Number(terrainId)],
+    );
+    rows.forEach((row) => out.push({ userId: row.id, accountType: 'employe', role: 'gerant' }));
+  }
+  if (proprietaire && terrain?.proprietaire_id) {
+    out.push({ userId: terrain.proprietaire_id, accountType: 'proprietaire', role: 'proprietaire' });
+  }
+  return out;
+}
+
+async function destinatairesSuperAdmins() {
+  const db = await getDb();
+  return queryAll(
+    db,
+    "SELECT id FROM users WHERE role = 'super_admin' AND COALESCE(is_active, 1) = 1",
+  ).map((row) => ({ userId: row.id, accountType: 'user', role: 'super_admin' }));
+}
+
+/** Notifie gérants (+ propriétaire) d'un terrain. */
+async function notifyTerrainTeam(terrainId, notif, { gerants = true, proprietaire = false } = {}) {
+  try {
+    const dests = await destinatairesTerrain(terrainId, { gerants, proprietaire });
+    const results = [];
+    for (const dest of dests) {
+      results.push(await notifyAccount({ ...notif, userId: dest.userId, accountType: dest.accountType }));
+    }
+    return results;
+  } catch (err) {
+    logger.warn('pushService', `notifyTerrainTeam(${notif?.type}) : ${err.message}`);
+    return [];
+  }
+}
+
+async function notifySuperAdmins(notif) {
+  try {
+    const dests = await destinatairesSuperAdmins();
+    const results = [];
+    for (const dest of dests) {
+      results.push(await notifyAccount({ ...notif, userId: dest.userId, accountType: dest.accountType }));
+    }
+    return results;
+  } catch (err) {
+    logger.warn('pushService', `notifySuperAdmins(${notif?.type}) : ${err.message}`);
+    return [];
+  }
 }
 
 async function envoyerConfirmationPush(reservationId) {
   const db = await getDb();
   const reservation = queryOne(db, `SELECT r.*, t.nom AS terrain_nom
     FROM reservations r JOIN terrains t ON t.id = r.terrain_id WHERE r.id = ?`, [reservationId]);
-  if (!reservation?.joueur_id) return;
+  if (!reservation) return;
+
+  // Gérants + propriétaire : nouvelle réservation confirmée (in-app / toast à la connexion)
+  await notifierNouvelleReservationEquipe(reservation).catch((err) => {
+    logger.warn('pushService', `Notif équipe nouvelle résa #${reservationId} : ${err.message}`);
+  });
+
+  if (!reservation.joueur_id) return;
 
   await sendToUser(reservation.joueur_id, {
     title: 'Réservation confirmée ⚽',
@@ -375,6 +618,7 @@ async function envoyerConfirmationPush(reservationId) {
     url: '/reservations',
     tag: `reservation-${reservationId}`,
     type: 'reservation_confirmation',
+    level: 'success',
   }, 'reservation_confirmation');
 
   runSql(db, `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
@@ -382,6 +626,130 @@ async function envoyerConfirmationPush(reservationId) {
     reservation.joueur_id,
     `Réservation confirmée : ${reservation.terrain_nom} le ${reservation.date} à ${reservation.heure_debut}`,
   ]);
+}
+
+function libelleJoueur(reservation) {
+  return String(reservation?.joueur_nom || '').trim() || 'Un joueur';
+}
+
+/** Gérant(s) + propriétaire : nouvelle réservation payée / confirmée. */
+async function notifierNouvelleReservationEquipe(reservation) {
+  if (!reservation?.terrain_id) return [];
+  const heure = String(reservation.heure_debut || '').slice(0, 5);
+  const gerants = await notifyTerrainTeam(reservation.terrain_id, {
+    type: 'nouvelle_reservation',
+    titre: 'Nouvelle réservation ⚽',
+    corps: `${libelleJoueur(reservation)} — ${reservation.terrain_nom || 'terrain'} le ${reservation.date} à ${heure}. Code : ${reservation.code_reservation || 'N/A'}`,
+    url: '/backoffice/gerant',
+    level: 'success',
+    tag: `nouvelle-resa-${reservation.id}`,
+    prefColumn: 'push_nouvelle_resa',
+  }, { gerants: true, proprietaire: false });
+  const proprio = await notifyTerrainTeam(reservation.terrain_id, {
+    type: 'nouvelle_reservation',
+    titre: 'Nouvelle réservation sur ton terrain',
+    corps: `${reservation.terrain_nom || 'Terrain'} — ${reservation.date} à ${heure}.`,
+    url: '/backoffice/proprietaire',
+    level: 'info',
+    tag: `nouvelle-resa-${reservation.id}`,
+    prefColumn: 'push_nouvelle_resa',
+  }, { gerants: false, proprietaire: true });
+  return [...gerants, ...proprio];
+}
+
+/**
+ * Annulation : prévient le joueur (toast/push, + remboursement) et les gérants si l'annulation vient du joueur.
+ * Ne touche pas au remboursement lui-même (annulationService).
+ */
+async function notifierAnnulation(reservationId, { rembourse = false, parGerant = false, remboursementManuel = false } = {}) {
+  const db = await getDb();
+  const reservation = queryOne(
+    db,
+    `SELECT r.*, t.nom AS terrain_nom FROM reservations r
+       JOIN terrains t ON t.id = r.terrain_id WHERE r.id = ?`,
+    [Number(reservationId)],
+  );
+  if (!reservation) return;
+  const heure = String(reservation.heure_debut || '').slice(0, 5);
+
+  if (reservation.joueur_id) {
+    await sendToUser(reservation.joueur_id, {
+      title: 'Réservation annulée',
+      body: `${reservation.terrain_nom} — ${reservation.date} à ${heure}.`,
+      url: '/reservations',
+      tag: `annulation-${reservation.id}`,
+      type: 'reservation_annulee',
+      level: 'warning',
+    }, 'reservation_confirmation');
+    if (rembourse || remboursementManuel) {
+      await sendToUser(reservation.joueur_id, {
+        title: 'Remboursement en cours 💸',
+        body: remboursementManuel
+          ? 'Ton remboursement sera traité manuellement par notre équipe sous 24 h.'
+          : 'Ton avance est remboursée (hors frais opérateur).',
+        url: '/reservations',
+        tag: `remboursement-${reservation.id}`,
+        type: 'remboursement',
+        level: 'success',
+      }, 'reservation_confirmation');
+    }
+  }
+
+  if (!parGerant) {
+    await notifyTerrainTeam(reservation.terrain_id, {
+      type: 'reservation_annulee',
+      titre: 'Réservation annulée',
+      corps: `${libelleJoueur(reservation)} a annulé : ${reservation.terrain_nom} le ${reservation.date} à ${heure}.`,
+      url: '/backoffice/gerant',
+      level: 'warning',
+      tag: `annulation-${reservation.id}`,
+      prefColumn: 'push_resa_annulee',
+    }, { gerants: true, proprietaire: false });
+  }
+}
+
+/** Entrée validée après scan QR : toast joueur. */
+async function notifierCheckinValide(reservationId) {
+  const db = await getDb();
+  const reservation = queryOne(
+    db,
+    `SELECT r.*, t.nom AS terrain_nom FROM reservations r
+       JOIN terrains t ON t.id = r.terrain_id WHERE r.id = ?`,
+    [Number(reservationId)],
+  );
+  if (!reservation?.joueur_id) return;
+  await sendToUser(reservation.joueur_id, {
+    title: 'Entrée validée ✅',
+    body: `Bienvenue à ${reservation.terrain_nom}. Bon match !`,
+    url: '/reservations',
+    tag: `checkin-${reservation.id}`,
+    type: 'checkin_valide',
+    level: 'success',
+  }, null);
+}
+
+/** Demande de retrait gérant : prévient le gérant (accusé) et les super_admins (à traiter). */
+async function notifierDemandeRetrait({ gerantId, terrainNom, montant, demandeId }) {
+  const montantTxt = `${Number(montant || 0).toLocaleString('fr-FR')} FCFA`;
+  await notifyAccount({
+    userId: gerantId,
+    accountType: 'employe',
+    type: 'retrait_demande',
+    titre: 'Demande de retrait envoyée',
+    corps: `${montantTxt} — ${terrainNom || 'terrain'}. L'équipe TerrainSN la traite sous 24 h.`,
+    url: '/backoffice/gerant',
+    level: 'success',
+    tag: `retrait-${demandeId}`,
+    prefColumn: 'push_retrait_demande',
+  });
+  await notifySuperAdmins({
+    type: 'retrait_demande_admin',
+    titre: 'Nouvelle demande de retrait',
+    corps: `${terrainNom || 'Terrain'} — ${montantTxt} à verser.`,
+    url: '/backoffice/superadmin',
+    level: 'info',
+    tag: `retrait-admin-${demandeId}`,
+  });
 }
 
 async function envoyerRappelsReservations() {
@@ -451,7 +819,46 @@ async function envoyerRappelsReservations() {
     logger.event('rappel_match', { reservation_id: reservation.id, push: pushSent, whatsapp: waSent });
   }
 
-  return { processed, push: pushCount, whatsapp: waCount };
+  const imminent = await notifierMatchsImminents(now).catch((err) => {
+    logger.warn('pushService', `Match imminent : ${err.message}`);
+    return 0;
+  });
+
+  return { processed, push: pushCount, whatsapp: waCount, imminent };
+}
+
+/**
+ * Gérants : « match imminent » (≤ 30 min) pour préparer le scanner QR.
+ * Réutilise le cron de rappels (15 min) ; idempotent via reservations.push_match_imminent.
+ */
+async function notifierMatchsImminents(now = new Date()) {
+  const db = await getDb();
+  const { parseReservationDateTime, isInReminderWindow } = require('./services/reminderWindow');
+  const rows = queryAll(db, `
+    SELECT r.id, r.terrain_id, r.date, r.heure_debut, r.joueur_nom, t.nom AS terrain_nom
+    FROM reservations r
+    JOIN terrains t ON t.id = r.terrain_id
+    WHERE r.statut IN ('confirme', 'acceptee')
+      AND COALESCE(r.push_match_imminent, 0) = 0
+      AND r.date >= date('now', '-1 day')
+  `);
+  let count = 0;
+  for (const row of rows) {
+    const startAt = parseReservationDateTime(row.date, row.heure_debut);
+    if (!isInReminderWindow(startAt, now, { startOffsetMin: 0, endOffsetMin: 30 })) continue;
+    await notifyTerrainTeam(row.terrain_id, {
+      type: 'match_imminent',
+      titre: 'Match imminent ⏱️',
+      corps: `${libelleJoueur(row)} arrive à ${String(row.heure_debut).slice(0, 5)} — ${row.terrain_nom}. Prépare le scanner QR.`,
+      url: '/backoffice/gerant#scanner',
+      level: 'info',
+      tag: `match-imminent-${row.id}`,
+      prefColumn: 'push_match_imminent',
+    }, { gerants: true, proprietaire: false });
+    runSql(db, 'UPDATE reservations SET push_match_imminent = 1 WHERE id = ?', [row.id]);
+    count += 1;
+  }
+  return count;
 }
 
 module.exports = {
@@ -461,11 +868,22 @@ module.exports = {
   regenerateVapidKeys,
   logPush,
   listPushLogs,
+  listMissedNotifications,
+  marquerNotificationsVues,
+  accountTypeDepuisJwt,
   upsertSubscription,
   removeSubscription,
   getPreferences,
   updatePreferences,
   sendToUser,
+  notifyAccount,
+  notifyTerrainTeam,
+  notifySuperAdmins,
+  notifierNouvelleReservationEquipe,
+  notifierAnnulation,
+  notifierCheckinValide,
+  notifierDemandeRetrait,
+  notifierMatchsImminents,
   envoyerConfirmationPush,
   envoyerRappelsReservations,
 };

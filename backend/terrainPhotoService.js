@@ -44,6 +44,20 @@ function listTerrainPhotos(database, terrainId) {
     ORDER BY est_principale DESC, ordre ASC, id ASC`, [terrainId]);
 }
 
+function listPhotosByTerrainIds(database, terrainIds) {
+  const ids = (terrainIds || []).map(Number).filter((n) => n > 0);
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  return queryAll(
+    database,
+    `SELECT id, terrain_id, url, est_principale, ordre, created_at
+     FROM terrain_photos
+     WHERE terrain_id IN (${placeholders})
+     ORDER BY est_principale DESC, ordre ASC, id ASC`,
+    ids,
+  );
+}
+
 function syncTerrainPhotos(database, terrainId) {
   const photos = listTerrainPhotos(database, terrainId).map((photo) => photo.url);
   database.run('UPDATE terrains SET photos = ? WHERE id = ?', [JSON.stringify(photos), terrainId]);
@@ -121,6 +135,7 @@ function deleteTerrainPhoto(database, terrainId, photoId) {
 module.exports = {
   UPLOAD_ROOT,
   listTerrainPhotos,
+  listPhotosByTerrainIds,
   createTerrainPhoto,
   updateTerrainPhoto,
   deleteTerrainPhoto,

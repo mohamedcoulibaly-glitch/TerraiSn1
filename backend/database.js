@@ -499,6 +499,10 @@ function initDb(database) {
   addColumnIfMissing(database, 'abonnements', 'reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'abonnements', 'lien_paiement', 'TEXT');
   addColumnIfMissing(database, 'abonnements', 'canal_paiement', 'TEXT');
+  addColumnIfMissing(database, 'abonnements', 'notif_j7', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'abonnements', 'notif_j3', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'abonnements', 'notif_j1', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(database, 'abonnements', 'notif_suspendu', 'INTEGER DEFAULT 0');
   addColumnIfMissing(database, 'terrains', 'achat_reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'terrains', 'achat_lien_paiement', 'TEXT');
   database.run('CREATE INDEX IF NOT EXISTS idx_abonnements_terrain ON abonnements(terrain_id)');
@@ -1149,8 +1153,11 @@ function initContratPaiementSchema(database) {
     erreur TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+  // clique = 1 : notification vue / cliquée (GET /api/push/missed ne la renvoie plus)
+  addColumnIfMissing(database, 'push_logs', 'clique', 'INTEGER DEFAULT 0');
   database.run('CREATE INDEX IF NOT EXISTS idx_push_logs_user ON push_logs(user_id, created_at)');
   database.run('CREATE INDEX IF NOT EXISTS idx_push_logs_type ON push_logs(type_notif, created_at)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_push_logs_missed ON push_logs(user_id, account_type, clique, created_at)');
 
   database.run(`CREATE TABLE IF NOT EXISTS resume_dette_periode (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

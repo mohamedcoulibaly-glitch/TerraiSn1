@@ -206,6 +206,11 @@ async function traiterScanQrReservation(req, res) {
     } catch (notifErr) {
       logger.warn('gerantCheckin.js', `Notif check-in WhatsApp #${reservation.id} : ${notifErr.message}`);
     }
+    try {
+      await require('./pushService').notifierCheckinValide(reservation.id);
+    } catch (pushErr) {
+      logger.warn('gerantCheckin.js', `Notif check-in push #${reservation.id} : ${pushErr.message}`);
+    }
 
     const updated = queryOne(db, `
       SELECT r.*, t.nom AS terrain_nom,

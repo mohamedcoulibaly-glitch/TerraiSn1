@@ -119,7 +119,7 @@ const SECTIONS: { title: string; items: NavEntry[] }[] = [
     ],
   },
   {
-    title: "Plateforme",
+    title: "Configuration",
     items: [
       { kind: "link", to: "/backoffice/superadmin/commodites", label: "Commodités", icon: Sparkles },
       { kind: "link", to: "/backoffice/superadmin/audit", label: "Audit", icon: ClipboardList },

@@ -3,6 +3,8 @@ const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'terrainsn_secret_key_2026';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || `${JWT_SECRET}_refresh`;
+/** Durée access token — défaut 30m (évite les 401 superadmin sur sessions longues). */
+const JWT_EXPIRY = process.env.JWT_EXPIRY || '30m';
 
 function hashRefreshToken(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
@@ -19,7 +21,7 @@ function genererAccessToken(user) {
     must_change_password: Boolean(user.must_change_password),
   };
   if (user.proprietaire_id != null) payload.proprietaire_id = user.proprietaire_id;
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '15m' });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRY });
 }
 
 function genererRefreshToken(user) {
@@ -202,4 +204,5 @@ module.exports = {
   isBlockedStatut,
   JWT_SECRET,
   JWT_REFRESH_SECRET,
+  JWT_EXPIRY,
 };

@@ -145,10 +145,13 @@ CREATE TABLE IF NOT EXISTS push_logs (
   data TEXT,
   statut VARCHAR(20) DEFAULT 'envoye',
   erreur TEXT,
+  clique INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+-- Bases existantes : ALTER TABLE push_logs ADD COLUMN clique INTEGER DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_push_logs_user ON push_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_type ON push_logs(type_notif, created_at);
+-- (index idx_push_logs_missed créé par backend/database.js après ajout de la colonne clique)
 
 -- ---------------------------------------------------------------------------
 -- 5. Résumé dettes période

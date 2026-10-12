@@ -33,21 +33,25 @@ export function messageErreurAuth(
     return "Code incorrect. Vérifie ton WhatsApp.";
   }
 
+  if (contexte === "forgot") {
+    if (e?.status === 404 || /aucun compte|introuvable|pas dans notre système/i.test(msg)) {
+      return "Ce numéro n'est pas dans notre système.";
+    }
+    if (/déjà vérifié/i.test(msg)) {
+      return "Ce numéro est déjà vérifié. Connecte-toi ou réessaie la récupération.";
+    }
+    return msg || "Impossible d'envoyer le code. Réessaie.";
+  }
+
   if (
     e?.status === 404 ||
-    /introuvable|aucun compte|n'est pas reconnu|pas dans notre système|déjà vérifié/i.test(msg)
+    /introuvable|aucun compte|n'est pas reconnu|pas dans notre système/i.test(msg)
   ) {
-    return contexte === "forgot"
-      ? "Ce numéro n'est pas dans notre système."
-      : "Ce numéro n'est pas reconnu.";
+    return "Ce numéro n'est pas reconnu.";
   }
 
   if (contexte === "backoffice") {
     if (/non autorisé/i.test(msg)) return "Accès non autorisé pour ce rôle.";
-  }
-
-  if (contexte === "forgot") {
-    return "Ce numéro n'est pas dans notre système.";
   }
 
   if (e?.status === 401 || /identifiants incorrects/i.test(msg)) {
