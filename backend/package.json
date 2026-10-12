@@ -48,7 +48,7 @@
     "node-cron": "^4.6.0",
     "nodemailer": "^6.10.1",
     "qrcode": "^1.5.4",
-    "sql.js": "^1.11.0",
+    "sql.js": "^1.14.2",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
