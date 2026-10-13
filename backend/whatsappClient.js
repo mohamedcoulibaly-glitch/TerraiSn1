@@ -26,6 +26,22 @@ function readCfgFromEnv() {
 
 readCfgFromEnv();
 
+/** Durée de validité affichée / suivie pour un code de jumelage (ms). Défaut 5 min. */
+const PAIRING_TTL_MS = Math.max(
+  60_000,
+  Number(process.env.OPENWA_PAIRING_TTL_MS) || 5 * 60 * 1000,
+);
+/** Timeout HTTP vers OpenWA (ms). */
+const OPENWA_HTTP_TIMEOUT_MS = Math.max(
+  10_000,
+  Number(process.env.OPENWA_HTTP_TIMEOUT_MS) || 45_000,
+);
+/** Attente max d’un état session apte au pairing (ms). */
+const PAIRING_WAIT_MS = Math.max(
+  20_000,
+  Number(process.env.OPENWA_PAIRING_WAIT_MS) || 75_000,
+);
+
 function reloadConfig() {
   readCfgFromEnv();
   for (const state of sessions.values()) {
@@ -44,6 +60,7 @@ function reloadConfig() {
     sessionPrefix: cfg.sessionPrefix,
     sharedSessionId: cfg.sharedSessionId,
     platformSessionId: cfg.platformSessionId,
+    pairingTtlMs: PAIRING_TTL_MS,
   };
 }
 
@@ -63,6 +80,7 @@ const sessions = new Map();
  * @property {string|null} connectedPhone
  * @property {string|null} pairingCode
  * @property {string|null} pairingPhone
+ * @property {number|null} pairingExpiresAt
  * @property {string|null} waState
  */
 
@@ -123,11 +141,26 @@ function createSessionState(key) {
     connectedPhone: null,
     pairingCode: null,
     pairingPhone: null,
+    pairingExpiresAt: null,
     waState: null,
     pinned: Boolean(pinnedId),
     /** Empêche le fallback vers une autre session ready pendant un changement de numéro. */
     lockSession: false,
+    _pairingRefreshInFlight: false,
+    _lastPairingRefreshAt: 0,
   };
+}
+
+function clearPairingState(state) {
+  state.pairingCode = null;
+  state.pairingPhone = null;
+  state.pairingExpiresAt = null;
+}
+
+function isPairingCodeFresh(state, phoneIntl, { skewMs = 15_000 } = {}) {
+  if (!state.pairingCode || !state.pairingExpiresAt) return false;
+  if (phoneIntl && state.pairingPhone !== phoneIntl) return false;
+  return Date.now() < Number(state.pairingExpiresAt) - skewMs;
 }
 
 /**
@@ -208,8 +241,7 @@ async function prepareNumberChange(state, { phoneNumber } = {}) {
   state.ready = false;
   state.connectedPhone = null;
   state.lastQrDataUrl = null;
-  state.pairingCode = null;
-  state.pairingPhone = null;
+  clearPairingState(state);
   state.lastError = null;
   state.waState = null;
 
@@ -278,10 +310,10 @@ async function prepareNumberChange(state, { phoneNumber } = {}) {
   state.ready = String(remote.status || '').toLowerCase() === 'ready';
   if (!state.ready) state.connectedPhone = null;
 
-  await waitForQrOrReady(state, 45000);
+  await waitForQrOrReady(state, PAIRING_WAIT_MS);
 
   if (phoneNumber && !state.ready) {
-    await requestPairingCode(state, phoneNumber);
+    await requestPairingCode(state, phoneNumber, { force: true });
   }
 
   if (state.openwaId) {
@@ -310,6 +342,7 @@ function getOrCreateState(key) {
 }
 
 function publicStatus(state) {
+  const pairingFresh = isPairingCodeFresh(state, state.pairingPhone, { skewMs: 0 });
   return {
     session: state.key,
     connected: state.ready,
@@ -318,8 +351,9 @@ function publicStatus(state) {
     initializing: state.initializing,
     error: state.lastError,
     phone: state.connectedPhone,
-    pairingCode: state.pairingCode,
+    pairingCode: pairingFresh ? state.pairingCode : null,
     pairingPhone: state.pairingPhone,
+    pairingExpiresAt: pairingFresh ? state.pairingExpiresAt : null,
     waState: state.waState || null,
     provider: 'openwa',
     openwaSessionId: state.openwaId,
@@ -342,8 +376,9 @@ function applyRemoteSession(state, remote) {
       : null;
   if (state.ready) {
     state.lastQrDataUrl = null;
-    state.pairingCode = null;
+    clearPairingState(state);
     state.lastError = null;
+    state.lockSession = false;
   } else if (remote.lastError) {
     const raw = String(remote.lastError);
     if (/Failed to launch the browser|puppeteer|Permission denied/i.test(raw)) {
@@ -360,38 +395,53 @@ function applyRemoteSession(state, remote) {
   }
 }
 
-async function openwaRequest(method, apiPath, body) {
+async function openwaRequest(method, apiPath, body, { timeoutMs = OPENWA_HTTP_TIMEOUT_MS } = {}) {
   requireConfig();
   const url = `${cfg.baseUrl}/api${apiPath.startsWith('/') ? apiPath : `/${apiPath}`}`;
   const headers = {
     'X-API-Key': cfg.apiKey,
     Accept: 'application/json',
   };
-  const init = { method, headers };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const init = { method, headers, signal: controller.signal };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(url, init);
-  const text = await res.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { raw: text };
+  try {
+    const res = await fetch(url, init);
+    const text = await res.text();
+    let data = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { raw: text };
+      }
     }
-  }
-  if (!res.ok) {
-    const msg =
-      (data && (data.message || data.error || data.code)) ||
-      `OpenWA ${method} ${apiPath} → HTTP ${res.status}`;
-    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-    err.statusCode = res.status;
-    err.payload = data;
+    if (!res.ok) {
+      const msg =
+        (data && (data.message || data.error || data.code)) ||
+        `OpenWA ${method} ${apiPath} → HTTP ${res.status}`;
+      const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      err.statusCode = res.status;
+      err.payload = data;
+      throw err;
+    }
+    return data;
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      const timeoutErr = new Error(
+        `OpenWA ${method} ${apiPath} → timeout après ${Math.round(timeoutMs / 1000)}s`,
+      );
+      timeoutErr.statusCode = 504;
+      throw timeoutErr;
+    }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return data;
 }
 
 async function listRemoteSessions() {
@@ -532,26 +582,220 @@ async function fetchQr(state) {
   }
 }
 
-async function requestPairingCode(state, phoneRaw) {
-  const intl = toWaIntlDigits(phoneRaw);
-  if (!intl || !state.openwaId || state.ready) return null;
-  if (state.pairingCode && state.pairingPhone === intl) return state.pairingCode;
-  try {
-    state.pairingPhone = intl;
-    const result = await openwaRequest('POST', `/sessions/${state.openwaId}/pairing-code`, {
-      phoneNumber: intl,
-    });
-    const code = result?.pairingCode || result?.code || null;
-    if (code) {
-      state.pairingCode = String(code).replace(/\s/g, '');
-      console.log(`🔑 Code d'appairage OpenWA [${state.key}]: ${state.pairingCode}`);
+/** États OpenWA où un code de jumelage peut être demandé. */
+function isPairableWaState(status) {
+  const s = String(status || '').toLowerCase();
+  return ['qr_ready', 'initializing', 'authenticating', 'starting', 'created', 'stopped', 'disconnected', 'logged_out'].includes(s)
+    || !s;
+}
+
+async function waitUntilPairable(state, ms = PAIRING_WAIT_MS) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (!state.openwaId) return false;
+    try {
+      const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
+      applyRemoteSession(state, remote);
+    } catch (err) {
+      state.lastError = err.message;
     }
-    if (result?.status) state.waState = String(result.status);
-    return state.pairingCode;
-  } catch (err) {
-    console.warn(`⚠️ Pairing OpenWA [${state.key}]:`, err.message);
-    return null;
+    if (state.ready) return true;
+    const status = String(state.waState || '').toLowerCase();
+    if (status === 'failed') {
+      try {
+        await recreateRemoteSession(state);
+        await startRemote(state);
+      } catch (err) {
+        state.lastError = err.message;
+      }
+    } else if (isPairableWaState(status)) {
+      await fetchQr(state).catch(() => null);
+      // QR disponible ou statut qr_ready → on peut demander le pairing.
+      if (state.lastQrDataUrl || status === 'qr_ready' || status === 'initializing' || status === 'authenticating') {
+        return true;
+      }
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 1500));
   }
+  return Boolean(state.openwaId && !state.ready);
+}
+
+/**
+ * Demande un code de jumelage OpenWA, avec retries et TTL serveur.
+ * @param {SessionState} state
+ * @param {string} phoneRaw
+ * @param {{ force?: boolean }} [opts]
+ */
+async function requestPairingCode(state, phoneRaw, opts = {}) {
+  const force = Boolean(opts.force);
+  const intl = toWaIntlDigits(phoneRaw);
+  if (!intl || state.ready) return null;
+  if (!state.openwaId) {
+    try {
+      await ensureRemoteSession(state);
+    } catch (err) {
+      state.lastError = err.message;
+      return null;
+    }
+  }
+  if (!state.openwaId) return null;
+
+  if (!force && isPairingCodeFresh(state, intl)) {
+    return state.pairingCode;
+  }
+
+  await waitUntilPairable(state, PAIRING_WAIT_MS);
+  if (state.ready) return null;
+
+  const maxAttempts = 3;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      state.pairingPhone = intl;
+      const result = await openwaRequest(
+        'POST',
+        `/sessions/${state.openwaId}/pairing-code`,
+        { phoneNumber: intl },
+        { timeoutMs: OPENWA_HTTP_TIMEOUT_MS },
+      );
+      const code = result?.pairingCode || result?.code || null;
+      if (code) {
+        state.pairingCode = String(code).replace(/[\s-]/g, '');
+        state.pairingExpiresAt = Date.now() + PAIRING_TTL_MS;
+        state._lastPairingRefreshAt = Date.now();
+        state.lastError = null;
+        if (result?.status) state.waState = String(result.status);
+        console.log(
+          `🔑 Code d'appairage OpenWA [${state.key}]: ${state.pairingCode}`
+            + ` (expire ${new Date(state.pairingExpiresAt).toISOString()}, essai ${attempt}/${maxAttempts})`,
+        );
+        return state.pairingCode;
+      }
+      lastErr = new Error('OpenWA a répondu sans code de jumelage');
+    } catch (err) {
+      lastErr = err;
+      console.warn(
+        `⚠️ Pairing OpenWA [${state.key}] essai ${attempt}/${maxAttempts}:`,
+        err.message,
+      );
+      const status = Number(err.statusCode);
+      // Session pas prête / zombie → relancer avant le prochain essai
+      if ([400, 404, 409, 500, 502, 503, 504].includes(status) || err.name === 'AbortError') {
+        try {
+          if (status === 404) {
+            state.openwaId = null;
+            await ensureRemoteSession(state);
+          }
+          await startRemote(state);
+          await waitUntilPairable(state, Math.min(30_000, PAIRING_WAIT_MS));
+          if (state.ready) return null;
+        } catch (restartErr) {
+          console.warn(`⚠️ Restart avant retry pairing [${state.key}]:`, restartErr.message);
+        }
+      }
+    }
+    if (attempt < maxAttempts) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+
+  state.lastError =
+    lastErr?.message ||
+    'Impossible de générer le code WhatsApp. Réessayez dans quelques secondes.';
+  return null;
+}
+
+/**
+ * Renouvelle le code si expiré / bientôt expiré (polling statut gérant).
+ */
+async function refreshPairingIfNeeded(state) {
+  if (state.ready || state.mock || !state.pairingPhone || !state.openwaId) return;
+  if (state.initializing || state._pairingRefreshInFlight) return;
+  const fresh = isPairingCodeFresh(state, state.pairingPhone, { skewMs: 30_000 });
+  if (fresh) return;
+  if (Date.now() - (state._lastPairingRefreshAt || 0) < 20_000) return;
+
+  state._pairingRefreshInFlight = true;
+  try {
+    await requestPairingCode(state, state.pairingPhone, { force: true });
+  } catch (err) {
+    console.warn(`⚠️ Auto-refresh pairing [${state.key}]:`, err.message);
+  } finally {
+    state._pairingRefreshInFlight = false;
+  }
+}
+
+/**
+ * Force recreate + pairing pour une session gérant (plus robuste que destroy sec).
+ */
+async function prepareGerantPairing(state, phoneNumber) {
+  state.lockSession = true;
+  state.pinned = false;
+  state.ready = false;
+  state.connectedPhone = null;
+  state.lastQrDataUrl = null;
+  clearPairingState(state);
+  state.lastError = null;
+  state.waState = null;
+
+  const previousId = state.openwaId;
+  if (previousId) {
+    // Logout d’abord (garder la session nommée), puis recreate si start échoue.
+    await destroyRemoteSession(previousId, { deleteSession: false });
+  }
+
+  let remote = await findRemoteByName(state.openwaName);
+  if (remote?.id) {
+    state.openwaId = remote.id;
+    applyRemoteSession(state, remote);
+    try {
+      remote = await openwaRequest('POST', `/sessions/${remote.id}/start`);
+      applyRemoteSession(state, remote);
+    } catch {
+      try {
+        await destroyRemoteSession(remote.id, { deleteSession: true });
+        remote = await openwaRequest('POST', '/sessions', { name: state.openwaName });
+        remote = await openwaRequest('POST', `/sessions/${remote.id}/start`);
+        applyRemoteSession(state, remote);
+      } catch (err) {
+        const again = await findRemoteByName(state.openwaName);
+        if (!again?.id) throw err;
+        state.openwaId = again.id;
+        applyRemoteSession(state, again);
+        console.warn(`⚠️ OpenWA gerant recreate [${state.openwaName}]:`, err.message);
+      }
+    }
+  } else {
+    await ensureRemoteSession(state);
+    await startRemote(state);
+  }
+
+  // Si encore authentifiée avec un ancien numéro → forcer un nouveau cycle QR/pairing.
+  if (state.ready) {
+    await destroyRemoteSession(state.openwaId, { deleteSession: false });
+    state.ready = false;
+    state.connectedPhone = null;
+    try {
+      const restarted = await openwaRequest('POST', `/sessions/${state.openwaId}/start`);
+      applyRemoteSession(state, restarted);
+    } catch {
+      /* wait ci-dessous */
+    }
+  }
+
+  await waitForQrOrReady(state, PAIRING_WAIT_MS);
+
+  if (phoneNumber && !state.ready) {
+    await requestPairingCode(state, phoneNumber, { force: true });
+  }
+
+  if (state.ready) state.lockSession = false;
+  if (state.lastQrDataUrl || state.pairingCode || state.ready) {
+    state.lastError = null;
+  }
+  return state;
 }
 
 async function recreateRemoteSession(state) {
@@ -576,7 +820,7 @@ async function recreateRemoteSession(state) {
   state.openwaId = null;
   state.ready = false;
   state.lastQrDataUrl = null;
-  state.pairingCode = null;
+  clearPairingState(state);
   const remote = await openwaRequest('POST', '/sessions', { name: state.openwaName });
   applyRemoteSession(state, remote);
   console.log(`♻️ OpenWA session recréée [${state.key}] id=${remote.id}`);
@@ -613,20 +857,34 @@ async function startRemote(state) {
   }
 }
 
-async function waitForQrOrReady(state, ms = 45000) {
+async function waitForQrOrReady(state, ms = PAIRING_WAIT_MS) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
+    if (!state.openwaId) return;
     try {
       const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
       applyRemoteSession(state, remote);
     } catch (err) {
       state.lastError = err.message;
+      if (Number(err.statusCode) === 404) {
+        state.openwaId = null;
+        return;
+      }
     }
     if (state.ready) return;
+    const status = String(state.waState || '').toLowerCase();
+    if (status === 'failed') {
+      try {
+        await recreateRemoteSession(state);
+        await startRemote(state);
+      } catch (restartErr) {
+        state.lastError = restartErr.message;
+      }
+    }
     await fetchQr(state).catch(() => null);
     if (state.lastQrDataUrl || state.pairingCode) return;
     // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, 1500));
   }
 }
 
@@ -655,10 +913,11 @@ async function ensureStarted(key = 'platform', opts = {}) {
   }
 
   if (state.initializing && !changeNumber) {
-    await waitForQrOrReady(state, 30000);
+    await waitForQrOrReady(state, Math.min(45_000, PAIRING_WAIT_MS));
     if (opts.phoneNumber && !state.ready) {
-      await requestPairingCode(state, opts.phoneNumber);
+      await requestPairingCode(state, opts.phoneNumber, { force: Boolean(opts.force) });
     }
+    const pairingFresh = isPairingCodeFresh(state, state.pairingPhone, { skewMs: 0 });
     return {
       mock: false,
       ready: state.ready,
@@ -667,8 +926,9 @@ async function ensureStarted(key = 'platform', opts = {}) {
       phone: state.connectedPhone,
       initializing: state.initializing,
       error: state.lastError,
-      pairingCode: state.pairingCode,
+      pairingCode: pairingFresh ? state.pairingCode : null,
       pairingPhone: state.pairingPhone,
+      pairingExpiresAt: pairingFresh ? state.pairingExpiresAt : null,
       openwaSessionId: state.openwaId,
       provider: 'openwa',
     };
@@ -682,31 +942,14 @@ async function ensureStarted(key = 'platform', opts = {}) {
       // Changement de numéro émetteur : nouvelle session dédiée + QR / pairing.
       await prepareNumberChange(state, { phoneNumber: opts.phoneNumber });
     } else if (changeNumber) {
-      // Gérant : logout + recréation de sa session dédiée.
-      state.lockSession = true;
-      state.pinned = false;
-      state.lastQrDataUrl = null;
-      state.pairingCode = null;
-      state.pairingPhone = null;
-      state.ready = false;
-      state.connectedPhone = null;
-      if (state.openwaId) {
-        await destroyRemoteSession(state.openwaId, { deleteSession: true });
-        state.openwaId = null;
-      }
-      await ensureRemoteSession(state);
-      await startRemote(state);
-      await waitForQrOrReady(state, 45000);
-      if (opts.phoneNumber && !state.ready) {
-        await requestPairingCode(state, opts.phoneNumber);
-      }
-      if (state.ready) state.lockSession = false;
+      // Gérant : cycle logout/start robuste + code de jumelage.
+      await prepareGerantPairing(state, opts.phoneNumber);
     } else {
       await ensureRemoteSession(state);
       await startRemote(state);
-      await waitForQrOrReady(state, 45000);
+      await waitForQrOrReady(state, PAIRING_WAIT_MS);
       if (opts.phoneNumber && !state.ready) {
-        await requestPairingCode(state, opts.phoneNumber);
+        await requestPairingCode(state, opts.phoneNumber, { force: false });
       }
     }
 
@@ -721,7 +964,10 @@ async function ensureStarted(key = 'platform', opts = {}) {
           `📱 QR / pairing WhatsApp plateforme : http://localhost:${process.env.PORT || 3001}/whatsapp-qr`
         );
       } else {
-        console.log(`📱 QR WhatsApp OpenWA [${state.key}] prêt (espace gérant)`);
+        console.log(
+          `📱 Pairing WhatsApp OpenWA [${state.key}] prêt`
+            + (state.pairingCode ? ` code=${state.pairingCode}` : ''),
+        );
       }
     }
   } catch (error) {
@@ -731,6 +977,7 @@ async function ensureStarted(key = 'platform', opts = {}) {
     state.initializing = false;
   }
 
+  const pairingFresh = isPairingCodeFresh(state, state.pairingPhone, { skewMs: 0 });
   return {
     mock: false,
     ready: state.ready,
@@ -738,8 +985,9 @@ async function ensureStarted(key = 'platform', opts = {}) {
     session: state.key,
     phone: state.connectedPhone,
     error: state.lastError,
-    pairingCode: state.pairingCode,
+    pairingCode: pairingFresh ? state.pairingCode : null,
     pairingPhone: state.pairingPhone,
+    pairingExpiresAt: pairingFresh ? state.pairingExpiresAt : null,
     openwaSessionId: state.openwaId,
     openwaSessionName: state.openwaName,
     changingNumber: Boolean(state.lockSession && !state.ready),
@@ -758,6 +1006,10 @@ async function refreshState(key = 'platform') {
     await ensureRemoteSession(state);
     if (!state.ready && state.openwaId) {
       await fetchQr(state).catch(() => null);
+      // Renouvelle le code gérant avant expiration (non-bloquant pour le poll UI).
+      if (state.key.startsWith('gerant:') && state.pairingPhone) {
+        void refreshPairingIfNeeded(state);
+      }
     }
   } catch (err) {
     state.lastError = err.message;
@@ -779,6 +1031,7 @@ async function getQrPayload(key = 'platform') {
       state.lastError = err.message;
     }
   }
+  const pairingFresh = isPairingCodeFresh(state, state.pairingPhone, { skewMs: 0 });
   return {
     qr: null,
     dataUrl: state.lastQrDataUrl,
@@ -788,8 +1041,9 @@ async function getQrPayload(key = 'platform') {
     session: state.key,
     initializing: state.initializing,
     error: state.lastError,
-    pairingCode: state.pairingCode,
+    pairingCode: pairingFresh ? state.pairingCode : null,
     pairingPhone: state.pairingPhone,
+    pairingExpiresAt: pairingFresh ? state.pairingExpiresAt : null,
     waState: state.waState || null,
     provider: 'openwa',
   };
@@ -962,8 +1216,7 @@ async function logoutSession(key) {
   state.ready = false;
   state.connectedPhone = null;
   state.lastQrDataUrl = null;
-  state.pairingCode = null;
-  state.pairingPhone = null;
+  clearPairingState(state);
   state.waState = 'logged_out';
   state.lockSession = false;
   return publicStatus(state);
@@ -1003,6 +1256,7 @@ module.exports.gerantSessionKey = gerantSessionKey;
 module.exports.logoutSession = logoutSession;
 module.exports.toWaIntlDigits = toWaIntlDigits;
 module.exports.reloadConfig = reloadConfig;
+module.exports.PAIRING_TTL_MS = PAIRING_TTL_MS;
 module.exports._state = platform;
 module.exports._sessions = sessions;
 module.exports.OPENWA_BASE_URL = cfg.baseUrl;

@@ -1047,12 +1047,14 @@ export const gerantApi = {
     })) as Record<string, unknown>;
     const raw = String(data.pairingCode || data.pairingCodeRaw || '').replace(/[\s-]/g, '');
     const display = raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw || null;
+    // Aligné sur OPENWA_PAIRING_TTL_MS backend (défaut 5 min) — fallback si le serveur n’envoie pas d’expiry.
+    const fallbackTtlMs = 5 * 60_000;
     return {
       ...data,
       pairingCode: raw || null,
       pairingCodeRaw: raw || null,
       pairingCodeDisplay: display,
-      pairingExpiresAt: data.pairingExpiresAt || (raw ? Date.now() + 110_000 : null),
+      pairingExpiresAt: data.pairingExpiresAt || (raw ? Date.now() + fallbackTtlMs : null),
     };
   },
 

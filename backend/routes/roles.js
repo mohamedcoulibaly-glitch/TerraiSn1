@@ -507,11 +507,19 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
     'SELECT whatsapp_number, telephone FROM employes WHERE id = ?',
     [req.user.id],
   );
+  // Priorité au numéro saisi dans l’UI (sinon on restait collé à l’ancien numéro DB).
   const phoneNumber =
+    whatsappClient.toWaIntlDigits?.(req.body?.telephone) ||
     whatsappClient.toWaIntlDigits?.(employe?.whatsapp_number) ||
     whatsappClient.toWaIntlDigits?.(employe?.telephone) ||
-    whatsappClient.toWaIntlDigits?.(req.body?.telephone) ||
     null;
+
+  if (phoneNumber && phoneNumber !== whatsappClient.toWaIntlDigits?.(employe?.whatsapp_number)) {
+    runSql(db, `UPDATE employes SET whatsapp_number = ? WHERE id = ?`, [
+      `+${phoneNumber}`,
+      req.user.id,
+    ]);
+  }
 
   const started = await whatsappClient.ensureStarted(key, { force, phoneNumber });
   const qr = await whatsappClient.getQrPayload(key);
@@ -530,13 +538,21 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
     return res.status(503).json({
       error:
         qr.error ||
-        'QR / code WhatsApp indisponible pour le moment. Réessayez (Nouveau QR).',
+        started.error ||
+        'Code WhatsApp indisponible pour le moment. Réessayez dans quelques secondes.',
       ...started,
       ...qr,
       session: key,
     });
   }
-  res.json({ ...started, ...qr, session: key });
+  res.json({
+    ...started,
+    ...qr,
+    pairingCode: qr.pairingCode || started.pairingCode || null,
+    pairingPhone: qr.pairingPhone || started.pairingPhone || phoneNumber || null,
+    pairingExpiresAt: qr.pairingExpiresAt || started.pairingExpiresAt || null,
+    session: key,
+  });
 });
 
 router.get('/gerant/whatsapp/qr', authMiddleware, requireRole('gerant'), async (req, res) => {

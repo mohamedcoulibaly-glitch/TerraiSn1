@@ -170,8 +170,8 @@ export default function WhatsAppGerantCard() {
         return;
       }
       setPairingCode(formatPairingCode(code));
-      setExpiresAt(data.pairingExpiresAt ? Number(data.pairingExpiresAt) : Date.now() + 110_000);
-      toast.success("Code généré — valable environ 2 minutes");
+      setExpiresAt(data.pairingExpiresAt ? Number(data.pairingExpiresAt) : Date.now() + 5 * 60_000);
+      toast.success("Code généré — valable environ 5 minutes");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : WHATSAPP_INFRA_MESSAGE);
     } finally {
@@ -339,7 +339,7 @@ export default function WhatsAppGerantCard() {
                 {pairingCode}
               </p>
               {secondsLeft != null ? (
-                <p className="text-sm" style={{ color: secondsLeft < 30 ? "#dc2626" : "var(--g-muted)" }}>
+                <p className="text-sm" style={{ color: secondsLeft < 60 ? "#dc2626" : "var(--g-muted)" }}>
                   Expire dans {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, "0")}
                 </p>
               ) : null}
@@ -422,7 +422,7 @@ export default function WhatsAppGerantCard() {
 
           {codeExpired ? (
             <p className="text-sm text-center" style={{ color: "#dc2626" }}>
-              Le code a expiré (valable ~2 min). Génère-en un nouveau.
+              Le code a expiré (valable ~5 min). Génère-en un nouveau.
             </p>
           ) : null}
         </div>
