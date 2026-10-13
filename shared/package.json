@@ -1,0 +1,19 @@
+{
+  "name": "@terrainsn/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./utils/creneauLabel": "./utils/creneauLabel.ts",
+    "./utils/formatters": "./utils/formatters.ts",
+    "./utils/validators": "./utils/validators.ts",
+    "./types": "./types/index.ts"
+  },
+  "files": [
+    "utils",
+    "types",
+    "index.ts"
+  ]
+}

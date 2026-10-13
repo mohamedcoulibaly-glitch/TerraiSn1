@@ -272,7 +272,8 @@ async function creerLienPaiementDette({
     throw error;
   }
   const canal = normalizeCanal(preferredChannel);
-  const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
+  const { proDomain } = require('./lib/appDomains');
+  const domain = proDomain();
   const periodeSafe = String(periode || '').replace(/[^\d-]/g, '').slice(0, 7);
   const refCommand = `DETTE-${Number(gerantId)}-${periodeSafe}-${Date.now()}`;
 

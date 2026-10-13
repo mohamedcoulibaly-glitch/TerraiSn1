@@ -82,3 +82,9 @@ services:
         value: lax
       - key: VAPID_SUBJECT
         value: mailto:contact@terrainsn.com
+      # Domaines front (mono-host : APP_DOMAIN_PRO = APP_DOMAIN + /pro)
+      # À surcharger dans le dashboard avec l'URL réelle du service :
+      # APP_DOMAIN=https://xxx.onrender.com
+      # APP_DOMAIN_JOUEUR=https://xxx.onrender.com
+      # APP_DOMAIN_PRO=https://xxx.onrender.com/pro
+      # CORS_ORIGINS=https://xxx.onrender.com

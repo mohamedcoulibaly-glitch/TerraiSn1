@@ -132,7 +132,8 @@ async function creerCheckoutAbonnement(database, abonnementId, options = {}) {
 
   const canal = normalizeCanal(options.preferredChannel || options.canal);
   const refCommand = `ABO-${abonnementId}-${Date.now()}`;
-  const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
+  const { proDomain } = require('./lib/appDomains');
+  const domain = proDomain();
 
   let payment;
   if (estSimulation() || paytechService.estModeMock()) {
@@ -214,7 +215,8 @@ async function creerCheckoutAchatDefinitif(database, terrainId, options = {}) {
 
   const canal = normalizeCanal(options.preferredChannel || options.canal);
   const refCommand = `ACHAT-${terrainId}-${Date.now()}`;
-  const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
+  const { proDomain } = require('./lib/appDomains');
+  const domain = proDomain();
 
   let payment;
   if (estSimulation() || paytechService.estModeMock()) {

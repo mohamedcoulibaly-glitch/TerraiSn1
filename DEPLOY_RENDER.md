@@ -25,6 +25,8 @@ Puis **Environment** → variables de base :
 | `SKIP_SEED` | `false` |
 | `COOKIE_SAMESITE` | `lax` |
 | `APP_DOMAIN` | `https://terraisn1-1.onrender.com` (domaine prod canonique) |
+| `APP_DOMAIN_JOUEUR` | `https://terraisn1-1.onrender.com` |
+| `APP_DOMAIN_PRO` | `https://terraisn1-1.onrender.com/pro` |
 | `CORS_ORIGINS` | `https://terraisn1-1.onrender.com` |
 
 **Manual Deploy** → **Deploy latest commit**.

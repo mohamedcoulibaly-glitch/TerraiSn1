@@ -410,7 +410,7 @@ async function notifierGerantInApp(contrat, notif) {
     await pushService.notifyAccount({
       userId: contrat.gerant_id,
       accountType: 'employe',
-      url: '/backoffice/gerant/finances',
+      url: require('./lib/appDomains').withProPath('/backoffice/gerant/finances'),
       ...notif,
     });
   } catch {

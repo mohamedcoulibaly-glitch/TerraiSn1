@@ -3,8 +3,8 @@
  * TerrainSN — Commande de lancement unifié (backend + frontends)
  *
  * Usage :
- *   npm run dev                → backend + frontend (8080) + admin-frontend (8081)
- *   npm run dev -- --no-admin  → backend + frontend uniquement
+ *   npm run dev                → backend + joueur (5173) + pro (5174) + admin (8081)
+ *   npm run dev -- --no-admin  → backend + joueur + pro
  *   npm run dev -- --no-frontend → backend + admin-frontend uniquement
  *   npm run accounts           → affiche uniquement les comptes de démo
  *
@@ -42,16 +42,24 @@ const SERVICES = {
     args: ['run', 'dev'],
     url: 'http://localhost:3001',
   },
-  frontend: {
-    name: 'Frontend (app joueur / backoffice)',
-    tag: 'WEB',
+  joueur: {
+    name: 'Frontend joueur (app.terrainsn.com)',
+    tag: 'JOUEUR',
     color: C.cyan,
-    cwd: path.join(ROOT, 'frontend'),
+    cwd: path.join(ROOT, 'frontend-joueur'),
     args: ['run', 'dev'],
-    url: 'http://localhost:8080',
+    url: 'http://localhost:5173',
+  },
+  pro: {
+    name: 'Frontend pro (pro.terrainsn.com)',
+    tag: 'PRO',
+    color: C.green,
+    cwd: path.join(ROOT, 'frontend-pro'),
+    args: ['run', 'dev'],
+    url: 'http://localhost:5174',
   },
   admin: {
-    name: 'Admin Frontend (dashboard super admin)',
+    name: 'Admin Frontend (dashboard super admin — legacy)',
     tag: 'ADMIN',
     color: C.blue,
     cwd: path.join(ROOT, 'admin-frontend'),
@@ -226,10 +234,10 @@ async function loadAccounts(db) {
 }
 
 const ROLE_INFO = {
-  super_admin: { label: 'SUPER ADMIN', url: 'Admin Dashboard', href: SERVICES.admin.url },
-  proprietaire: { label: 'PROPRIÉTAIRE', url: 'Application TerrainSN', href: SERVICES.frontend.url },
-  gerant: { label: 'GÉRANT', url: 'Application TerrainSN', href: SERVICES.frontend.url },
-  joueur: { label: 'JOUEUR', url: 'Application TerrainSN', href: SERVICES.frontend.url },
+  super_admin: { label: 'SUPER ADMIN', url: 'TerrainSN Pro', href: `${SERVICES.pro.url}/login` },
+  proprietaire: { label: 'PROPRIÉTAIRE', url: 'TerrainSN Pro', href: `${SERVICES.pro.url}/login` },
+  gerant: { label: 'GÉRANT', url: 'TerrainSN Pro', href: `${SERVICES.pro.url}/login` },
+  joueur: { label: 'JOUEUR', url: 'TerrainSN', href: `${SERVICES.joueur.url}/login` },
 };
 
 function printAccounts(accounts) {
@@ -308,7 +316,10 @@ async function main() {
   logLine(C.green, '='.repeat(WIDTH));
 
   const toStart = ['backend'];
-  if (!SKIP_FRONTEND) toStart.push('frontend');
+  if (!SKIP_FRONTEND) {
+    toStart.push('joueur');
+    toStart.push('pro');
+  }
   if (!SKIP_ADMIN) toStart.push('admin');
 
   for (const key of toStart) {

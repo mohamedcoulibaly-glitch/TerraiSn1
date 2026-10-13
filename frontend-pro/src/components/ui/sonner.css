@@ -1,0 +1,113 @@
+/**
+ * Toasts TerrainSN (sonner) — palette commune à tous les acteurs.
+ *   success #059669 · error #DC2626 · warning #D97706 · info #2563EB
+ * Bordure gauche 4px (teinte sombre) + barre de progression 4 s (sous le toast).
+ * La progression est un dégradé animé (les pseudo-éléments de sonner restent libres).
+ */
+
+[data-sonner-toaster].terrainsn-toaster {
+  --terrainsn-toast-duration: 4000ms;
+  --terrainsn-toast-radius: 10px;
+  --border-radius: var(--terrainsn-toast-radius);
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast] {
+  --terrainsn-toast-bg: #374151;
+  --terrainsn-toast-border: #111827;
+
+  color: #ffffff;
+  background-color: var(--terrainsn-toast-bg);
+  border: 0;
+  border-left: 4px solid var(--terrainsn-toast-border);
+  border-radius: var(--terrainsn-toast-radius);
+  box-shadow: 0 10px 25px -8px rgba(15, 23, 42, 0.45), 0 4px 10px -4px rgba(15, 23, 42, 0.3);
+  font-weight: 500;
+
+  /* barre de progression */
+  background-image: linear-gradient(rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.55));
+  background-repeat: no-repeat;
+  background-position: left bottom;
+  background-size: 100% 3px;
+  animation: terrainsn-toast-progress var(--terrainsn-toast-duration) linear forwards;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast][data-type='success'] {
+  --terrainsn-toast-bg: #059669;
+  --terrainsn-toast-border: #064e3b;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast][data-type='error'] {
+  --terrainsn-toast-bg: #dc2626;
+  --terrainsn-toast-border: #7f1d1d;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast][data-type='warning'] {
+  --terrainsn-toast-bg: #d97706;
+  --terrainsn-toast-border: #78350f;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast][data-type='info'] {
+  --terrainsn-toast-bg: #2563eb;
+  --terrainsn-toast-border: #1e3a8a;
+}
+
+/* loading / default / custom : pas de barre de progression */
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast][data-type='loading'],
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast][data-type='default'],
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast][data-sonner-toast-custom] {
+  background-image: none;
+  animation: none;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast] [data-title] {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast] [data-description] {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast] [data-icon] {
+  width: 20px;
+  height: 20px;
+  color: #ffffff;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast] [data-icon] > svg {
+  width: 20px;
+  height: 20px;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast] [data-button] {
+  background: rgba(255, 255, 255, 0.95);
+  color: #111827;
+  font-weight: 600;
+}
+
+[data-sonner-toaster].terrainsn-toaster [data-sonner-toast] [data-close-button] {
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid rgba(15, 23, 42, 0.15);
+}
+
+/* la progression se fige quand l'utilisateur survole la pile (sonner met aussi son timer en pause) */
+[data-sonner-toaster].terrainsn-toaster:hover [data-sonner-toast] {
+  animation-play-state: paused;
+}
+
+@keyframes terrainsn-toast-progress {
+  from {
+    background-size: 100% 3px;
+  }
+  to {
+    background-size: 0% 3px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-sonner-toaster].terrainsn-toaster [data-sonner-toast] {
+    animation: none;
+    background-image: none;
+  }
+}

@@ -1,11 +1,20 @@
 require('dotenv').config();
 
-// Render injecte RENDER_EXTERNAL_URL — sert de APP_DOMAIN / CORS si non définis
+// Render injecte RENDER_EXTERNAL_URL — sert de APP_DOMAIN si non défini
 if (!process.env.APP_DOMAIN && process.env.RENDER_EXTERNAL_URL) {
   process.env.APP_DOMAIN = process.env.RENDER_EXTERNAL_URL;
 }
-if (!process.env.CORS_ORIGINS && process.env.APP_DOMAIN) {
-  process.env.CORS_ORIGINS = process.env.APP_DOMAIN;
+// Ne pas écraser CORS avec un seul APP_DOMAIN : joueur + pro doivent coexister.
+if (!process.env.CORS_ORIGINS) {
+  const corsParts = [
+    process.env.APP_DOMAIN_JOUEUR,
+    process.env.APP_DOMAIN_PRO,
+    process.env.APP_DOMAIN,
+    process.env.RENDER_EXTERNAL_URL,
+  ].filter(Boolean);
+  if (corsParts.length) {
+    process.env.CORS_ORIGINS = [...new Set(corsParts)].join(',');
+  }
 }
 
 require('./whatsappClient');
@@ -391,11 +400,27 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 }
 
 // Middleware
+const defaultDevOrigins = [
+  'http://localhost:5173', // frontend-joueur
+  'http://localhost:5174', // frontend-pro
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://localhost:8080', // legacy frontend monolith
+  'http://localhost:8081', // admin-frontend
+  'http://127.0.0.1:8080',
+  'http://127.0.0.1:8081',
+  'https://app.terrainsn.com',
+  'https://pro.terrainsn.com',
+].join(',');
 const allowedOrigins = (
   process.env.CORS_ORIGINS
-  || process.env.APP_DOMAIN
-  || process.env.RENDER_EXTERNAL_URL
-  || 'http://localhost:8080,http://localhost:8081,http://127.0.0.1:8080,http://127.0.0.1:8081'
+  || [
+    process.env.APP_DOMAIN_JOUEUR,
+    process.env.APP_DOMAIN_PRO,
+    process.env.APP_DOMAIN,
+    process.env.RENDER_EXTERNAL_URL,
+  ].filter(Boolean).join(',')
+  || defaultDevOrigins
 )
   .split(',')
   .map((origin) => origin.trim())
@@ -714,11 +739,11 @@ app.post('/api/auth/resend-otp', otpRateLimit, async (req, res) => {
   }
 });
 
-// Connexion (tous types de comptes)
+// Connexion joueur uniquement — refuse gérant / propriétaire / super_admin
 app.post('/api/auth/login', authRateLimit, async (req, res) => {
   try {
     const db = await getDb();
-    const { email, telephone, password, accountType } = req.body;
+    const { email, telephone, password } = req.body;
     const identifier = String(email || telephone || '').trim();
     if (!identifier || !password) {
       return res.status(400).json({ error: 'Identifiant et mot de passe obligatoires' });
@@ -729,96 +754,72 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
       phoneDigits && otpService.normalizeTelephone(row.telephone) === phoneDigits;
     const matchEmail = (row) => row.email && String(row.email).toLowerCase() === identifier.toLowerCase();
     const findIn = (rows) => rows.find((row) => matchEmail(row) || matchPhone(row)) || null;
+    const passwordOk = (row) =>
+      row && typeof row.password_hash === 'string' && row.password_hash.length > 0
+      && bcrypt.compareSync(password, row.password_hash);
 
-    let account = null;
-    let role = '';
-    let resolvedType = accountType || null;
-
-    if (resolvedType === 'proprietaire') {
-      account = findIn(queryAll(db, 'SELECT * FROM proprietaires'));
-      role = 'proprietaire';
-    } else if (resolvedType === 'employe') {
-      account = findIn(queryAll(db, 'SELECT * FROM employes'));
-      role = 'gerant';
-    } else if (resolvedType === 'user') {
-      account = findIn(queryAll(db, 'SELECT * FROM users'));
-      role = account?.role === 'super_admin' || account?.role === 'superadmin'
-        ? (account.role === 'superadmin' ? 'super_admin' : account.role)
-        : (account?.role || 'joueur');
+    // 1) Priorité au compte joueur (même numéro peut exister en pro)
+    const asUser = findIn(queryAll(db, 'SELECT * FROM users'));
+    if (asUser && passwordOk(asUser)) {
+      let role = asUser.role === 'superadmin' ? 'super_admin' : (asUser.role || 'joueur');
       if (role === 'superadmin') role = 'super_admin';
-    } else {
-      // Auto-détection du rôle (login unique frontend) — ne change pas les tables métier
-      const asUser = findIn(queryAll(db, 'SELECT * FROM users'));
-      if (asUser) {
-        account = asUser;
-        resolvedType = 'user';
-        role = asUser.role === 'superadmin' ? 'super_admin' : (asUser.role || 'joueur');
-      } else {
-        const asProprio = findIn(queryAll(db, 'SELECT * FROM proprietaires'));
-        if (asProprio) {
-          account = asProprio;
-          resolvedType = 'proprietaire';
-          role = 'proprietaire';
-        } else {
-          const asEmploye = findIn(queryAll(db, 'SELECT * FROM employes'));
-          if (asEmploye) {
-            account = asEmploye;
-            resolvedType = 'employe';
-            role = 'gerant';
-          }
-        }
+
+      if (role !== 'joueur' && role !== 'user') {
+        const { proDomain } = require('./lib/appDomains');
+        return res.status(403).json({
+          error: `Compte professionnel. Connectez-vous sur ${proDomain()}`,
+          code: 'COMPTE_PRO',
+        });
       }
-    }
 
-    if (!account) return res.status(401).json({ error: 'Identifiants incorrects' });
-    if (!bcrypt.compareSync(password, account.password_hash)) {
-      return res.status(401).json({ error: 'Identifiants incorrects' });
-    }
-    if (isAccountBlocked(account, resolvedType || 'user')) {
-      return res.status(403).json({
-        error: 'Ton compte a été suspendu. Contacte le support.',
+      const resolvedType = 'user';
+      if (isAccountBlocked(asUser, resolvedType)) {
+        return res.status(403).json({
+          error: 'Ton compte a été suspendu. Contacte le support.',
+        });
+      }
+
+      if (
+        asUser.telephone_verified !== undefined &&
+        asUser.telephone_verified !== null &&
+        Number(asUser.telephone_verified) === 0
+      ) {
+        return res.status(403).json({
+          error: 'Compte non vérifié. Validez le code WhatsApp reçu.',
+          code: 'OTP_REQUIRED',
+          telephone: asUser.telephone,
+        });
+      }
+
+      const tokenPayload = {
+        id: asUser.id,
+        email: asUser.email,
+        telephone: asUser.telephone,
+        role: 'joueur',
+        accountType: resolvedType,
+        must_change_password: Boolean(asUser.must_change_password),
+      };
+      const accessToken = issueAuthTokens(res, db, tokenPayload);
+      const { password_hash, ...safeAccount } = asUser;
+      return res.json({
+        user: { ...safeAccount, role: 'joueur', accountType: resolvedType },
+        token: accessToken,
+        accessToken,
       });
     }
 
-    // Joueurs inscrits via OTP : bloquer tant que le téléphone n'est pas vérifié
-    if (
-      (resolvedType === 'user' || !resolvedType) &&
-      (role === 'joueur' || role === 'user') &&
-      account.telephone_verified !== undefined &&
-      account.telephone_verified !== null &&
-      Number(account.telephone_verified) === 0
-    ) {
+    // 2) Mot de passe pro valide → message clair (ne bloque pas un joueur au mauvais mdp)
+    const asProprio = findIn(queryAll(db, 'SELECT * FROM proprietaires'));
+    const asEmploye = findIn(queryAll(db, 'SELECT * FROM employes'));
+    if (passwordOk(asProprio) || passwordOk(asEmploye)) {
+      const { proDomain } = require('./lib/appDomains');
       return res.status(403).json({
-        error: 'Compte non vérifié. Validez le code WhatsApp reçu.',
-        code: 'OTP_REQUIRED',
-        telephone: account.telephone,
+        error: `Compte professionnel. Connectez-vous sur ${proDomain()}`,
+        code: 'COMPTE_PRO',
       });
     }
 
-    const tokenPayload = {
-      id: account.id,
-      email: account.email,
-      telephone: account.telephone,
-      role,
-      accountType: resolvedType || 'user',
-      must_change_password: Boolean(account.must_change_password),
-    };
-    if (resolvedType === 'employe') {
-      tokenPayload.terrain_id = account.terrain_id;
-      tokenPayload.proprietaire_id = account.proprietaire_id;
-    }
-    if (resolvedType === 'proprietaire') {
-      tokenPayload.proprietaire_id = account.id;
-    }
-
-    const accessToken = issueAuthTokens(res, db, tokenPayload);
-
-    const { password_hash, ...safeAccount } = account;
-    res.json({
-      user: { ...safeAccount, role, accountType: resolvedType || 'user' },
-      token: accessToken,
-      accessToken,
-    });
+    return res.status(401).json({ error: 'Identifiants incorrects' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -3989,22 +3990,30 @@ app.patch('/api/profil/admin', authMiddleware, requireRole('super_admin'), async
 });
 
 // ============================================================
-// SERVE STATIC (production) — frontend + admin (même origine)
+// SERVE STATIC (production) — joueur (/) + pro (/pro) + admin (/admin)
+// En domaines séparés (app. / pro.), Nginx sert les dist ; ici = fallback Render mono-host.
 // ============================================================
 if (process.env.NODE_ENV === 'production') {
   const PUBLIC_DIR = process.env.PUBLIC_DIR
     ? path.resolve(process.env.PUBLIC_DIR)
-    : path.join(__dirname, '..', 'frontend', 'dist');
+    : path.join(__dirname, '..', 'frontend-joueur', 'dist');
+  const PRO_PUBLIC_DIR = process.env.PRO_PUBLIC_DIR
+    ? path.resolve(process.env.PRO_PUBLIC_DIR)
+    : path.join(__dirname, '..', 'frontend-pro', 'dist');
   const ADMIN_PUBLIC_DIR = process.env.ADMIN_PUBLIC_DIR
     ? path.resolve(process.env.ADMIN_PUBLIC_DIR)
     : path.join(__dirname, '..', 'admin-frontend', 'dist');
+  // Fallback legacy monolithe si frontend-joueur absent
+  const LEGACY_PUBLIC_DIR = path.join(__dirname, '..', 'frontend', 'dist');
+  const joueurDist = fs.existsSync(PUBLIC_DIR) ? PUBLIC_DIR
+    : (fs.existsSync(LEGACY_PUBLIC_DIR) ? LEGACY_PUBLIC_DIR : null);
 
   const staticHeaders = {
     maxAge: '1y',
     immutable: true,
     setHeaders(res, filePath) {
-      if (filePath.endsWith('.html')) {
-        res.setHeader('Cache-Control', 'no-cache');
+      if (filePath.endsWith('.html') || filePath.endsWith('sw.js') || filePath.endsWith('manifest.webmanifest') || filePath.endsWith('manifest.json')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       } else if (/\.(js|css|png|jpg|webp|avif|svg|woff2|ico)$/i.test(filePath)) {
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       }
@@ -4031,17 +4040,30 @@ if (process.env.NODE_ENV === 'production') {
     logger.info('index.js', `Admin SPA servie depuis ${ADMIN_PUBLIC_DIR} (/admin)`);
   }
 
-  if (fs.existsSync(PUBLIC_DIR)) {
-    app.use(express.static(PUBLIC_DIR, staticHeaders));
-    app.get('*', (req, res, next) => {
-      if (isApiOrAssetPath(req.path) || req.path.startsWith('/admin')) {
-        return next();
-      }
-      res.sendFile(path.join(PUBLIC_DIR, 'index.html'), (err) => {
+  if (fs.existsSync(PRO_PUBLIC_DIR)) {
+    app.use('/pro', express.static(PRO_PUBLIC_DIR, staticHeaders));
+    app.get(/^\/pro(\/.*)?$/, (req, res, next) => {
+      if (path.extname(req.path)) return next();
+      res.sendFile(path.join(PRO_PUBLIC_DIR, 'index.html'), (err) => {
         if (err) next();
       });
     });
-    logger.info('index.js', `Frontend SPA servi depuis ${PUBLIC_DIR}`);
+    logger.info('index.js', `Pro SPA servie depuis ${PRO_PUBLIC_DIR} (/pro)`);
+  }
+
+  if (joueurDist) {
+    const isMountedSpa = (reqPath, base) => reqPath === base || reqPath.startsWith(`${base}/`);
+    app.use(express.static(joueurDist, staticHeaders));
+    app.get('*', (req, res, next) => {
+      // Attention : '/profil'.startsWith('/pro') === true → utiliser isMountedSpa
+      if (isApiOrAssetPath(req.path) || isMountedSpa(req.path, '/admin') || isMountedSpa(req.path, '/pro')) {
+        return next();
+      }
+      res.sendFile(path.join(joueurDist, 'index.html'), (err) => {
+        if (err) next();
+      });
+    });
+    logger.info('index.js', `Joueur SPA servi depuis ${joueurDist}`);
   } else {
     logger.warn('index.js', `PUBLIC_DIR introuvable (${PUBLIC_DIR}) — API seule`);
   }

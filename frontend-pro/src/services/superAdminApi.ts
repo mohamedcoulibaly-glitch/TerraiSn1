@@ -1,0 +1,494 @@
+import { authApi } from "@/lib/api";
+
+const API_URL = import.meta.env.VITE_API_URL || "/api";
+
+export type TerrainPhoto = {
+  id: number;
+  terrain_id: number;
+  url: string;
+  nom_fichier?: string | null;
+  taille_octets?: number | null;
+  est_principale?: number | boolean;
+  ordre?: number;
+  uploaded_by?: number | null;
+  uploaded_by_role?: string | null;
+};
+
+function isTokenExpireError(data: unknown): boolean {
+  const err = typeof (data as { error?: unknown })?.error === "string"
+    ? String((data as { error: string }).error)
+    : "";
+  return (
+    err === "TOKEN_EXPIRE" ||
+    /token.?expir/i.test(err) ||
+    /jwt expired/i.test(err)
+  );
+}
+
+async function adminRequest(endpoint: string, options: RequestInit = {}, retried = false): Promise<any> {
+  const token = authApi.getToken() || localStorage.getItem("admin_token");
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string> || {}),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_URL}${endpoint}`, {
+    cache: "no-store",
+    ...options,
+    headers,
+    credentials: "include",
+  });
+
+  if (res.status === 401 && !retried && endpoint !== "/admin/auth/login") {
+    let body: Record<string, unknown> = {};
+    try {
+      body = await res.clone().json();
+    } catch {
+      body = {};
+    }
+    if (isTokenExpireError(body) || !body.error) {
+      const next = await authApi.refresh();
+      if (next) {
+        localStorage.setItem("admin_token", next);
+        return adminRequest(endpoint, options, true);
+      }
+    }
+  }
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const raw = typeof (data as { error?: string }).error === "string"
+      ? (data as { error: string }).error
+      : "Erreur serveur";
+    if (isTokenExpireError(data)) {
+      throw new Error("Session expirée. Reconnectez-vous.");
+    }
+    throw new Error(raw);
+  }
+  return data;
+}
+
+async function adminFormData(endpoint: string, form: FormData, retried = false): Promise<any> {
+  const token = authApi.getToken() || localStorage.getItem("admin_token");
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_URL}${endpoint}`, {
+    method: "POST",
+    body: form,
+    headers,
+    cache: "no-store",
+    credentials: "include",
+  });
+
+  if (res.status === 401 && !retried) {
+    let body: Record<string, unknown> = {};
+    try {
+      body = await res.clone().json();
+    } catch {
+      body = {};
+    }
+    if (isTokenExpireError(body) || !body.error) {
+      const next = await authApi.refresh();
+      if (next) {
+        localStorage.setItem("admin_token", next);
+        return adminFormData(endpoint, form, true);
+      }
+    }
+  }
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const raw = typeof (data as { error?: string }).error === "string"
+      ? (data as { error: string }).error
+      : "Erreur serveur";
+    if (isTokenExpireError(data)) {
+      throw new Error("Session expirée. Reconnectez-vous.");
+    }
+    throw new Error(raw);
+  }
+  return data;
+}
+
+/** Endpoints super_admin (routes /api/admin/*). */
+export const superAdminApi = {
+  login: (telephone: string, password: string) =>
+    adminRequest("/admin/auth/login", { method: "POST", body: JSON.stringify({ telephone, password }) }),
+  dashboard: () => adminRequest("/admin/dashboard"),
+  profile: () => adminRequest("/admin/profile"),
+  terrains: () => adminRequest("/admin/terrains"),
+  createTerrain: (data: unknown) =>
+    adminRequest("/admin/terrains", { method: "POST", body: JSON.stringify(data) }),
+  updateLocalisation: (
+    id: number,
+    data: {
+      adresse_theorique?: string | null;
+      adresse_nominatim?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+    },
+  ) => adminRequest(`/admin/terrains/${id}/localisation`, { method: "PATCH", body: JSON.stringify(data) }),
+  terrainStatus: (id: number, statut: string) =>
+    adminRequest(`/admin/terrains/${id}/statut`, { method: "PATCH", body: JSON.stringify({ statut }) }),
+  terrainPhotos: (id: number): Promise<TerrainPhoto[]> => adminRequest(`/admin/terrains/${id}/photos`),
+  uploadTerrainPhoto: (id: number, data: { dataUrl: string; est_principale?: boolean; ordre?: number }) =>
+    adminRequest(`/admin/terrains/${id}/photos`, { method: "POST", body: JSON.stringify(data) }),
+  uploadTerrainPhotoFile: (id: number, file: File, estPrincipale = false) => {
+    const form = new FormData();
+    form.append("photos", file);
+    if (estPrincipale) form.append("est_principale", "true");
+    return adminFormData(`/admin/terrains/${id}/photos`, form);
+  },
+  updateTerrainPhoto: (id: number, photoId: number, data: { est_principale?: boolean; ordre?: number }) =>
+    adminRequest(`/admin/terrains/${id}/photos/${photoId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  setTerrainPhotoPrincipale: (id: number, photoId: number) =>
+    adminRequest(`/admin/terrains/${id}/photos/${photoId}/principale`, { method: "PATCH" }),
+  reorderTerrainPhotos: (id: number, ordre: number[]) =>
+    adminRequest(`/admin/terrains/${id}/photos/ordre`, { method: "PATCH", body: JSON.stringify({ ordre }) }),
+  removeTerrainPhoto: (id: number, photoId: number) =>
+    adminRequest(`/admin/terrains/${id}/photos/${photoId}`, { method: "DELETE" }),
+  users: () => adminRequest("/admin/users"),
+  createUser: (data: {
+    nom: string;
+    prenom?: string;
+    telephone: string;
+    email?: string;
+    role: "gerant" | "proprietaire";
+    terrain_id?: number | null;
+  }) => adminRequest("/admin/users", { method: "POST", body: JSON.stringify(data) }),
+  createGerant: (data: {
+    nom: string;
+    prenom?: string;
+    telephone: string;
+    email?: string;
+    terrain_id: number;
+  }) =>
+    adminRequest("/admin/users", {
+      method: "POST",
+      body: JSON.stringify({ ...data, role: "gerant" }),
+    }),
+  revenus: (periode: string) => adminRequest(`/admin/revenus?periode=${periode}`),
+  finances: () => adminRequest("/admin/finances"),
+  abonnements: () => adminRequest("/admin/abonnements"),
+  payerAbonnement: (id: number) =>
+    adminRequest(`/admin/abonnements/${id}/payer`, { method: "POST" }),
+  payerAchatDefinitif: (terrainId: number, montant?: number) =>
+    adminRequest(`/admin/terrains/${terrainId}/achat-definitif/payer`, {
+      method: "POST",
+      body: JSON.stringify({ montant }),
+    }),
+  politiqueAnnulation: (terrainId: number, delai_remboursement_heures: number) =>
+    adminRequest(`/admin/terrains/${terrainId}/politique-annulation`, {
+      method: "PATCH",
+      body: JSON.stringify({ delai_remboursement_heures }),
+    }),
+  politiquePaiement: (
+    terrainId: number,
+    data: { politique_paiement?: "avance" | "sans_avance"; delai_paiement_dette_jours?: number },
+  ) =>
+    adminRequest(`/admin/terrains/${terrainId}/politique-paiement`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  delaiVerrouPaiement: (terrainId: number, delai_verrou_paiement_min: number) =>
+    adminRequest(`/admin/terrains/${terrainId}/delai-verrou-paiement`, {
+      method: "PATCH",
+      body: JSON.stringify({ delai_verrou_paiement_min }),
+    }),
+  updateTarifs: (terrainId: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${terrainId}/tarifs`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  reglesTarifs: (terrainId: number) => adminRequest(`/admin/terrains/${terrainId}/regles-tarifs`),
+  createRegleTarif: (terrainId: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${terrainId}/regles-tarifs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateRegleTarif: (terrainId: number, regleId: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${terrainId}/regles-tarifs/${regleId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  toggleRegleTarif: (terrainId: number, regleId: number, actif: boolean) =>
+    adminRequest(`/admin/terrains/${terrainId}/regles-tarifs/${regleId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ actif }),
+    }),
+  deleteRegleTarif: (terrainId: number, regleId: number) =>
+    adminRequest(`/admin/terrains/${terrainId}/regles-tarifs/${regleId}`, { method: "DELETE" }),
+  saveGrilleTarifs: (terrainId: number, data: unknown) =>
+    adminRequest(`/admin/terrains/${terrainId}/grille-tarifs`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  terrainFormats: (terrainId: number) => adminRequest(`/admin/terrains/${terrainId}/formats`),
+  saveTerrainFormats: (
+    terrainId: number,
+    body: { formats: unknown[]; durees: unknown[] },
+  ) =>
+    adminRequest(`/admin/terrains/${terrainId}/formats`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  validerPropositionTarif: (id: number) =>
+    adminRequest(`/admin/propositions-tarifs/${id}/valider`, { method: "POST" }),
+  refuserPropositionTarif: (id: number, commentaire?: string) =>
+    adminRequest(`/admin/propositions-tarifs/${id}/refuser`, {
+      method: "POST",
+      body: JSON.stringify({ commentaire }),
+    }),
+  dettes: (params?: { periode?: string; terrain_id?: number; statut?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.periode) sp.set("periode", params.periode);
+    if (params?.terrain_id) sp.set("terrain_id", String(params.terrain_id));
+    if (params?.statut) sp.set("statut", params.statut);
+    const q = sp.toString();
+    return adminRequest(`/admin/dettes${q ? `?${q}` : ""}`);
+  },
+  remiseAZeroDette: (terrainId: number, data: { note?: string; montant_recu?: number; periode?: string }) =>
+    adminRequest(`/admin/dettes/${terrainId}/remise-a-zero`, { method: "PATCH", body: JSON.stringify(data) }),
+  saveDetteInstructions: (texte: string) =>
+    adminRequest("/admin/dettes/instructions", { method: "PATCH", body: JSON.stringify({ texte }) }),
+  commodites: () => adminRequest("/admin/commodites"),
+  createCommodite: (data: unknown) =>
+    adminRequest("/admin/commodites", { method: "POST", body: JSON.stringify(data) }),
+  updateCommodite: (id: number, data: unknown) =>
+    adminRequest(`/admin/commodites/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteCommodite: (id: number) =>
+    adminRequest(`/admin/commodites/${id}`, { method: "DELETE" }),
+  terrainCommodites: (id: number) => adminRequest(`/admin/terrains/${id}/commodites`),
+  saveTerrainCommodites: (id: number, commodite_ids: number[]) =>
+    adminRequest(`/admin/terrains/${id}/commodites`, { method: "PUT", body: JSON.stringify({ commodite_ids }) }),
+  terrainAudit: (id: number) => adminRequest(`/admin/terrains/${id}/audit`),
+  auditGlobal: (params?: Record<string, string | number | undefined>) => {
+    const sp = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v != null && v !== "") sp.set(k, String(v));
+    });
+    const q = sp.toString();
+    return adminRequest(`/admin/audit/photos-commodites${q ? `?${q}` : ""}`);
+  },
+  terrainEssai: (id: number) => adminRequest(`/admin/terrains/${id}/essai`),
+  patchTerrainEssai: (id: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${id}/essai`, { method: "PATCH", body: JSON.stringify(body) }),
+  essaiKpis: () => adminRequest("/admin/essai-kpis"),
+  terrainFeatures: (id: number) => adminRequest(`/admin/terrains/${id}/features`),
+  saveTerrainFeatures: (id: number, features: { cle: string; actif: boolean }[]) =>
+    adminRequest(`/admin/terrains/${id}/features`, { method: "PUT", body: JSON.stringify({ features }) }),
+  getNuitProlongeeSettings: () => adminRequest("/admin/nuit-prolongee"),
+  saveNuitProlongeeSettings: (body: { heure_fermeture_maximale: string }) =>
+    adminRequest("/admin/nuit-prolongee", { method: "PUT", body: JSON.stringify(body) }),
+  getIntegrations: () => adminRequest("/admin/integrations"),
+  saveIntegrations: (body: Record<string, string>) =>
+    adminRequest("/admin/integrations", { method: "PUT", body: JSON.stringify(body) }),
+  /** Régénère la paire VAPID (invalide tous les abonnements push). Confirmation obligatoire. */
+  regenerateVapid: () =>
+    adminRequest("/admin/integrations/vapid/regenerate", {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    }),
+  whatsappStatus: () => adminRequest("/admin/whatsapp/status"),
+  whatsappQr: () => adminRequest("/admin/whatsapp/qr"),
+  whatsappConnect: (force = false, opts?: { telephone?: string; changeNumber?: boolean }) =>
+    adminRequest("/admin/whatsapp/connect", {
+      method: "POST",
+      body: JSON.stringify({
+        force,
+        changeNumber: opts?.changeNumber ?? force,
+        telephone: opts?.telephone,
+      }),
+    }),
+  whatsappDisconnect: () => adminRequest("/admin/whatsapp/disconnect", { method: "POST" }),
+  whatsappTest: (telephone: string) =>
+    adminRequest("/admin/whatsapp/test", { method: "POST", body: JSON.stringify({ telephone }) }),
+  bugAlertsStatus: () => adminRequest("/admin/bug-alerts/status"),
+  bugAlertsTest: (message?: string) =>
+    adminRequest("/admin/bug-alerts/test", {
+      method: "POST",
+      body: JSON.stringify({ message: message || "Test manuel alerte développeur" }),
+    }),
+  modeRevenuDefaults: () => adminRequest("/admin/mode-revenu/defaults"),
+  saveModeRevenuDefaults: (body: Record<string, unknown>) =>
+    adminRequest("/admin/mode-revenu/defaults", { method: "PATCH", body: JSON.stringify(body) }),
+  modeRevenuHistory: () => adminRequest("/admin/mode-revenu/history"),
+  patchTerrainModeRevenu: (id: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${id}/mode-revenu`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  // Multi-gérants
+  terrainGerants: (id: number) => adminRequest(`/admin/terrains/${id}/gerants`),
+  terrainGardeActuelle: (id: number) => adminRequest(`/admin/terrains/${id}/gerants/garde-actuelle`),
+  searchGerants: (q = "") => adminRequest(`/admin/gerants/search?q=${encodeURIComponent(q)}`),
+  addTerrainGerant: (
+    id: number,
+    body: {
+      gerant_id: number;
+      est_principal?: number | boolean;
+      note?: string | null;
+      date_debut?: string | null;
+      date_fin?: string | null;
+    },
+  ) => adminRequest(`/admin/terrains/${id}/gerants`, { method: "POST", body: JSON.stringify(body) }),
+  patchTerrainGerant: (id: number, gerantId: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${id}/gerants/${gerantId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  removeTerrainGerant: (id: number, gerantId: number) =>
+    adminRequest(`/admin/terrains/${id}/gerants/${gerantId}`, { method: "DELETE" }),
+  setGerantPrincipal: (id: number, gerantId: number) =>
+    adminRequest(`/admin/terrains/${id}/gerants/${gerantId}/principal`, { method: "POST" }),
+  saveGerantPlanning: (
+    id: number,
+    gerantId: number,
+    body: {
+      planning_hebdo: Array<{
+        jour_semaine: number;
+        heure_debut?: string | null;
+        heure_fin?: string | null;
+        actif?: boolean;
+      }>;
+      dates_specifiques: Array<{
+        date_specifique: string;
+        heure_debut?: string | null;
+        heure_fin?: string | null;
+      }>;
+    },
+  ) =>
+    adminRequest(`/admin/terrains/${id}/gerants/${gerantId}/planning`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  // Propriétaires / Superadmins
+  proprietaires: () => adminRequest("/admin/proprietaires"),
+  createProprietaire: (body: {
+    nom: string;
+    prenom?: string;
+    telephone: string;
+    email?: string;
+    terrain_id?: number | null;
+  }) => adminRequest("/admin/proprietaires", { method: "POST", body: JSON.stringify(body) }),
+  patchProprietaire: (id: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/proprietaires/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  superadmins: () => adminRequest("/admin/superadmins"),
+  createSuperadmin: (body: { nom: string; prenom?: string; telephone: string; email?: string }) =>
+    adminRequest("/admin/superadmins", { method: "POST", body: JSON.stringify(body) }),
+  patchSuperadmin: (id: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/superadmins/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  pushLogs: (params?: Record<string, string | number | undefined>) => {
+    const sp = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v != null && v !== "") sp.set(k, String(v));
+    });
+    const q = sp.toString();
+    return adminRequest(`/push/logs${q ? `?${q}` : ""}`);
+  },
+  locationConfig: (
+    terrainId: number,
+    body: { types_location?: "les_deux" | "entier" | "moitie"; duree_min_minutes?: number },
+  ) =>
+    adminRequest(`/admin/terrains/${terrainId}/location-config`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  // Contrats / canaux (adminPaiements)
+  getContrat: (terrainId: number) => adminRequest(`/admin/terrains/${terrainId}/contrat`),
+  saveContrat: (terrainId: number, body: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${terrainId}/contrat`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  previewContrat: (terrainId: number, body?: Record<string, unknown>) =>
+    adminRequest(`/admin/terrains/${terrainId}/contrat/preview`, {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  testCanal100: (terrainId: number, canal: "wave" | "om") =>
+    adminRequest(`/admin/terrains/${terrainId}/canaux/${canal}/test-100`, { method: "POST" }),
+  verifierCanal: (terrainId: number, canal: "wave" | "om") =>
+    adminRequest(`/admin/terrains/${terrainId}/canaux/${canal}/verifier`, { method: "POST" }),
+
+  // Checkout passerelle
+  checkoutAbonnement: (abonnementId: number, body?: { canal?: string; methode?: string }) =>
+    adminRequest(`/admin/abonnements/${abonnementId}/checkout`, {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  checkoutAchatDefinitif: (
+    terrainId: number,
+    body?: { montant?: number; canal?: string; methode?: string },
+  ) =>
+    adminRequest(`/admin/terrains/${terrainId}/achat-definitif/checkout`, {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+
+  // Caisse & retraits
+  caisseDashboard: () => adminRequest("/admin/caisse/dashboard"),
+  caisseFenetre: () => adminRequest("/admin/caisse/fenetre"),
+  caissePayableAuto: () => adminRequest("/admin/caisse/payable-auto"),
+  caissePayable: () => adminRequest("/admin/caisse/payable"),
+  caisseRetraits: (statut: string = "en_attente") =>
+    adminRequest(`/admin/caisse/retraits?statut=${encodeURIComponent(statut)}`),
+  caisseHistorique: (params?: { terrain_id?: number; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.terrain_id) sp.set("terrain_id", String(params.terrain_id));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return adminRequest(`/admin/caisse/historique${q ? `?${q}` : ""}`);
+  },
+  marquerRetraitEnvoye: (
+    id: number | string,
+    ref_manuelle?: string,
+    opts?: { mode_manuel?: boolean; manuel?: boolean },
+  ) =>
+    adminRequest(`/admin/caisse/retraits/${id}/envoyer`, {
+      method: "POST",
+      body: JSON.stringify({
+        ref_manuelle: ref_manuelle || undefined,
+        mode_manuel: Boolean(opts?.mode_manuel || opts?.manuel),
+        manuel: Boolean(opts?.mode_manuel || opts?.manuel),
+      }),
+    }),
+  rejeterRetrait: (id: number | string, motif: string) =>
+    adminRequest(`/admin/caisse/retraits/${id}/rejeter`, {
+      method: "POST",
+      body: JSON.stringify({ motif }),
+    }),
+  verserDu: (id: number | string) =>
+    adminRequest(`/admin/caisse/dus/${id}/verser`, { method: "POST" }),
+  tickFenetres: () => adminRequest("/admin/caisse/tick-fenetres", { method: "POST" }),
+  rapprochement: () => adminRequest("/admin/rapprochement"),
+  revenusPaiements: () => adminRequest("/admin/revenus-paiements"),
+
+  // Demandes de changement de numéro (gérants)
+  demandesNumero: () => adminRequest("/admin/demandes-numero"),
+  validerDemandeNumero: (id: number | string) =>
+    adminRequest(`/admin/demandes-numero/${id}/valider`, { method: "POST" }),
+  refuserDemandeNumero: (id: number | string, motif?: string) =>
+    adminRequest(`/admin/demandes-numero/${id}/refuser`, {
+      method: "POST",
+      body: JSON.stringify({ motif: motif || "" }),
+    }),
+};
+
+export type TerrainGerant = {
+  id?: number;
+  gerant_id: number;
+  terrain_id?: number;
+  prenom?: string | null;
+  nom?: string | null;
+  telephone?: string | null;
+  whatsapp_number?: string | null;
+  email?: string | null;
+  est_principal?: number | boolean;
+  actif?: number | boolean;
+  note?: string | null;
+  date_debut?: string | null;
+  date_fin?: string | null;
+  nb_gardes?: number;
+};
