@@ -573,7 +573,18 @@ export const terrainsApi = {
 // RESERVATIONS
 // ============================================================
 export const reservationsApi = {
-  async create(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: string }) {
+  async create(data: {
+    terrain_id: number;
+    date: string;
+    heure_debut: string;
+    heure_fin: string;
+    joueur_nom: string;
+    joueur_telephone: string;
+    format_terrain?: string;
+    methode_paiement?: 'wave' | 'orange_money';
+    canal_paiement?: 'wave' | 'orange_money';
+    sans_avance?: boolean;
+  }) {
     try {
       return await request('/reservations', { method: 'POST', body: JSON.stringify(data) });
     } catch (err) {

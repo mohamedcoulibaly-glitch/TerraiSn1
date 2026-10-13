@@ -103,8 +103,7 @@ function getConflits(database, terrainId, date, heureDebut, heureFin, exclureRes
   const debut = hhmm(heureDebut);
   const fin = hhmm(heureFin);
   const finCmp = fin === '00:00' ? '24:00' : fin;
-  const statutsCreneau = STATUTS_OCCUPES_CRENEAU.map((s) => `'${s}'`).join(', ');
-
+  const now = Date.now();
   const fromCreneaux = queryAll(
     database,
     `SELECT c.id, c.terrain_id, c.date, c.heure_debut, c.heure_fin, c.statut, c.duree_minutes,
@@ -112,17 +111,26 @@ function getConflits(database, terrainId, date, heureDebut, heureFin, exclureRes
             COALESCE(r.joueur_nom, u.nom) AS joueur_nom
        FROM creneaux c
        LEFT JOIN reservations r ON r.creneau_id = c.id
-         AND r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'en_attente')
+         AND (
+           r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
+           OR (r.statut = 'en_attente' AND r.verrou_expire_at IS NOT NULL AND r.verrou_expire_at > ?)
+         )
        LEFT JOIN users u ON u.id = r.joueur_id
       WHERE c.terrain_id = ?
         AND c.date = ?
-        AND c.statut IN (${statutsCreneau})
+        AND (
+          c.statut IN ('reserve', 'bloque', 'tournoi', 'abonnement')
+          OR (
+            c.statut = 'en_attente_paiement'
+            AND r.id IS NOT NULL
+          )
+        )
         AND substr(c.heure_debut, 1, 5) < ?
         AND (CASE WHEN substr(c.heure_fin, 1, 5) = '00:00' THEN '24:00' ELSE substr(c.heure_fin, 1, 5) END) > ?
         ${exclureReservationId ? 'AND (r.id IS NULL OR r.id != ?)' : ''}`,
     exclureReservationId
-      ? [terrainId, date, finCmp, debut, Number(exclureReservationId)]
-      : [terrainId, date, finCmp, debut],
+      ? [now, terrainId, date, finCmp, debut, Number(exclureReservationId)]
+      : [now, terrainId, date, finCmp, debut],
   );
 
   const fromResa = queryAll(
@@ -137,14 +145,14 @@ function getConflits(database, terrainId, date, heureDebut, heureFin, exclureRes
         AND r.date = ?
         AND (
           r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
-          OR (r.statut = 'en_attente' AND (r.verrou_expire_at IS NULL OR r.verrou_expire_at > ?))
+          OR (r.statut = 'en_attente' AND r.verrou_expire_at IS NOT NULL AND r.verrou_expire_at > ?)
         )
         AND substr(r.heure_debut, 1, 5) < ?
         AND (CASE WHEN substr(r.heure_fin, 1, 5) = '00:00' THEN '24:00' ELSE substr(r.heure_fin, 1, 5) END) > ?
         ${exclureReservationId ? 'AND r.id != ?' : ''}`,
     exclureReservationId
-      ? [terrainId, date, Date.now(), finCmp, debut, Number(exclureReservationId)]
-      : [terrainId, date, Date.now(), finCmp, debut],
+      ? [terrainId, date, now, finCmp, debut, Number(exclureReservationId)]
+      : [terrainId, date, now, finCmp, debut],
   );
 
   const seen = new Set();
@@ -217,15 +225,16 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
   const datesNeeded = [...new Set(planned.map((s) => toYmd(s.date)))];
   const placeholders = datesNeeded.map(() => '?').join(',');
 
+  const now = Date.now();
   const reservations = queryAll(
     database,
     `SELECT date, heure_debut, heure_fin, statut, joueur_nom FROM reservations
       WHERE terrain_id = ? AND date IN (${placeholders})
         AND (
           statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
-          OR (statut = 'en_attente' AND (verrou_expire_at IS NULL OR verrou_expire_at > ?))
+          OR (statut = 'en_attente' AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?)
         )`,
-    [terrainId, ...datesNeeded, Date.now()],
+    [terrainId, ...datesNeeded, now],
   );
   const blocages = queryAll(
     database,
@@ -240,6 +249,13 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
         AND statut IN (${STATUTS_OCCUPES_CRENEAU.map((s) => `'${s}'`).join(', ')})`,
     [terrainId, ...datesNeeded],
   );
+
+  const resaActives = reservations.map((r) => ({
+    date: toYmd(r.date),
+    heure_debut: hhmm(r.heure_debut),
+    heure_fin: hhmm(r.heure_fin),
+    statut: r.statut,
+  }));
 
   const occupes = [
     ...reservations.map((r) => ({
@@ -256,13 +272,27 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
       kind: 'bloque',
       label: b.type_blocage || b.motif || 'Bloqué',
     })),
-    ...creneauxOccupes.map((c) => ({
-      date: toYmd(c.date),
-      heure_debut: hhmm(c.heure_debut),
-      heure_fin: hhmm(c.heure_fin),
-      kind: c.statut === 'bloque' ? 'bloque' : 'reserve',
-      label: c.statut,
-    })),
+    // en_attente_paiement orphelin (paiement abandonné) ne doit plus bloquer l'affichage
+    ...creneauxOccupes
+      .filter((c) => {
+        if (c.statut !== 'en_attente_paiement') return true;
+        const d = toYmd(c.date);
+        const debut = hhmm(c.heure_debut);
+        const fin = hhmm(c.heure_fin);
+        return resaActives.some(
+          (r) =>
+            r.statut === 'en_attente' &&
+            r.date === d &&
+            chevauche(debut, fin, r.heure_debut, r.heure_fin),
+        );
+      })
+      .map((c) => ({
+        date: toYmd(c.date),
+        heure_debut: hhmm(c.heure_debut),
+        heure_fin: hhmm(c.heure_fin),
+        kind: c.statut === 'bloque' ? 'bloque' : 'reserve',
+        label: c.statut,
+      })),
   ];
 
   const creneaux = [];

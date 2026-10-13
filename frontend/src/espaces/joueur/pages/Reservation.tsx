@@ -1,7 +1,7 @@
 import { calculerMontantAvance } from "@/lib/avance";
-import { ArrowLeft, ShieldCheck, Handshake, Phone, CreditCard, Loader2 } from "lucide-react";
+import { ArrowLeft, ShieldCheck, Handshake, Phone, Loader2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { reservationsApi } from "@/lib/api";
 import { hapticSuccess, hapticError } from "@/lib/haptics";
 import { registerBackgroundSync } from "@/lib/pwaRegister";
@@ -20,6 +20,10 @@ type PaymentDraft = {
   name: string;
   phone: string;
 };
+
+type CanalPaiement = "wave" | "orange_money";
+
+const PENDING_PAYMENT_KEY = "terrainsn_pending_payment_id";
 
 const Payment = () => {
   const navigate = useNavigate();
@@ -46,7 +50,8 @@ const Payment = () => {
   const phone = payDraft.phone;
   const setName = (v: string) => setPayDraft((d) => ({ ...d, name: v }));
   const setPhone = (v: string) => setPayDraft((d) => ({ ...d, phone: v }));
-  const [processing, setProcessing] = useState(false);
+  const [processing, setProcessing] = useState<CanalPaiement | null>(null);
+  const redirectingRef = useRef(false);
   const deposit = calculerMontantAvance(montant, terrain?.pourcentage_avance);
   const reste = Math.max(0, montant - deposit);
   const sansAvance = ["sans_avance", "sans_acompte"].includes(
@@ -70,6 +75,32 @@ const Payment = () => {
     }));
   }, [isAuthenticated, user, setPayDraft]);
 
+  /** Retour navigateur / abandon : libère le créneau (ne pas laisser en_attente sans paiement). */
+  useEffect(() => {
+    const abandonPending = async () => {
+      if (redirectingRef.current) return;
+      const pendingId = sessionStorage.getItem(PENDING_PAYMENT_KEY);
+      if (!pendingId) return;
+      sessionStorage.removeItem(PENDING_PAYMENT_KEY);
+      try {
+        const resa = (await reservationsApi.get(pendingId)) as { statut?: string };
+        if (resa?.statut === "en_attente") {
+          await reservationsApi.annuler(pendingId);
+          toast.message("Paiement non terminé — créneau libéré");
+        }
+      } catch {
+        // ignore (déjà annulée / expirée)
+      }
+    };
+
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void abandonPending();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    void abandonPending();
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   const endTime = slot
     ? (() => {
         const h = parseInt(slot.split(":")[0]) + parseInt(duree);
@@ -77,7 +108,7 @@ const Payment = () => {
       })()
     : "";
 
-  const handlePay = async () => {
+  const handlePay = async (canal: CanalPaiement) => {
     if (processing) return;
     if (enLigneIndispo) {
       toast.error(
@@ -91,7 +122,7 @@ const Payment = () => {
       toast.error(phoneErr || "Veuillez saisir votre nom et numéro de téléphone");
       return;
     }
-    setProcessing(true);
+    setProcessing(canal);
     try {
       const reservation = await reservationsApi.create({
         terrain_id: parseInt(id!),
@@ -101,6 +132,8 @@ const Payment = () => {
         joueur_nom: name,
         joueur_telephone: toLocal9(phone),
         format_terrain: fieldFormat,
+        methode_paiement: canal,
+        canal_paiement: canal,
         ...(sansAvance ? { sans_avance: true } : {}),
       });
 
@@ -110,11 +143,14 @@ const Payment = () => {
       hapticSuccess();
 
       if (sansAvance || reservation.sans_avance || reservation.mode_paiement === "sans_avance") {
+        sessionStorage.removeItem(PENDING_PAYMENT_KEY);
         navigate(`/reservation/succes?id=${reservation.id}&sans_avance=1`);
         return;
       }
 
       if (!reservation.redirect_url) throw new Error("Lien de paiement indisponible");
+      sessionStorage.setItem(PENDING_PAYMENT_KEY, String(reservation.id));
+      redirectingRef.current = true;
       window.location.assign(reservation.redirect_url);
     } catch (err: unknown) {
       const error = err as Error & {
@@ -132,7 +168,7 @@ const Payment = () => {
       hapticError();
       toast.error(error.message || "Erreur lors du paiement");
     } finally {
-      setProcessing(false);
+      if (!redirectingRef.current) setProcessing(null);
     }
   };
 
@@ -311,46 +347,72 @@ const Payment = () => {
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--color-primary)]" />
             {sansAvance ? "Confirmation directe" : "Paiement sécurisé"}
           </div>
-          <button
-            type="button"
-            onClick={handlePay}
-            disabled={processing || enLigneIndispo}
-            className="w-full h-[52px] rounded-[14px] bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
-            style={{ fontFamily: "var(--font-display)" }}
-          >
-            {processing ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin text-white" />
-                {sansAvance ? "Confirmation en cours..." : "Redirection en cours..."}
-              </>
-            ) : sansAvance ? (
-              "Confirmer ma réservation"
-            ) : (
-              <>
-                <CreditCard className="w-5 h-5" />
-                {`Payer ${deposit.toLocaleString()} FCFA`}
-              </>
-            )}
-          </button>
+          {sansAvance ? (
+            <button
+              type="button"
+              onClick={() => handlePay("wave")}
+              disabled={Boolean(processing) || enLigneIndispo}
+              className="w-full h-[52px] rounded-[14px] bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
+              style={{ fontFamily: "var(--font-display)" }}
+            >
+              {processing ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin text-white" />
+                  Confirmation en cours...
+                </>
+              ) : (
+                "Confirmer ma réservation"
+              )}
+            </button>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handlePay("wave")}
+                disabled={Boolean(processing) || enLigneIndispo}
+                className="h-[52px] rounded-[14px] border border-[var(--color-border)] bg-[var(--surface)] text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:border-[var(--color-primary)]"
+                style={{ fontFamily: "var(--font-display)" }}
+              >
+                {processing === "wave" ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-[var(--color-primary)]" />
+                ) : (
+                  <img
+                    src={waveIcon}
+                    alt=""
+                    width={22}
+                    height={22}
+                    className="w-[22px] h-[22px] rounded-sm object-cover"
+                    aria-hidden
+                  />
+                )}
+                Wave
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePay("orange_money")}
+                disabled={Boolean(processing) || enLigneIndispo}
+                className="h-[52px] rounded-[14px] border border-[var(--color-border)] bg-[var(--surface)] text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50 hover:border-[var(--color-primary)]"
+                style={{ fontFamily: "var(--font-display)" }}
+              >
+                {processing === "orange_money" ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-[var(--color-primary)]" />
+                ) : (
+                  <img
+                    src={omIcon}
+                    alt=""
+                    width={22}
+                    height={22}
+                    className="w-[22px] h-[22px] rounded-sm object-cover"
+                    aria-hidden
+                  />
+                )}
+                Orange Money
+              </button>
+            </div>
+          )}
           {!sansAvance ? (
-            <p className="flex items-center justify-center gap-2 text-[12px] text-[var(--color-text-muted)] text-center pointer-events-none select-none">
-              <img
-                src={waveIcon}
-                alt=""
-                width={16}
-                height={16}
-                className="w-4 h-4 rounded-sm object-cover grayscale opacity-60"
-                aria-hidden
-              />
-              <img
-                src={omIcon}
-                alt=""
-                width={16}
-                height={16}
-                className="w-4 h-4 rounded-sm object-cover grayscale opacity-60"
-                aria-hidden
-              />
-              <span>Paiement sécurisé via Wave ou Orange Money</span>
+            <p className="text-[12px] text-[var(--color-text-muted)] text-center">
+              {`Avance ${deposit.toLocaleString()} FCFA — redirection directe vers le portefeuille choisi`}
             </p>
           ) : null}
         </div>

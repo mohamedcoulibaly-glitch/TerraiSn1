@@ -63,12 +63,55 @@ function mountPaymentRoutes(app) {
     return redirectToFrontend(res, target);
   });
 
-  app.get('/paytech/cancel', (req, res) => {
-    if (String(req.query.kind || '') === 'dette') {
+  app.get('/paytech/cancel', async (req, res) => {
+    const kind = String(req.query.kind || '');
+    if (kind === 'dette') {
       return redirectToFrontend(res, `${frontend()}/backoffice/gerant/finances?paiement_dette=annule`);
     }
-    const terrainId = req.query.terrain_id ? `?terrain_id=${encodeURIComponent(String(req.query.terrain_id))}` : '';
-    return redirectToFrontend(res, `${frontend()}/reservation/annule${terrainId}`);
+    if (kind === 'abonnement') {
+      const abonnementId = Number(req.query.abonnement_id || 0);
+      return redirectToFrontend(
+        res,
+        `${frontend()}/backoffice/superadmin/abonnements?paiement=annule${
+          abonnementId ? `&abonnement_id=${abonnementId}` : ''
+        }`,
+      );
+    }
+    if (kind === 'achat') {
+      const terrainIdAchat = Number(req.query.terrain_id || 0);
+      return redirectToFrontend(
+        res,
+        `${frontend()}/backoffice/superadmin/abonnements?paiement=annule&kind=achat${
+          terrainIdAchat ? `&terrain_id=${terrainIdAchat}` : ''
+        }`,
+      );
+    }
+
+    // Annulation immédiate (ne pas attendre l'IPN sale_canceled) pour libérer le créneau
+    const reservationId = Number(req.query.id || 0);
+    let terrainId = req.query.terrain_id ? String(req.query.terrain_id) : '';
+    if (reservationId > 0) {
+      try {
+        const db = await getDb();
+        const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+        if (reservation?.statut === 'en_attente') {
+          const { annulerReservationApresAnnulationPaytech } = require('./flow');
+          await annulerReservationApresAnnulationPaytech(
+            reservationId,
+            reservation.reference_paytech || `TF-${reservationId}-CANCEL`,
+          );
+        }
+        if (!terrainId && reservation?.terrain_id) terrainId = String(reservation.terrain_id);
+      } catch (error) {
+        logger.error('payments/routes.js', 'Annulation PayTech cancel URL', error);
+      }
+    }
+
+    const qs = new URLSearchParams();
+    if (terrainId) qs.set('terrain_id', terrainId);
+    if (reservationId > 0) qs.set('id', String(reservationId));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return redirectToFrontend(res, `${frontend()}/reservation/annule${suffix}`);
   });
 
   app.get('/paydunya/success', (req, res) => {

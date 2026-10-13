@@ -176,6 +176,34 @@ async function run() {
     h.assertEqual('A3 zero errors', v.errors.length, 0);
   }
 
+  await withFetchMock({ mode: 'success' }, async (mock) => {
+    const params = {
+      ...FIXTURE_CHECKOUT,
+      refCommand: 'TF-42-WAVE-DIRECT',
+      preferredChannel: 'wave',
+      joueurNom: 'Mohamed Diallo',
+      joueurTelephone: '778261225',
+    };
+    const result = await paytechAdapter.createCheckout(params);
+    const body = mock.lastCheckoutBody();
+    h.assertEqual('A4 target_payment Wave', body.target_payment, 'Wave');
+    h.assert(
+      'A4 redirect autofill tp=Wave',
+      String(result.redirectUrl).includes('tp=Wave'),
+      result.redirectUrl,
+    );
+    h.assert(
+      'A4 redirect autofill nac=1',
+      String(result.redirectUrl).includes('nac=1'),
+      result.redirectUrl,
+    );
+    h.assert(
+      'A4 redirect autofill téléphone',
+      String(result.redirectUrl).includes('nn=778261225'),
+      result.redirectUrl,
+    );
+  });
+
   // ─────────────────────────────────────────────────────────────────────────
   // B. Gestion des Erreurs API PayTech (Edge Cases)
   // ─────────────────────────────────────────────────────────────────────────

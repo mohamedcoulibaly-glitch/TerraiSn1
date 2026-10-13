@@ -39,15 +39,46 @@ function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
   const slots = hourlySlots(heureDebut, heureFin);
   if (!slots.length) throw conflictError('Créneau invalide');
 
+  const now = Date.now();
   const chevauchementResa = queryAll(
     database,
     `SELECT id FROM reservations
       WHERE terrain_id = ? AND date = ?
-        AND statut IN ('en_attente', 'confirme', 'acceptee')
+        AND (
+          statut IN ('confirme', 'acceptee')
+          OR (statut = 'en_attente' AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?)
+        )
         AND heure_debut < ? AND heure_fin > ?`,
-    [terrainId, date, heureFin, heureDebut],
+    [terrainId, date, now, heureFin, heureDebut],
   );
   if (chevauchementResa.length) throw conflictError();
+
+  // Libère les en_attente_paiement orphelins (retour navigateur / verrou expiré non nettoyé)
+  const orphans = queryAll(
+    database,
+    `SELECT id, heure_debut, heure_fin FROM creneaux
+      WHERE terrain_id = ? AND date = ?
+        AND statut = 'en_attente_paiement'
+        AND substr(heure_debut,1,5) < ? AND substr(heure_fin,1,5) > ?`,
+    [terrainId, date, heureFin, heureDebut],
+  );
+  for (const slotOrphelin of orphans) {
+    const active = queryOne(
+      database,
+      `SELECT id FROM reservations
+        WHERE terrain_id = ? AND date = ?
+          AND statut = 'en_attente'
+          AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?
+          AND heure_debut < ? AND heure_fin > ?`,
+      [terrainId, date, now, slotOrphelin.heure_fin, slotOrphelin.heure_debut],
+    );
+    if (!active) {
+      database.run(
+        "UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'",
+        [slotOrphelin.id],
+      );
+    }
+  }
 
   const chevauchementCreneau = queryAll(
     database,

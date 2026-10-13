@@ -131,6 +131,7 @@ async function creerResa(token, user, terrainId, slot) {
       joueur_telephone: user.telephone || '778261225',
       format_terrain: 'entier',
       mode: 'paiement',
+      methode_paiement: 'wave',
     },
   });
 }

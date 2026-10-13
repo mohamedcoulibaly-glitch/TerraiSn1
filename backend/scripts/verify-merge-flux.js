@@ -179,6 +179,7 @@ async function main() {
           joueur_nom: 'Flux Merge',
           joueur_telephone: phone,
           format_terrain: 'entier',
+          methode_paiement: 'wave',
         },
       });
       fail('F4 create resa', resa.status === 200 || resa.status === 201, `status=${resa.status} ${resa.raw}`);

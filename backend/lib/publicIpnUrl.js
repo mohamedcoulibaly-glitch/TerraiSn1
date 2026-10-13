@@ -103,11 +103,19 @@ function successQueryForKind(entityId, kind = 'reservation') {
   return id > 0 ? `id=${id}` : '';
 }
 
-function cancelQueryForKind(kind = 'reservation') {
+function cancelQueryForKind(entityId, kind = 'reservation') {
   if (kind === 'dette') return 'kind=dette';
-  if (kind === 'abonnement') return 'kind=abonnement';
-  if (kind === 'achat') return 'kind=achat';
-  return '';
+  if (kind === 'abonnement') {
+    const id = Number(entityId || 0);
+    return id > 0 ? `kind=abonnement&abonnement_id=${id}` : 'kind=abonnement';
+  }
+  if (kind === 'achat') {
+    const id = Number(entityId || 0);
+    return id > 0 ? `kind=achat&terrain_id=${id}` : 'kind=achat';
+  }
+  // Réservation : id obligatoire pour libérer le créneau dès /paytech/cancel
+  const id = Number(entityId || 0);
+  return id > 0 ? `id=${id}` : '';
 }
 
 /**
@@ -141,7 +149,7 @@ async function resoudreUrlsPaiement(reservationId, gateway = activeGateway(), op
   let successUrl;
   let cancelUrl;
   const successQs = successQueryForKind(reservationId, kind);
-  const cancelQs = cancelQueryForKind(kind);
+  const cancelQs = cancelQueryForKind(reservationId, kind);
 
   if (publicBase && isPublicHttps(publicBase)) {
     ipnUrl = `${publicBase}${paths.webhook}`;

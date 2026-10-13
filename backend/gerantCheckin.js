@@ -454,7 +454,7 @@ function mountGerantCheckinRoutes(app) {
           AND r.date >= ? AND r.date <= ?
           AND (
             r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
-            OR (r.statut = 'en_attente' AND (r.verrou_expire_at IS NULL OR r.verrou_expire_at > ?))
+            OR (r.statut = 'en_attente' AND r.verrou_expire_at IS NOT NULL AND r.verrou_expire_at > ?)
           )
         ORDER BY r.date ASC, r.heure_debut ASC, r.heure_fin ASC
       `, [terrainId, from, toTech, Date.now()]);

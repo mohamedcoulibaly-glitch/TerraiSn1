@@ -46,7 +46,7 @@ async function main() {
   const { terrainId, joueurId } = await seedTerrain(db);
   const date = '2026-10-05';
 
-  // 1) Premier verrou OK
+  // 1) Premier verrou OK + réservation en_attente active (verrou paiement)
   let primaryId;
   transaction(db, () => {
     primaryId = lockCreneauxAtomique(db, terrainId, date, '18:00', '19:00');
@@ -54,8 +54,19 @@ async function main() {
   h.assert('primary creneau id', Number(primaryId) > 0);
   const c1 = queryOne(db, 'SELECT * FROM creneaux WHERE id = ?', [primaryId]);
   h.assertEqual('statut en_attente_paiement', c1.statut, 'en_attente_paiement');
+  const verrouActif = Date.now() + 15 * 60 * 1000;
+  runSql(
+    db,
+    `INSERT INTO reservations (
+      terrain_id, joueur_id, joueur_nom, date, heure_debut, heure_fin,
+      montant, prix_total, acompte, montant_avance, reste_a_payer, montant_restant,
+      statut, creneau_id, verrou_expire_at
+    ) VALUES (?, ?, 'Lock', ?, '18:00', '19:00', 30000, 30000, 5000, 5000, 25000, 25000,
+      'en_attente', ?, ?)`,
+    [terrainId, joueurId, date, primaryId, verrouActif],
+  );
 
-  // 2) Second verrou même créneau → conflit
+  // 2) Second verrou même créneau avec résa active → conflit
   let conflict = false;
   try {
     transaction(db, () => {
@@ -66,6 +77,24 @@ async function main() {
   }
   h.assert('double lock → 409', conflict);
 
+  // 2b) Orphelin en_attente_paiement (pas de résa active) → libéré puis re-lock OK
+  runSql(db, `UPDATE reservations SET statut = 'annule' WHERE creneau_id = ?`, [primaryId]);
+  let reclaimedId;
+  transaction(db, () => {
+    reclaimedId = lockCreneauxAtomique(db, terrainId, date, '18:00', '19:00');
+  });
+  h.assertEqual('orphelin récupéré', reclaimedId, primaryId);
+  runSql(
+    db,
+    `INSERT INTO reservations (
+      terrain_id, joueur_id, joueur_nom, date, heure_debut, heure_fin,
+      montant, prix_total, acompte, montant_avance, reste_a_payer, montant_restant,
+      statut, creneau_id, verrou_expire_at
+    ) VALUES (?, ?, 'Lock2', ?, '18:00', '19:00', 30000, 30000, 5000, 5000, 25000, 25000,
+      'en_attente', ?, ?)`,
+    [terrainId, joueurId, date, primaryId, verrouActif],
+  );
+
   // 3) Créneau adjacent libre
   let adjacentId;
   transaction(db, () => {
@@ -73,7 +102,7 @@ async function main() {
   });
   h.assert('adjacent libre OK', Number(adjacentId) > 0 && adjacentId !== primaryId);
 
-  // 4) Chevauchement multi-heures
+  // 4) Chevauchement multi-heures (résa 18-19 encore active)
   let overlap = false;
   try {
     transaction(db, () => {

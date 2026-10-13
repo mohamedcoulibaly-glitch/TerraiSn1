@@ -117,6 +117,37 @@ function extractIpnPayload(body = {}) {
   return body && typeof body === 'object' ? body : {};
 }
 
+/** 9 chiffres nationaux SN (ex. 778261225). */
+function digitsPhoneSn(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length >= 9) return digits.slice(-9);
+  return digits;
+}
+
+/**
+ * Préremplit Wave / Orange Money et auto-submit (doc PayTech : pn, nn, fn, tp, nac).
+ * Sans cela le checkout affiche encore le choix de toutes les méthodes.
+ */
+function appendCheckoutAutofill(redirectUrl, { targetPayment, joueurNom, joueurTelephone }) {
+  if (!redirectUrl || !targetPayment) return redirectUrl;
+  try {
+    const url = new URL(String(redirectUrl));
+    const nn = digitsPhoneSn(joueurTelephone);
+    if (nn.length === 9) {
+      url.searchParams.set('pn', `+221${nn}`);
+      url.searchParams.set('nn', nn);
+    }
+    const fn = String(joueurNom || '').trim();
+    if (fn) url.searchParams.set('fn', fn);
+    url.searchParams.set('tp', targetPayment);
+    // nac=1 : soumission auto (Wave / OM) — voir SDK PayTech & doc InTech
+    url.searchParams.set('nac', '1');
+    return url.toString();
+  } catch {
+    return redirectUrl;
+  }
+}
+
 async function createCheckout({
   reservationId,
   terrain,
@@ -128,6 +159,8 @@ async function createCheckout({
   successUrl,
   cancelUrl,
   preferredChannel,
+  joueurNom,
+  joueurTelephone,
   itemName,
   commandName,
   customField,
@@ -197,7 +230,12 @@ async function createCheckout({
     throw error;
   }
 
-  const redirectUrl = payload.redirect_url || payload.redirectUrl;
+  const rawRedirect = payload.redirect_url || payload.redirectUrl;
+  const redirectUrl = appendCheckoutAutofill(rawRedirect, {
+    targetPayment,
+    joueurNom,
+    joueurTelephone,
+  });
   return {
     success: true,
     redirectUrl,
@@ -209,6 +247,7 @@ async function createCheckout({
     montantRestant,
     prix,
     provider: name,
+    target_payment: targetPayment || null,
   };
 }
 
@@ -402,6 +441,8 @@ module.exports = {
   name,
   getMeta,
   createCheckout,
+  appendCheckoutAutofill,
+  digitsPhoneSn,
   confirmInvoice,
   verifyWebhook,
   extractIpnPayload,

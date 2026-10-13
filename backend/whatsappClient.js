@@ -408,10 +408,29 @@ async function findRemoteByName(name) {
 }
 
 async function ensureRemoteSession(state) {
+  // Session pinnée (OPENWA_SHARED_SESSION_ID) : si l’UUID n’existe plus (404),
+  // on détache le pin et on retombe sur le nom terrainsn-platform / fallback ready.
   if (state.pinned && state.openwaId) {
-    const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
-    applyRemoteSession(state, remote);
-    return remote;
+    try {
+      const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
+      applyRemoteSession(state, remote);
+      return remote;
+    } catch (err) {
+      if (err.statusCode !== 404) throw err;
+      console.warn(
+        `⚠️ OpenWA [${state.key}] session pinnée ${state.openwaId} introuvable (404)`
+          + ` → détache pin, recherche par nom « ${state.openwaName} »`,
+      );
+      state.pinned = false;
+      state.openwaId = null;
+      state.ready = false;
+      if (state.key === 'platform') {
+        cfg.sharedSessionId = null;
+        cfg.platformSessionId = null;
+        delete process.env.OPENWA_SHARED_SESSION_ID;
+        delete process.env.OPENWA_PLATFORM_SESSION_ID;
+      }
+    }
   }
   if (state.openwaId) {
     try {
@@ -429,6 +448,11 @@ async function ensureRemoteSession(state) {
     console.log(`🆕 OpenWA session créée [${state.key}] name=${state.openwaName} id=${remote.id}`);
   }
   applyRemoteSession(state, remote);
+  // Si on a retrouvé une session ready après pin mort, re-persister le bon UUID.
+  if (state.key === 'platform' && state.ready && state.openwaId) {
+    await persistPlatformSessionIdInDb(state.openwaId).catch(() => {});
+    state.pinned = true;
+  }
   return remote;
 }
 

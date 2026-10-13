@@ -1849,6 +1849,16 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     if (sansAvance) {
       mode = 'bloquer';
     }
+    // Joueur en ligne : canal Wave / OM obligatoire (évite le checkout PayTech multi-méthodes)
+    if (creePar === 'joueur' && mode === 'paiement') {
+      const { normalizeCanal } = require('./lib/paymentChannels');
+      if (!normalizeCanal(preferredChannel)) {
+        return res.status(400).json({
+          error: 'Choisis Wave ou Orange Money pour payer',
+          code: 'CANAL_PAIEMENT_REQUIS',
+        });
+      }
+    }
     // Bloquer / sans_avance : avance joueur 0. Paiement lien : avance calculée.
     const montantAvance = mode === 'bloquer' ? 0 : calculerMontantAvance(terrain, montant);
     const montantRestant = Math.max(0, montant - montantAvance);

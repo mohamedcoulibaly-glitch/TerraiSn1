@@ -14,6 +14,8 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+.env.render
+backend/.env.render
 server/terrainsn.db
 backend/*.db
 backend/*.db-*
