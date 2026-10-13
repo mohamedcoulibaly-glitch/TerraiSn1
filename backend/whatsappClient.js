@@ -369,11 +369,11 @@ function getOrCreateState(key) {
 function connectionStatusLabel(state) {
   if (state.ready) return 'CONNECTED';
   const wa = String(state.waState || '').toLowerCase();
-  if (
-    state.initializing ||
-    state.pairingCode ||
-    ['qr_ready', 'authenticating', 'initializing', 'starting'].includes(wa)
-  ) {
+  // qr_ready = en attente d’un code/QR utilisateur → pas « CONNECTING » (sinon UI en boucle).
+  if (state.initializing || ['authenticating', 'initializing', 'starting'].includes(wa)) {
+    return 'CONNECTING';
+  }
+  if (state.pairingCode && isPairingCodeFresh(state, state.pairingPhone, { skewMs: 0 })) {
     return 'CONNECTING';
   }
   return 'DISCONNECTED';
@@ -410,11 +410,12 @@ function applyRemoteSession(state, remote) {
   state.waState = status || null;
   // ready = lié et utilisable ; action_required = lié mais action UI côté WA (on confirme quand même).
   state.ready = status === 'ready' || status === 'action_required';
-  state.connectedPhone = remote.phone
-    ? String(remote.phone).replace(/\D/g, '')
-    : state.ready
-      ? state.connectedPhone
-      : null;
+  // Téléphone OpenWA stale possible en qr_ready après un drop — ne le garder que si vraiment lié.
+  if (state.ready && remote.phone) {
+    state.connectedPhone = String(remote.phone).replace(/\D/g, '');
+  } else if (!state.ready) {
+    state.connectedPhone = null;
+  }
   if (state.ready) {
     state.lastQrDataUrl = null;
     clearPairingState(state);
@@ -432,9 +433,14 @@ function applyRemoteSession(state, remote) {
       state.lastError = raw.slice(0, 500);
     }
   }
-  const bootstrapping = ['initializing', 'qr_ready', 'authenticating', 'starting'].includes(status);
+  // qr_ready = prêt pour code/QR (action user) — PAS un bootstrap bloquant.
+  const bootstrapping = ['initializing', 'authenticating', 'starting'].includes(status);
   if (bootstrapping) state.initializing = true;
-  if (['ready', 'action_required', 'failed', 'disconnected', 'stopped', 'created', 'logged_out'].includes(status)) {
+  if (
+    ['ready', 'action_required', 'failed', 'disconnected', 'stopped', 'created', 'logged_out', 'qr_ready'].includes(
+      status,
+    )
+  ) {
     state.initializing = false;
   }
 }
@@ -748,12 +754,12 @@ async function requestPairingCode(state, phoneRaw, opts = {}) {
         err.message,
       );
       const status = Number(err.statusCode);
-      // Session pas prête / zombie → relancer avant le prochain essai
+      // Session pas prête / zombie → relancer / recréer avant le prochain essai
       if ([400, 404, 409, 500, 502, 503, 504].includes(status) || err.name === 'AbortError') {
         try {
-          if (status === 404) {
-            state.openwaId = null;
-            await ensureRemoteSession(state);
+          if (status === 404 || status === 500) {
+            // 500 fréquent sur session qr_ready « fantôme » (phone stale) → recreate.
+            await recreateRemoteSession(state);
           }
           await startRemote(state);
           await waitUntilPairable(state, Math.min(30_000, PAIRING_WAIT_MS));
@@ -780,11 +786,11 @@ async function requestPairingCode(state, phoneRaw, opts = {}) {
  */
 async function refreshPairingIfNeeded(state) {
   if (state.ready || state.mock || !state.pairingPhone || !state.openwaId) return;
-  if (state.initializing || state._pairingRefreshInFlight) return;
+  if (state._pairingRefreshInFlight) return;
   const wa = String(state.waState || '').toLowerCase();
-  // Ne pas régénérer pendant le handshake post-jumelage (Baileys : authenticating → initializing → ready).
-  if (['authenticating', 'action_required'].includes(wa)) return;
-  if (state.connectedPhone) return;
+  // Ne pas régénérer pendant le handshake post-jumelage.
+  if (['authenticating', 'action_required', 'initializing', 'starting'].includes(wa)) return;
+  // qr_ready / disconnected : on peut (re)demander un code.
   const fresh = isPairingCodeFresh(state, state.pairingPhone, { skewMs: 30_000 });
   if (fresh) return;
   if (Date.now() - (state._lastPairingRefreshAt || 0) < 20_000) return;

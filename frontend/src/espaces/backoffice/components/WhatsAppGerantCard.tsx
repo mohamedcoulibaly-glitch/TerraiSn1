@@ -79,12 +79,15 @@ export default function WhatsAppGerantCard() {
       waState === "action_required",
   );
   const mock = Boolean(status?.mock);
+  // qr_ready = en attente du code utilisateur → on affiche le formulaire, pas un loader infini.
+  const handshakeInProgress =
+    !pairingCode &&
+    (waState === "authenticating" ||
+      ((waState === "initializing" || waState === "starting" || Boolean(status?.initializing)) &&
+        status?.status === "CONNECTING"));
   const connectionLabel = connected
     ? "CONNECTED"
-    : pairingCode ||
-        status?.status === "CONNECTING" ||
-        status?.initializing ||
-        ["qr_ready", "authenticating", "initializing", "starting"].includes(waState)
+    : pairingCode || handshakeInProgress
       ? "CONNECTING"
       : "DISCONNECTED";
 
@@ -111,7 +114,7 @@ export default function WhatsAppGerantCard() {
         setExpiresAt(null);
         return data;
       }
-      // Code accepté côté téléphone : handshake OpenWA en cours — ne plus afficher le code.
+      // Handshake post-code uniquement — qr_ready doit réafficher / régénérer un code.
       if (remoteWa === "authenticating") {
         setPairingCode(null);
         setExpiresAt(null);
@@ -120,6 +123,10 @@ export default function WhatsAppGerantCard() {
       if (data.pairingCode) {
         setPairingCode(formatPairingCode(data.pairingCodeDisplay || data.pairingCode));
         if (data.pairingExpiresAt) setExpiresAt(Number(data.pairingExpiresAt));
+      } else if (remoteWa === "qr_ready" || remoteWa === "disconnected" || !remoteWa) {
+        // Sortir de l’écran « finalisation » fantôme si OpenWA n’a pas confirmé.
+        setPairingCode(null);
+        setExpiresAt(null);
       }
       return data;
     } catch {
@@ -301,7 +308,7 @@ export default function WhatsAppGerantCard() {
         </div>
       ) : (
         <div className="space-y-4">
-          {connectionLabel === "CONNECTING" && !pairingCode ? (
+          {handshakeInProgress ? (
             <div
               className="rounded-2xl p-5 space-y-3 text-center"
               style={{
@@ -316,10 +323,12 @@ export default function WhatsAppGerantCard() {
                 <Loader2 className="w-5 h-5 animate-spin text-amber-600" />
                 {waState === "authenticating"
                   ? "Code accepté — finalisation…"
-                  : "Connexion WhatsApp en cours…"}
+                  : "Démarrage de la session WhatsApp…"}
               </p>
               <p className="text-sm" style={{ color: "var(--g-muted)" }}>
-                WhatsApp a bien reçu le jumelage. On attend la confirmation OpenWA (quelques secondes).
+                {waState === "authenticating"
+                  ? "WhatsApp a accepté le code. Confirmation OpenWA en cours…"
+                  : "Patiente quelques secondes, puis un code de jumelage sera proposé."}
               </p>
               <button
                 type="button"
@@ -333,7 +342,7 @@ export default function WhatsAppGerantCard() {
             </div>
           ) : null}
 
-          {(!pairingCode || codeExpired) && connectionLabel !== "CONNECTING" ? (
+          {(!pairingCode || codeExpired) && !handshakeInProgress ? (
             <>
               <label className="block space-y-2">
                 <span className="text-sm font-medium" style={{ color: "var(--g-text)" }}>
