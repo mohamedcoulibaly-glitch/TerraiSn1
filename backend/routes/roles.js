@@ -481,14 +481,16 @@ function gerantWaKey(req) {
 router.get('/gerant/whatsapp/status', authMiddleware, requireRole('gerant'), async (req, res) => {
   const key = gerantWaKey(req);
   const status = await whatsappClient.getStatus(key);
+  const db = await getDb();
   if (status.connected && status.phone) {
-    const db = await getDb();
     await persistGerantWhatsapp(db, req.user.id, status.phone);
   }
-  const db = await getDb();
   const employe = queryOne(db, 'SELECT whatsapp_number, whatsapp_wid, whatsapp_connected_at FROM employes WHERE id = ?', [req.user.id]);
+  const connected = Boolean(status.connected);
   res.json({
     ...status,
+    connected,
+    status: connected ? 'CONNECTED' : status.status || 'DISCONNECTED',
     configured_number: employe?.whatsapp_number || null,
     connected_wid: employe?.whatsapp_wid || status.phone || null,
     connected_at: employe?.whatsapp_connected_at || null,

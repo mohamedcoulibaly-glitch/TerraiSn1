@@ -71,11 +71,20 @@ export default function WhatsAppGerantCard() {
   const [now, setNow] = useState(Date.now());
   const wasConnected = useRef(false);
 
-  const connected = Boolean(status?.connected || status?.status === "CONNECTED");
+  const waState = String(status?.waState || "").toLowerCase();
+  const connected = Boolean(
+    status?.connected ||
+      status?.status === "CONNECTED" ||
+      waState === "ready" ||
+      waState === "action_required",
+  );
   const mock = Boolean(status?.mock);
   const connectionLabel = connected
     ? "CONNECTED"
-    : pairingCode || status?.status === "CONNECTING" || status?.initializing
+    : pairingCode ||
+        status?.status === "CONNECTING" ||
+        status?.initializing ||
+        ["qr_ready", "authenticating", "initializing", "starting"].includes(waState)
       ? "CONNECTING"
       : "DISCONNECTED";
 
@@ -91,7 +100,19 @@ export default function WhatsAppGerantCard() {
     try {
       const data = (await gerantApi.whatsappStatus()) as WaStatus;
       setStatus(data);
-      if (data.connected || data.status === "CONNECTED") {
+      const remoteWa = String(data.waState || "").toLowerCase();
+      const isLinked =
+        Boolean(data.connected) ||
+        data.status === "CONNECTED" ||
+        remoteWa === "ready" ||
+        remoteWa === "action_required";
+      if (isLinked) {
+        setPairingCode(null);
+        setExpiresAt(null);
+        return data;
+      }
+      // Code accepté côté téléphone : handshake OpenWA en cours — ne plus afficher le code.
+      if (remoteWa === "authenticating") {
         setPairingCode(null);
         setExpiresAt(null);
         return data;
@@ -280,7 +301,39 @@ export default function WhatsAppGerantCard() {
         </div>
       ) : (
         <div className="space-y-4">
-          {!pairingCode || codeExpired ? (
+          {connectionLabel === "CONNECTING" && !pairingCode ? (
+            <div
+              className="rounded-2xl p-5 space-y-3 text-center"
+              style={{
+                background: "rgba(234, 179, 8, 0.12)",
+                border: "1px solid rgba(234, 179, 8, 0.35)",
+              }}
+            >
+              <p
+                className="text-base font-semibold inline-flex items-center justify-center gap-2"
+                style={{ color: "var(--g-text)" }}
+              >
+                <Loader2 className="w-5 h-5 animate-spin text-amber-600" />
+                {waState === "authenticating"
+                  ? "Code accepté — finalisation…"
+                  : "Connexion WhatsApp en cours…"}
+              </p>
+              <p className="text-sm" style={{ color: "var(--g-muted)" }}>
+                WhatsApp a bien reçu le jumelage. On attend la confirmation OpenWA (quelques secondes).
+              </p>
+              <button
+                type="button"
+                onClick={() => requestPairing(true)}
+                disabled={busy || mock}
+                className="text-sm font-medium underline underline-offset-2 disabled:opacity-60"
+                style={{ color: "var(--g-muted)" }}
+              >
+                Ça bloque ? Régénérer un code
+              </button>
+            </div>
+          ) : null}
+
+          {(!pairingCode || codeExpired) && connectionLabel !== "CONNECTING" ? (
             <>
               <label className="block space-y-2">
                 <span className="text-sm font-medium" style={{ color: "var(--g-text)" }}>
@@ -385,15 +438,18 @@ export default function WhatsAppGerantCard() {
                 <li>4. Colle le code ci-dessus</li>
               </ol>
 
-              {(status?.waState === "authenticating" ||
-                status?.waState === "restarting" ||
+              {(waState === "authenticating" ||
+                waState === "restarting" ||
+                waState === "initializing" ||
                 status?.initializing) && (
                 <p
                   className="text-sm inline-flex items-center justify-center gap-2"
                   style={{ color: "var(--g-muted)" }}
                 >
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  En attente de validation sur WhatsApp…
+                  {waState === "authenticating"
+                    ? "Code accepté — finalisation de la connexion…"
+                    : "En attente de validation sur WhatsApp…"}
                 </p>
               )}
 

@@ -42,14 +42,32 @@ const PAIRING_WAIT_MS = Math.max(
   Number(process.env.OPENWA_PAIRING_WAIT_MS) || 75_000,
 );
 
+function isPlatformSharedId(id) {
+  const sid = String(id || '').trim();
+  if (!sid) return false;
+  return (
+    (cfg.sharedSessionId && sid === cfg.sharedSessionId) ||
+    (cfg.platformSessionId && sid === cfg.platformSessionId)
+  );
+}
+
 function reloadConfig() {
   readCfgFromEnv();
   for (const state of sessions.values()) {
     state.mock = cfg.mockMode;
-    if (cfg.sharedSessionId) {
-      state.openwaId = cfg.sharedSessionId;
-    } else if (state.key === 'platform' && cfg.platformSessionId) {
-      state.openwaId = cfg.platformSessionId;
+    // Le pin SHARED / PLATFORM ne s’applique QU’à la session plateforme —
+    // jamais aux gérants (sinon on poll la mauvaise session après jumelage).
+    if (state.key === 'platform') {
+      if (cfg.sharedSessionId) {
+        state.openwaId = cfg.sharedSessionId;
+        state.pinned = true;
+      } else if (cfg.platformSessionId) {
+        state.openwaId = cfg.platformSessionId;
+        state.pinned = true;
+      }
+    } else if (state.pinned || isPlatformSharedId(state.openwaId)) {
+      state.pinned = false;
+      if (isPlatformSharedId(state.openwaId)) state.openwaId = null;
     }
   }
   module.exports.OPENWA_BASE_URL = cfg.baseUrl;
@@ -125,10 +143,11 @@ function toWaIntlDigits(raw) {
 
 function createSessionState(key) {
   const sessionKey = sanitizeKey(key);
+  // Pin SHARED uniquement pour la plateforme — les gérants ont leur session dédiée terrainsn-gerant-N.
   const pinnedId =
-    cfg.sharedSessionId ||
-    (sessionKey === 'platform' ? cfg.platformSessionId : null) ||
-    null;
+    sessionKey === 'platform'
+      ? cfg.sharedSessionId || cfg.platformSessionId || null
+      : null;
   return {
     key: sessionKey,
     openwaId: pinnedId,
@@ -296,18 +315,24 @@ async function prepareNumberChange(state, { phoneNumber } = {}) {
   state.openwaId = remote.id || null;
   applyRemoteSession(state, remote);
   // Après rotation on attend un nouveau scan — ne pas garder l’ancien téléphone.
-  if (String(remote.status || '').toLowerCase() === 'ready' && remote.phone) {
-    // Session encore authentifiée avec l’ancien numéro : forcer logout + QR.
-    await destroyRemoteSession(remote.id, { deleteSession: false });
-    try {
-      remote = await openwaRequest('POST', `/sessions/${remote.id}/start`);
-    } catch {
-      /* QR via wait */
+  {
+    const st = String(remote.status || '').toLowerCase();
+    if ((st === 'ready' || st === 'action_required') && remote.phone) {
+      // Session encore authentifiée avec l’ancien numéro : forcer logout + QR.
+      await destroyRemoteSession(remote.id, { deleteSession: false });
+      try {
+        remote = await openwaRequest('POST', `/sessions/${remote.id}/start`);
+      } catch {
+        /* QR via wait */
+      }
+      state.openwaId = remote.id || state.openwaId;
+      applyRemoteSession(state, remote);
     }
-    state.openwaId = remote.id || state.openwaId;
-    applyRemoteSession(state, remote);
   }
-  state.ready = String(remote.status || '').toLowerCase() === 'ready';
+  {
+    const st = String(remote.status || '').toLowerCase();
+    state.ready = st === 'ready' || st === 'action_required';
+  }
   if (!state.ready) state.connectedPhone = null;
 
   await waitForQrOrReady(state, PAIRING_WAIT_MS);
@@ -341,19 +366,34 @@ function getOrCreateState(key) {
   return sessions.get(sessionKey);
 }
 
+function connectionStatusLabel(state) {
+  if (state.ready) return 'CONNECTED';
+  const wa = String(state.waState || '').toLowerCase();
+  if (
+    state.initializing ||
+    state.pairingCode ||
+    ['qr_ready', 'authenticating', 'initializing', 'starting'].includes(wa)
+  ) {
+    return 'CONNECTING';
+  }
+  return 'DISCONNECTED';
+}
+
 function publicStatus(state) {
   const pairingFresh = isPairingCodeFresh(state, state.pairingPhone, { skewMs: 0 });
+  const status = connectionStatusLabel(state);
   return {
     session: state.key,
     connected: state.ready,
+    status,
     mock: state.mock,
     hasQr: Boolean(state.lastQrDataUrl),
     initializing: state.initializing,
     error: state.lastError,
     phone: state.connectedPhone,
-    pairingCode: pairingFresh ? state.pairingCode : null,
+    pairingCode: pairingFresh && !state.ready ? state.pairingCode : null,
     pairingPhone: state.pairingPhone,
-    pairingExpiresAt: pairingFresh ? state.pairingExpiresAt : null,
+    pairingExpiresAt: pairingFresh && !state.ready ? state.pairingExpiresAt : null,
     waState: state.waState || null,
     provider: 'openwa',
     openwaSessionId: state.openwaId,
@@ -368,7 +408,8 @@ function applyRemoteSession(state, remote) {
   state.openwaId = remote.id || state.openwaId;
   const status = String(remote.status || '').toLowerCase();
   state.waState = status || null;
-  state.ready = status === 'ready';
+  // ready = lié et utilisable ; action_required = lié mais action UI côté WA (on confirme quand même).
+  state.ready = status === 'ready' || status === 'action_required';
   state.connectedPhone = remote.phone
     ? String(remote.phone).replace(/\D/g, '')
     : state.ready
@@ -377,8 +418,11 @@ function applyRemoteSession(state, remote) {
   if (state.ready) {
     state.lastQrDataUrl = null;
     clearPairingState(state);
-    state.lastError = null;
+    state.lastError = status === 'action_required' && remote.lastError
+      ? String(remote.lastError).slice(0, 500)
+      : null;
     state.lockSession = false;
+    state.initializing = false;
   } else if (remote.lastError) {
     const raw = String(remote.lastError);
     if (/Failed to launch the browser|puppeteer|Permission denied/i.test(raw)) {
@@ -390,7 +434,7 @@ function applyRemoteSession(state, remote) {
   }
   const bootstrapping = ['initializing', 'qr_ready', 'authenticating', 'starting'].includes(status);
   if (bootstrapping) state.initializing = true;
-  if (['ready', 'failed', 'disconnected', 'stopped', 'created', 'logged_out'].includes(status)) {
+  if (['ready', 'action_required', 'failed', 'disconnected', 'stopped', 'created', 'logged_out'].includes(status)) {
     state.initializing = false;
   }
 }
@@ -458,9 +502,21 @@ async function findRemoteByName(name) {
 }
 
 async function ensureRemoteSession(state) {
-  // Session pinnée (OPENWA_SHARED_SESSION_ID) : si l’UUID n’existe plus (404),
-  // on détache le pin et on retombe sur le nom terrainsn-platform / fallback ready.
-  if (state.pinned && state.openwaId) {
+  // Gérant : ne jamais rester collé à l’UUID plateforme partagé.
+  if (state.key !== 'platform' && (state.pinned || isPlatformSharedId(state.openwaId))) {
+    console.warn(
+      `⚠️ OpenWA [${state.key}] détache UUID plateforme`
+        + ` → recherche dédiée « ${state.openwaName} »`,
+    );
+    state.pinned = false;
+    if (isPlatformSharedId(state.openwaId)) {
+      state.openwaId = null;
+      state.ready = false;
+    }
+  }
+
+  // Session pinnée (OPENWA_SHARED_SESSION_ID) : plateforme uniquement.
+  if (state.key === 'platform' && state.pinned && state.openwaId) {
     try {
       const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
       applyRemoteSession(state, remote);
@@ -474,19 +530,31 @@ async function ensureRemoteSession(state) {
       state.pinned = false;
       state.openwaId = null;
       state.ready = false;
-      if (state.key === 'platform') {
-        cfg.sharedSessionId = null;
-        cfg.platformSessionId = null;
-        delete process.env.OPENWA_SHARED_SESSION_ID;
-        delete process.env.OPENWA_PLATFORM_SESSION_ID;
-      }
+      cfg.sharedSessionId = null;
+      cfg.platformSessionId = null;
+      delete process.env.OPENWA_SHARED_SESSION_ID;
+      delete process.env.OPENWA_PLATFORM_SESSION_ID;
     }
   }
   if (state.openwaId) {
     try {
       const remote = await openwaRequest('GET', `/sessions/${state.openwaId}`);
-      applyRemoteSession(state, remote);
-      return remote;
+      // Si l’UUID pointe vers une autre session (ex. plateforme), basculer sur le nom dédié.
+      if (
+        state.key !== 'platform' &&
+        remote?.name &&
+        String(remote.name) !== String(state.openwaName)
+      ) {
+        console.warn(
+          `⚠️ OpenWA [${state.key}] UUID ${state.openwaId} = « ${remote.name} »`
+            + ` ≠ « ${state.openwaName} » → rebind par nom`,
+        );
+        state.openwaId = null;
+        state.ready = false;
+      } else {
+        applyRemoteSession(state, remote);
+        return remote;
+      }
     } catch (err) {
       if (err.statusCode !== 404) throw err;
       state.openwaId = null;
@@ -713,6 +781,10 @@ async function requestPairingCode(state, phoneRaw, opts = {}) {
 async function refreshPairingIfNeeded(state) {
   if (state.ready || state.mock || !state.pairingPhone || !state.openwaId) return;
   if (state.initializing || state._pairingRefreshInFlight) return;
+  const wa = String(state.waState || '').toLowerCase();
+  // Ne pas régénérer pendant le handshake post-jumelage (Baileys : authenticating → initializing → ready).
+  if (['authenticating', 'action_required'].includes(wa)) return;
+  if (state.connectedPhone) return;
   const fresh = isPairingCodeFresh(state, state.pairingPhone, { skewMs: 30_000 });
   if (fresh) return;
   if (Date.now() - (state._lastPairingRefreshAt || 0) < 20_000) return;
@@ -741,7 +813,13 @@ async function prepareGerantPairing(state, phoneNumber) {
   state.waState = null;
 
   const previousId = state.openwaId;
-  if (previousId) {
+  // Ne jamais logout/kill la session plateforme partagée depuis un flux gérant.
+  if (previousId && isPlatformSharedId(previousId)) {
+    console.warn(
+      `⚠️ OpenWA [${state.key}] ignore destroy de la session plateforme ${previousId}`,
+    );
+    state.openwaId = null;
+  } else if (previousId) {
     // Logout d’abord (garder la session nommée), puis recreate si start échoue.
     await destroyRemoteSession(previousId, { deleteSession: false });
   }
@@ -830,7 +908,7 @@ async function recreateRemoteSession(state) {
 async function startRemote(state) {
   if (!state.openwaId) await ensureRemoteSession(state);
   let status = String(state.waState || '').toLowerCase();
-  if (status === 'ready') return;
+  if (status === 'ready' || status === 'action_required') return;
   if (['initializing', 'qr_ready', 'authenticating'].includes(status)) return;
 
   if (['failed', 'logged_out'].includes(status)) {
