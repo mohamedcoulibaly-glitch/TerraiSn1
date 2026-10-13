@@ -247,7 +247,7 @@ const MANAGED = [
     group: 'general',
     type: 'text',
     label: 'Domaine application',
-    hint: 'Ex. https://ton-domaine.sn ou http://localhost:8080',
+    hint: 'Ex. https://terraisn1-1.onrender.com ou http://localhost:8080',
   },
 ];
 
@@ -367,6 +367,122 @@ function hydrateFromDb(db) {
     );
   }
   return { applied, seeded, overridden };
+}
+
+function hostnameOf(url) {
+  try {
+    return new URL(String(url || '')).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Sur Render, RENDER_EXTERNAL_URL est la vérité runtime.
+ * Évite qu’une ancienne APP_DOMAIN en DB (terrainsn.onrender.com, etc.) écrase le bon host.
+ */
+function preferRenderExternalUrl(db) {
+  const renderUrl = String(process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
+  let renderHost = '';
+  try {
+    const u = new URL(renderUrl);
+    if (u.protocol !== 'https:' || ['localhost', '127.0.0.1'].includes(u.hostname)) {
+      return { applied: false, reason: 'no_render_external_url' };
+    }
+    renderHost = u.hostname.toLowerCase();
+  } catch {
+    return { applied: false, reason: 'no_render_external_url' };
+  }
+
+  const currentApp = String(process.env.APP_DOMAIN || '').trim().replace(/\/$/, '');
+  const currentHost = hostnameOf(currentApp);
+  const changed = [];
+
+  if (currentHost !== renderHost) {
+    writeDbValue(db, 'APP_DOMAIN', renderUrl);
+    applyToProcessEnv('APP_DOMAIN', renderUrl);
+    changed.push('APP_DOMAIN');
+  }
+
+  const cors = String(process.env.CORS_ORIGINS || '').trim();
+  if (!cors || !cors.includes(renderHost)) {
+    writeDbValue(db, 'CORS_ORIGINS', renderUrl);
+    applyToProcessEnv('CORS_ORIGINS', renderUrl);
+    changed.push('CORS_ORIGINS');
+  }
+
+  if (changed.length) {
+    try {
+      syncEnvFile({
+        APP_DOMAIN: renderUrl,
+        ...(changed.includes('CORS_ORIGINS') ? { CORS_ORIGINS: renderUrl } : {}),
+      });
+    } catch (err) {
+      console.warn(`[integrations] prefer RENDER_EXTERNAL_URL: ${err.message}`);
+    }
+    console.warn(
+      `[integrations] Domaine forcé sur RENDER_EXTERNAL_URL (${renderHost}) : ${changed.join(', ')}`,
+    );
+  }
+
+  return { applied: changed.length > 0, changed, renderHost, renderUrl };
+}
+
+/**
+ * Si APP_DOMAIN est un HTTPS public, réaligne IPN/success/cancel PayTech
+ * quand elles pointent vers un autre host (ex. ancien terrainsn.onrender.com).
+ */
+function alignPaytechUrlsToAppDomain(db) {
+  const canonical =
+    String(process.env.APP_DOMAIN || '').trim().replace(/\/$/, '')
+    || 'https://terraisn1-1.onrender.com';
+  const appDomain = canonical;
+  let appHost = '';
+  try {
+    const u = new URL(appDomain);
+    if (u.protocol !== 'https:' || ['localhost', '127.0.0.1'].includes(u.hostname)) {
+      return { aligned: false, reason: 'app_domain_not_public_https' };
+    }
+    appHost = u.hostname.toLowerCase();
+  } catch {
+    return { aligned: false, reason: 'app_domain_invalid' };
+  }
+
+  const expected = {
+    PAYTECH_IPN_URL: `${appDomain}/webhook/paytech`,
+    PAYTECH_SUCCESS_URL: `${appDomain}/paytech/success`,
+    PAYTECH_CANCEL_URL: `${appDomain}/paytech/cancel`,
+  };
+
+  const changed = [];
+  for (const [envKey, nextValue] of Object.entries(expected)) {
+    const current = effectiveValue(db, envKey).value;
+    if (!current) {
+      writeDbValue(db, envKey, nextValue);
+      applyToProcessEnv(envKey, nextValue);
+      changed.push(envKey);
+      continue;
+    }
+    const host = hostnameOf(current);
+    if (host && host !== appHost) {
+      writeDbValue(db, envKey, nextValue);
+      applyToProcessEnv(envKey, nextValue);
+      changed.push(envKey);
+    }
+  }
+
+  if (changed.length) {
+    try {
+      syncEnvFile(Object.fromEntries(changed.map((k) => [k, expected[k]])));
+    } catch (err) {
+      console.warn(`[integrations] align PayTech URLs: ${err.message}`);
+    }
+    console.warn(
+      `[integrations] PayTech URLs réalignées sur APP_DOMAIN (${appHost}) : ${changed.join(', ')}`,
+    );
+  }
+
+  return { aligned: changed.length > 0, changed, appHost };
 }
 
 /**
@@ -565,6 +681,8 @@ function save(db, patch = {}) {
 module.exports = {
   MANAGED,
   hydrateFromDb,
+  preferRenderExternalUrl,
+  alignPaytechUrlsToAppDomain,
   describe,
   save,
   syncEnvFile,

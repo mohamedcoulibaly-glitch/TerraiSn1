@@ -31,7 +31,7 @@ export function getOptimizedImageUrl(
   if (url.startsWith('/') && !url.startsWith('//')) return url;
 
   try {
-    const parsed = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'https://terrainsn.com');
+    const parsed = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'https://terraisn1-1.onrender.com');
 
     if (parsed.hostname.includes('unsplash.com') || parsed.hostname.includes('images.unsplash.com')) {
       parsed.searchParams.set('fm', format);

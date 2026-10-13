@@ -5,11 +5,9 @@
 # Plan free : pas de disque persistant (SQLite + seed à chaque machine neuve).
 # Pour Docker + disque : voir Dockerfile (plan Starter).
 #
-# Secrets dashboard (sync: false) :
-# WhatsApp : WHATSAPP_MOCK=false, OPENWA_*, APP_DOMAIN, WHATSAPP_DEV_NUMBER
-# Paiements : PAYTECH_MOCK=false, PAYMENT_MODE=production, PAYMENT_PROVIDER=paytech,
-#   PAYTECH_ENV=prod, PAYTECH_API_KEY/SECRET, PAYTECH_PAYOUT_ENABLED (true seulement si autorisé)
-# Web Push : VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY (sinon auto-générées, moins stables)
+# Domaine prod canonique : https://terraisn1-1.onrender.com
+# Secrets dashboard (sync: false) : WhatsApp OPENWA_*, clés PayTech, VAPID
+# Doc : DEPLOY_RENDER.md
 
 services:
   - type: web
@@ -32,6 +30,16 @@ services:
         value: "false"
       - key: FORCE_SEED
         value: "false"
+      - key: APP_DOMAIN
+        value: https://terraisn1-1.onrender.com
+      - key: CORS_ORIGINS
+        value: https://terraisn1-1.onrender.com
+      - key: PAYTECH_IPN_URL
+        value: https://terraisn1-1.onrender.com/webhook/paytech
+      - key: PAYTECH_SUCCESS_URL
+        value: https://terraisn1-1.onrender.com/paytech/success
+      - key: PAYTECH_CANCEL_URL
+        value: https://terraisn1-1.onrender.com/paytech/cancel
       - key: WHATSAPP_MOCK
         sync: false
       - key: OPENWA_API_KEY
@@ -45,8 +53,6 @@ services:
       - key: OPENWA_PLATFORM_SESSION_ID
         sync: false
       - key: WHATSAPP_DEV_NUMBER
-        sync: false
-      - key: APP_DOMAIN
         sync: false
       - key: PAYTECH_MOCK
         sync: false

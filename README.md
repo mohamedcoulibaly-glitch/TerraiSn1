@@ -72,7 +72,7 @@ Secrets optionnels (Settings → Secrets and variables → Actions) :
 
 - `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — déploiement frontend
 - `LHCI_GITHUB_APP_TOKEN` — commentaires Lighthouse sur les PR
-- variable `VITE_API_URL` — URL de l’API embarquée dans le build (sinon `https://api.terrainsn.com/api`)
+- variable `VITE_API_URL` — URL de l’API embarquée dans le build (sinon `https://terraisn1-1.onrender.com/api` ; sur Render : `/api`)
 
 Pour rendre la CI obligatoire : Settings → Branches → Branch protection → Require status checks → `Backend — tests + API`, `Frontend — lint, tests, build, PWA`, `Admin — typecheck + build`.
 

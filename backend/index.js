@@ -4150,6 +4150,31 @@ async function start() {
   try {
     const runtimeIntegrations = require('./services/runtimeIntegrations');
     const { applied, seeded } = runtimeIntegrations.hydrateFromDb(db);
+    const preferred = runtimeIntegrations.preferRenderExternalUrl(db);
+    if (preferred?.applied) {
+      logger.info(
+        'index.js',
+        `Domaine Render appliqué (${preferred.renderHost}) : ${(preferred.changed || []).join(', ')}`,
+      );
+    }
+    // Filet de sécu hors Render : domaine prod canonique si APP_DOMAIN encore faux
+    const appHostNow = String(process.env.APP_DOMAIN || '');
+    if (
+      /terrainsn\.onrender\.com|https?:\/\/terrainsn\.com\/?$/i.test(appHostNow)
+      || !String(process.env.APP_DOMAIN || '').trim()
+    ) {
+      if (process.env.NODE_ENV === 'production' && !process.env.RENDER_EXTERNAL_URL) {
+        process.env.APP_DOMAIN = 'https://terraisn1-1.onrender.com';
+        process.env.CORS_ORIGINS = process.env.CORS_ORIGINS || 'https://terraisn1-1.onrender.com';
+      }
+    }
+    const aligned = runtimeIntegrations.alignPaytechUrlsToAppDomain(db);
+    if (aligned?.aligned) {
+      logger.info(
+        'index.js',
+        `PayTech URLs alignées sur APP_DOMAIN (${aligned.appHost}) : ${(aligned.changed || []).join(', ')}`,
+      );
+    }
     const wa = require('./whatsappClient');
     if (typeof wa.reloadConfig === 'function') wa.reloadConfig();
     if (applied > 0 || seeded > 0) {

@@ -1,0 +1,12 @@
+---
+description: Domaine de production TerrainSN (Render)
+alwaysApply: true
+---
+
+# Domaine production
+
+- **URL canonique prod** : `https://terraisn1-1.onrender.com`
+- Ne jamais utiliser `https://terrainsn.onrender.com` (404) ni `https://terrainsn.com` / `https://api.terrainsn.com` comme `APP_DOMAIN` / CORS / PayTech IPN.
+- En prod : `APP_DOMAIN` et `CORS_ORIGINS` = `https://terraisn1-1.onrender.com`
+- PayTech : `PAYTECH_IPN_URL` / `SUCCESS` / `CANCEL` dérivés de ce domaine (`/webhook/paytech`, `/paytech/success`, `/paytech/cancel`)
+- Build Render : `VITE_API_URL=/api` (même origine). Hors Render, l’API publique est `https://terraisn1-1.onrender.com/api`

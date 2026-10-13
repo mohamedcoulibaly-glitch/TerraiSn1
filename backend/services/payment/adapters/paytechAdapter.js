@@ -367,15 +367,14 @@ async function payout({ numero, montant, canal, reservationId, motif = 'reversem
     // Si get-account-info échoue, on laisse l’API transfer répondre.
   }
 
-  const { resoudreUrlsPaiement } = require('../../../lib/publicIpnUrl');
-  let callbackUrl = String(process.env.PAYTECH_IPN_URL || '').trim();
-  if (!callbackUrl) {
-    try {
-      const urls = await resoudreUrlsPaiement(reservationId || 0, 'paytech');
-      callbackUrl = urls.ipnUrl;
-    } catch {
-      callbackUrl = '';
-    }
+  const { resoudreUrlsPaiement, isPublicHttps } = require('../../../lib/publicIpnUrl');
+  let callbackUrl = '';
+  try {
+    const urls = await resoudreUrlsPaiement(reservationId || 0, 'paytech');
+    callbackUrl = urls.ipnUrl;
+  } catch {
+    callbackUrl = String(process.env.PAYTECH_IPN_URL || '').trim();
+    if (!isPublicHttps(callbackUrl)) callbackUrl = '';
   }
 
   const service = serviceTransferPaytech(canal);

@@ -24,11 +24,13 @@ Puis **Environment** → variables de base :
 | `JWT_REFRESH_SECRET` | une autre chaîne aléatoire |
 | `SKIP_SEED` | `false` |
 | `COOKIE_SAMESITE` | `lax` |
-| `APP_DOMAIN` | `https://<ton-service>.onrender.com` |
+| `APP_DOMAIN` | `https://terraisn1-1.onrender.com` (domaine prod canonique) |
+| `CORS_ORIGINS` | `https://terraisn1-1.onrender.com` |
 
 **Manual Deploy** → **Deploy latest commit**.
 
 > Ne laisse pas Build = `yarn` et Start = `yarn start`.
+> Ne jamais remettre `terrainsn.onrender.com` (404) ni `terrainsn.com` comme domaine app.
 
 ## Paiements en production (PayTech)
 
@@ -40,8 +42,13 @@ Puis **Environment** → variables de base :
 | `PAYTECH_ENV` | `prod` |
 | `PAYTECH_API_KEY` | clé live PayTech |
 | `PAYTECH_API_SECRET` | secret live PayTech |
+| `PAYTECH_IPN_URL` | `https://terraisn1-1.onrender.com/webhook/paytech` |
+| `PAYTECH_SUCCESS_URL` | `https://terraisn1-1.onrender.com/paytech/success` |
+| `PAYTECH_CANCEL_URL` | `https://terraisn1-1.onrender.com/paytech/cancel` |
 
-`APP_DOMAIN` sert aussi pour IPN/success/cancel. Vérif : `GET /health` → `payment.readyForProd: true`.
+`APP_DOMAIN` sert aussi pour IPN/success/cancel. Vérif : `GET /health` → `payment.readyForProd: true` et `appDomain` = `https://terraisn1-1.onrender.com`.
+
+**Aussi en Super Admin → Intégrations** : les valeurs DB écrasent le `.env` au boot. Au démarrage, l’API réaligne automatiquement les URLs PayTech sur `APP_DOMAIN` si un ancien host (ex. `terrainsn.onrender.com`) est encore en base.
 
 ## Retraits gérants (payouts)
 

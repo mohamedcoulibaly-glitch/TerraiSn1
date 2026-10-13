@@ -86,7 +86,7 @@ jobs:
       run:
         working-directory: frontend
     env:
-      VITE_API_URL: ${{ vars.VITE_API_URL || 'https://api.terrainsn.com/api' }}
+      VITE_API_URL: ${{ vars.VITE_API_URL || 'https://terraisn1-1.onrender.com/api' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -175,7 +175,7 @@ jobs:
       run:
         working-directory: admin-frontend
     env:
-      VITE_API_URL: ${{ vars.VITE_API_URL || 'https://api.terrainsn.com/api' }}
+      VITE_API_URL: ${{ vars.VITE_API_URL || 'https://terraisn1-1.onrender.com/api' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

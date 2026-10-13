@@ -48,7 +48,10 @@ function cheminsGateway(gateway) {
 }
 
 function autoDetectEnabled(gateway = activeGateway()) {
-  if (String(process.env.PAYTECH_IPN_AUTO || 'true').toLowerCase() === 'false') return false;
+  const auto = String(process.env.PAYTECH_IPN_AUTO || '').toLowerCase();
+  // Explicit true : forcer ngrok même si PAYTECH_ENV=prod (staging local)
+  if (auto === 'true') return true;
+  if (auto === 'false') return false;
   if (gateway === 'paydunya') return true;
   const env = String(process.env.PAYTECH_ENV || '').toLowerCase();
   return env !== 'prod';
@@ -138,12 +141,13 @@ async function resoudreUrlsPaiement(reservationId, gateway = activeGateway(), op
     }
   }
 
-  if (!publicBase) publicBase = publicBaseDepuisEnv();
-
-  // Render / prod : APP_DOMAIN ou RENDER_EXTERNAL_URL (HTTPS public) comme base IPN
+  // Prod / Render : APP_DOMAIN (HTTPS) prime sur d'anciennes PAYTECH_* en DB/env
+  // (ex. terrainsn.onrender.com mort — domaine canonique : terraisn1-1.onrender.com).
   if (!publicBase && isPublicHttps(domain)) {
     publicBase = domain;
   }
+
+  if (!publicBase) publicBase = publicBaseDepuisEnv();
 
   let ipnUrl;
   let successUrl;
@@ -185,7 +189,7 @@ async function resoudreUrlsPaiement(reservationId, gateway = activeGateway(), op
   if (!isPublicHttps(ipnUrl) || !isPublicHttps(successUrl) || !isPublicHttps(cancelUrl)) {
     const error = new Error(
       `Le paiement en ligne exige des URLs HTTPS publiques. ` +
-        `Définis APP_DOMAIN=https://<ton-service>.onrender.com ` +
+        `Définis APP_DOMAIN=https://terraisn1-1.onrender.com ` +
         `(ou ${paths.envIpn} / ${paths.envSuccess} / ${paths.envCancel}), ` +
         `ou lance ngrok (ngrok http 3001) en local.`,
     );
