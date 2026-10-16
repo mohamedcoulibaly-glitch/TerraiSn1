@@ -58,6 +58,7 @@ type TodayReservation = {
   prix_total?: number;
   created_at?: string | null;
   verrou_expire_at?: number | null;
+  politique_paiement?: string | null;
   terrain_id?: number | null;
   creneau_id?: number | null;
   /** Présent si card issue d'un blocage (Workflow 6) */
@@ -115,7 +116,7 @@ function toCreneau(resa: TodayReservation, dayDate: string) {
  */
 function resolveLiveStatus(resa: TodayReservation, dayDate: string, nowMs: number): MatchStatus {
   if (resa.statut === "libre") return "libre";
-  if (resa.statut === "en_attente") return "en_attente";
+  if (resa.statut === "en_attente" || resa.statut === "en_attente_paiement") return "en_attente";
 
   const creneau = toCreneau(resa, dayDate);
 
@@ -376,7 +377,7 @@ function QueueCard({
         </div>
       </div>
 
-      {block === "en_attente" && (
+      {block === "en_attente" && !["sans_avance", "sans_acompte"].includes(String(resa.politique_paiement || "")) && (
         <div className="mt-2 space-y-2">
           <PaymentLockGauge
             expiresAt={Number(resa.verrou_expire_at)}
@@ -1108,8 +1109,12 @@ const ManagerDashboard = () => {
     if (date) void loadFreeSlots(terrainId, date);
   }, [dashboard?.terrain?.id, todayPayload?.date, selectedDay, vueActive, filtreJourSemaine, loadFreeSlots]);
 
-  useTerrainEvents(dashboard?.terrain?.id, () => {
+  useTerrainEvents(dashboard?.terrain?.id, (ev) => {
     refreshLive();
+    if (ev.type === "reservation_confirmee") {
+      const joueur = String(ev.joueur_nom || "").trim();
+      toast.success(joueur ? `Réservation confirmée — ${joueur}` : "Nouvelle réservation confirmée");
+    }
   });
 
   const dayDate =

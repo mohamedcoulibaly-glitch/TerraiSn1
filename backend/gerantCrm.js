@@ -6,6 +6,18 @@ function digits(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
+function phoneTail(value) {
+  const raw = digits(value);
+  return raw.length >= 9 ? raw.slice(-9) : '';
+}
+
+/** Derniers 9 chiffres, après retrait des séparateurs. */
+const PHONE_TAIL_SQL = `substr(REPLACE(REPLACE(REPLACE(COALESCE(%s, ''), ' ', ''), '+', ''), '-', ''), -9)`;
+
+function phoneTailExpr(column) {
+  return PHONE_TAIL_SQL.replace('%s', column);
+}
+
 function displayName(row) {
   const prenom = String(row.prenom || '').trim();
   const nom = String(row.nom || '').trim();
@@ -36,6 +48,10 @@ function mapListRow(row, todayYmd) {
     solde_ouvert: solde,
     reservations_30j: Number(row.reservations_30j || 0),
     matches_30j: Number(row.matches_30j || 0),
+    reservations_total: Number(row.reservations_total || 0),
+    first_date: row.first_date || null,
+    telephone_verified: Number(row.telephone_verified) === 1,
+    categorie: 'inscrit',
     assiduite_30j: Number(row.reservations_30j || 0) > 0
       ? Math.round((Number(row.matches_30j || 0) / Number(row.reservations_30j)) * 100)
       : 0,
@@ -49,6 +65,7 @@ function listJoueursSql(todayYmd, since30) {
   return `
     SELECT
       u.id, u.nom, u.prenom, u.telephone, u.email, u.photo_url,
+      COALESCE(u.telephone_verified, 0) AS telephone_verified,
       COALESCE(u.is_banned, 0) AS is_banned,
       u.notes_internes, u.banned_reason, u.banned_at,
       COUNT(r.id) AS reservations_total,
@@ -58,13 +75,29 @@ function listJoueursSql(todayYmd, since30) {
       SUM(CASE WHEN r.statut IN ('confirme', 'match_joue', 'joue')
         THEN COALESCE(r.montant_restant, r.reste_a_payer, 0) ELSE 0 END) AS solde_ouvert,
       SUM(CASE WHEN r.date >= ? THEN 1 ELSE 0 END) AS reservations_30j,
-      SUM(CASE WHEN r.date >= ? AND r.statut IN ('match_joue', 'joue') THEN 1 ELSE 0 END) AS matches_30j
+      SUM(CASE WHEN r.date >= ? AND r.statut IN ('match_joue', 'joue') THEN 1 ELSE 0 END) AS matches_30j,
+      MIN(r.date) AS first_date
     FROM users u
     INNER JOIN reservations r ON r.joueur_id = u.id
     WHERE r.terrain_id = ?
       AND COALESCE(u.role, 'joueur') = 'joueur'
     GROUP BY u.id
   `;
+}
+
+/**
+ * inscrit = compte joueur sur la plateforme.
+ * frequent = déjà venu sur ce terrain, sans compte.
+ * nouveau = jamais vu sur ce terrain.
+ */
+function classerJoueur({ compte, visites }) {
+  if (compte) return 'inscrit';
+  if (Number(visites) >= 1) return 'frequent';
+  return 'nouveau';
+}
+
+function reservationsActivesSql() {
+  return `COALESCE(r.statut, '') NOT IN ('annule', 'annulee', 'expire', 'refusee')`;
 }
 
 function mountGerantCrmRoutes(app) {
@@ -78,30 +111,69 @@ function mountGerantCrmRoutes(app) {
         return res.status(400).json({ error: 'Numéro invalide', trouve: false, joueur: null });
       }
 
-      const joueur = queryOne(
+      const tail = phoneTailExpr('telephone');
+      const inscrit = queryOne(
         db,
-        `SELECT id, nom, prenom, telephone, email, photo_url
+        `SELECT id, nom, prenom, telephone, email, photo_url, COALESCE(telephone_verified, 0) AS telephone_verified
          FROM users
          WHERE COALESCE(role, 'joueur') = 'joueur'
-           AND REPLACE(REPLACE(REPLACE(COALESCE(telephone, ''), ' ', ''), '+', ''), '-', '') LIKE ?
-         ORDER BY id DESC LIMIT 1`,
-        [`%${local9}`],
+           AND ${tail} = ?
+         ORDER BY COALESCE(telephone_verified, 0) DESC, id DESC
+         LIMIT 1`,
+        [local9],
       );
 
-      if (!joueur) return res.json({ trouve: false, joueur: null });
+      const terrainId = Number(req.user?.terrain_id) || 0;
+      const visites = terrainId
+        ? queryAll(
+          db,
+          `SELECT r.joueur_nom, r.joueur_telephone, r.date
+           FROM reservations r
+           WHERE r.terrain_id = ?
+             AND ${reservationsActivesSql()}
+             AND ${phoneTailExpr('r.joueur_telephone')} = ?
+           ORDER BY r.date DESC, r.heure_debut DESC`,
+          [terrainId, local9],
+        )
+        : [];
 
-      return res.json({
-        trouve: true,
-        joueur: {
-          id: joueur.id,
-          nom: joueur.nom || null,
-          prenom: joueur.prenom || null,
-          display_nom: displayName(joueur),
-          telephone: joueur.telephone || null,
-          email: joueur.email || null,
-          photo_url: joueur.photo_url || null,
-        },
-      });
+      if (inscrit) {
+        return res.json({
+          categorie: 'inscrit',
+          trouve: true,
+          visites: visites.length,
+          joueur: {
+            id: inscrit.id,
+            nom: inscrit.nom || null,
+            prenom: inscrit.prenom || null,
+            display_nom: displayName(inscrit),
+            telephone: inscrit.telephone || null,
+            email: inscrit.email || null,
+            photo_url: inscrit.photo_url || null,
+          },
+        });
+      }
+
+      if (visites.length > 0) {
+        const last = visites.find((row) => String(row.joueur_nom || '').trim()) || visites[0];
+        const nom = String(last.joueur_nom || '').trim() || 'Joueur';
+        return res.json({
+          categorie: 'frequent',
+          trouve: false,
+          visites: visites.length,
+          joueur: {
+            id: null,
+            nom,
+            prenom: null,
+            display_nom: nom,
+            telephone: last.joueur_telephone || local9,
+            email: null,
+            photo_url: null,
+          },
+        });
+      }
+
+      return res.json({ categorie: 'nouveau', trouve: false, visites: 0, joueur: null });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Erreur serveur', trouve: false, joueur: null });
@@ -160,15 +232,83 @@ function mountGerantCrmRoutes(app) {
       let rows = queryAll(db, listJoueursSql(todayYmd, since30), [todayYmd, since30, since30, terrainId]);
       let mapped = rows.map((row) => mapListRow(row, todayYmd));
 
+      const comptes = queryAll(
+        db,
+        `SELECT telephone FROM users WHERE COALESCE(role, 'joueur') = 'joueur'`,
+      );
+      const connus = new Set([
+        ...mapped.map((j) => phoneTail(j.telephone)),
+        ...comptes.map((u) => phoneTail(u.telephone)),
+      ].filter(Boolean));
+      const walkins = queryAll(
+        db,
+        `SELECT
+           ${phoneTailExpr('r.joueur_telephone')} AS phone9,
+           MAX(r.joueur_nom) AS nom,
+           MAX(r.joueur_telephone) AS telephone,
+           COUNT(*) AS reservations_total,
+           MIN(r.date) AS first_date,
+           MAX(r.date) AS last_match_at
+         FROM reservations r
+         WHERE r.terrain_id = ?
+           AND r.joueur_id IS NULL
+           AND ${reservationsActivesSql()}
+           AND length(${phoneTailExpr('r.joueur_telephone')}) = 9
+         GROUP BY phone9`,
+        [terrainId],
+      );
+      for (const row of walkins) {
+        if (!row.phone9 || connus.has(row.phone9)) continue;
+        mapped.push({
+          id: null,
+          nom: row.nom,
+          prenom: null,
+          display_nom: String(row.nom || '').trim() || 'Joueur',
+          telephone: row.telephone || row.phone9,
+          email: null,
+          photo_url: null,
+          is_banned: false,
+          notes_internes: null,
+          matches_joues: 0,
+          no_shows: 0,
+          last_match_at: row.last_match_at || null,
+          solde_ouvert: 0,
+          reservations_total: Number(row.reservations_total || 0),
+          reservations_30j: 0,
+          matches_30j: 0,
+          assiduite_30j: 0,
+          first_date: row.first_date || null,
+          telephone_verified: false,
+          categorie: classerJoueur({
+            compte: false,
+            visites: Number(row.reservations_total || 0),
+          }),
+          statut: 'actif',
+          a_joue_aujourd_hui: row.last_match_at === todayYmd,
+          crm: null,
+        });
+      }
+
       if (q) {
         mapped = mapped.filter((j) => {
           const hay = `${j.display_nom} ${j.telephone || ''} ${j.email || ''}`.toLowerCase();
           return hay.includes(q) || digits(j.telephone).includes(digits(q));
         });
       }
+
       if (filter === 'bannis') mapped = mapped.filter((j) => j.is_banned);
       else if (filter === 'dette') mapped = mapped.filter((j) => j.solde_ouvert > 0 && !j.is_banned);
       else if (filter === 'actifs') mapped = mapped.filter((j) => !j.is_banned && j.matches_joues > 0);
+      else if (filter === 'frequents') {
+        mapped = mapped.filter((j) => j.categorie === 'frequent');
+      }       else if (filter === 'nouveaux') {
+        const month = todayYmd.slice(0, 7);
+        mapped = mapped.filter((j) => (
+          j.categorie !== 'inscrit'
+          && String(j.first_date || '').slice(0, 7) === month
+          && Number(j.reservations_total || 0) <= 1
+        ));
+      }
 
       mapped.sort((a, b) => String(a.display_nom).localeCompare(String(b.display_nom), 'fr'));
       res.json({ joueurs: mapped, total: mapped.length });

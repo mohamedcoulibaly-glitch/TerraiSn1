@@ -37,14 +37,21 @@ function ensureUploadDir(terrainId) {
   return dir;
 }
 
+function extensionFromMime(mime) {
+  if (IMAGE_TYPES[mime]) return IMAGE_TYPES[mime];
+  const sub = String(mime.split('/')[1] || 'img').toLowerCase();
+  const clean = sub.replace(/[^a-z0-9]/g, '').slice(0, 8);
+  return clean || 'img';
+}
+
 function parseImageDataUrl(dataUrl) {
-  const match = String(dataUrl || '').match(/^data:(image\/(?:jpeg|png|webp|heic|heif));base64,([a-zA-Z0-9+/=\r\n]+)$/);
+  const match = String(dataUrl || '').match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([a-zA-Z0-9+/=\r\n]+)$/);
   if (!match) {
-    const error = new Error('Image invalide. Formats acceptés : JPG, PNG, WEBP, HEIC.');
+    const error = new Error('Image invalide. Envoyez une image de 5 Mo maximum.');
     error.statusCode = 400;
     throw error;
   }
-  const mime = match[1];
+  const mime = match[1].toLowerCase();
   let buffer = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
   if (!buffer.length) {
     const error = new Error('Image invalide. Fichier vide.');
@@ -56,17 +63,18 @@ function parseImageDataUrl(dataUrl) {
     error.statusCode = 400;
     throw error;
   }
-  let ext = IMAGE_TYPES[mime];
+  let ext = extensionFromMime(mime);
   if (isHeic(mime)) {
-    const jpeg = heicConverter(buffer);
-    const out = Buffer.isBuffer(jpeg) ? jpeg : Buffer.from(jpeg);
-    if (!out.length || out.length > MAX_IMAGE_BYTES) {
-      const error = new Error('Image trop lourde. Taille maximale : 5 Mo.');
-      error.statusCode = 400;
-      throw error;
+    try {
+      const jpeg = heicConverter(buffer);
+      const out = Buffer.isBuffer(jpeg) ? jpeg : Buffer.from(jpeg);
+      if (out.length && out.length <= MAX_IMAGE_BYTES) {
+        buffer = out;
+        ext = 'jpg';
+      }
+    } catch {
+      ext = 'heic';
     }
-    buffer = out;
-    ext = 'jpg';
   }
   return { buffer, ext };
 }
@@ -98,7 +106,28 @@ function syncTerrainPhotos(database, terrainId) {
   return photos;
 }
 
-function createTerrainPhoto(database, terrainId, { dataUrl, est_principale = false, ordre = 0 }) {
+function fileToDataUrl(buffer, mimetype, filename) {
+  if (!buffer || !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
+    const error = new Error('Image invalide. Envoyez une image de 5 Mo maximum.');
+    error.statusCode = 400;
+    throw error;
+  }
+  let mime = String(mimetype || '').toLowerCase();
+  if (!mime.startsWith('image/')) {
+    const ext = String(filename || '').split('.').pop().toLowerCase();
+    const byExt = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+      gif: 'image/gif', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff',
+      heic: 'image/heic', heif: 'image/heif', avif: 'image/avif', jfif: 'image/jpeg',
+    };
+    mime = byExt[ext] || 'image/jpeg';
+  }
+  return `data:${mime};base64,${Buffer.from(buffer).toString('base64')}`;
+}
+
+function createTerrainPhoto(database, terrainId, input = {}) {
+  const { est_principale = false, ordre = 0 } = input;
+  const dataUrl = input.dataUrl || fileToDataUrl(input.buffer, input.mimetype, input.originalname);
   const terrain = queryOne(database, 'SELECT id FROM terrains WHERE id = ?', [terrainId]);
   if (!terrain) {
     const error = new Error('Terrain introuvable');

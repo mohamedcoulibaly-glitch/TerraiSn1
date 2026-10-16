@@ -59,7 +59,7 @@ export default function MapTerrain({
     const success =
       getComputedStyle(document.documentElement).getPropertyValue("--color-success").trim() ||
       getComputedStyle(document.documentElement).getPropertyValue("--primary").trim() ||
-      "#059669";
+      "#1E40AF";
 
     const icon = L.divIcon({
       className: "map-terrain-marker",

@@ -5,6 +5,7 @@ import { resolvePhotoPrincipale, fieldImageForId } from "@/espaces/joueur/compon
 import { Badge, type BadgeTone } from "@/espaces/joueur/components/Badge";
 import { formatTerrainType } from "@/lib/commodites";
 import { cn, formatFcfaPerHour } from "@/lib/utils";
+import { prixAfficheCarte } from "@/lib/prixCarte";
 
 export type PitchCardVariant =
   | "horizontal"
@@ -177,7 +178,7 @@ export function PitchCard({
   const quartier = data.adresse_theorique || data.quartier || data.adresse || data.ville || "";
   const photos = resolvePhotos(data);
   const photo = photos[0] || fieldImageForId(data.id);
-  const prix = Number(data.prix_heure ?? data.prix_terrain_entier ?? 0);
+  const prix = prixAfficheCarte(data);
   const isComplet = status.tone === "complet";
   const formatLabel = formatTerrainType(data.type);
   const note = Number(data.note || 0);

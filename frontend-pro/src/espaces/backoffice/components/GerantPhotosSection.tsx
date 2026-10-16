@@ -12,15 +12,20 @@ type Photo = {
 };
 
 const MAX = 5;
-const ACCEPT = "image/jpeg,image/png,image/webp";
+const ACCEPT = "image/*,.heic,.heif,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.avif,.jfif";
 
 function fileOk(file: File) {
-  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
-    toast.error("JPG, PNG ou WEBP uniquement");
+  if (file.size <= 0) {
+    toast.error("Fichier vide");
     return false;
   }
   if (file.size > 5 * 1024 * 1024) {
     toast.error("5 Mo max par photo");
+    return false;
+  }
+  const type = file.type.toLowerCase();
+  if (type && !type.startsWith("image/") && type !== "application/octet-stream") {
+    toast.error("Le fichier doit être une image");
     return false;
   }
   return true;

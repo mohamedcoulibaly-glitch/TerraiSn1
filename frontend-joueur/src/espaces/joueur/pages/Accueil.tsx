@@ -3,7 +3,8 @@ import { useState, useEffect, useMemo } from "react";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
 import { useTerrainsList } from "@/hooks/useJoueurData";
 import SilentSyncDot from "@/components/SilentSyncDot";
-import { PitchCard } from "@/espaces/joueur/components/PitchCard";
+import { isTerrainFavorite, PitchCard } from "@/espaces/joueur/components/PitchCard";
+import { loadFavoriteIds } from "@/lib/favoris";
 import BannerVideoHeader from "@/espaces/joueur/components/BannerVideoHeader";
 import SkeletonAccueil from "@/components/skeletons/SkeletonAccueil";
 import SkeletonTerrainCard from "@/components/skeletons/SkeletonTerrainCard";
@@ -27,15 +28,8 @@ type GeoState = {
   ready: boolean;
 };
 
-/** Puces exclusives (une seule active) */
-type QuickFiltre =
-  | "tous"
-  | "pres"
-  | "demain"
-  | "weekend"
-  | "5v5"
-  | "7v7"
-  | "11v11";
+/** Puces exclusives (une seule active). Les formats passent avant la proximité et les favoris. */
+type QuickFiltre = "tous" | "5v5" | "7v7" | "11v11" | "pres" | "favori";
 
 type AccueilDraft = {
   searchQuery: string;
@@ -44,12 +38,11 @@ type AccueilDraft = {
 };
 const QUICK_FILTRES: { id: QuickFiltre; label: string }[] = [
   { id: "tous", label: "Tous" },
-  { id: "pres", label: "Près de toi" },
-  { id: "demain", label: "📅 Demain" },
-  { id: "weekend", label: "Ce week-end" },
   { id: "5v5", label: "5v5" },
   { id: "7v7", label: "7v7" },
   { id: "11v11", label: "11v11" },
+  { id: "pres", label: "Près de toi" },
+  { id: "favori", label: "Favoris" },
 ];
 
 const FORMAT_FILTRES: QuickFiltre[] = ["5v5", "7v7", "11v11"];
@@ -67,21 +60,7 @@ function getTomorrowISO() {
   return toLocalISO(d);
 }
 
-/** Samedi + dimanche du week-end en cours ou à venir */
-function getWeekendISOs(): [string, string] {
-  const d = new Date();
-  const day = d.getDay(); // 0=dim … 6=sam
-  const sat = new Date(d);
-  if (day === 0) sat.setDate(d.getDate() - 1);
-  else if (day !== 6) sat.setDate(d.getDate() + (6 - day));
-  const sun = new Date(sat);
-  sun.setDate(sat.getDate() + 1);
-  return [toLocalISO(sat), toLocalISO(sun)];
-}
-
-function dateContextLabel(quick: QuickFiltre, advancedDate?: string): string | null {
-  if (quick === "demain") return "demain";
-  if (quick === "weekend") return "ce week-end";
+function dateContextLabel(_quick: QuickFiltre, advancedDate?: string): string | null {
   if (advancedDate) {
     if (advancedDate === getTomorrowISO()) return "demain";
     const [y, m, day] = advancedDate.split("-");
@@ -97,7 +76,9 @@ const Accueil = () => {
     appliedFiltres: FILTRES_TERRAIN_DEFAUT,
   });
   const searchQuery = accueilDraft.searchQuery;
-  const quickFiltre = accueilDraft.quickFiltre;
+  const quickFiltre: QuickFiltre = QUICK_FILTRES.some((f) => f.id === accueilDraft.quickFiltre)
+    ? accueilDraft.quickFiltre
+    : "tous";
   const appliedFiltres = accueilDraft.appliedFiltres;
   const setSearchQuery = (v: string) => setAccueilDraft((d) => ({ ...d, searchQuery: v }));
   const setQuickFiltre = (v: QuickFiltre) => setAccueilDraft((d) => ({ ...d, quickFiltre: v }));
@@ -141,7 +122,12 @@ const Accueil = () => {
     const refresh = () => setFavTick((n) => n + 1);
     window.addEventListener("storage", refresh);
     window.addEventListener("focus", refresh);
+    let cancelled = false;
+    void loadFavoriteIds().then(() => {
+      if (!cancelled) setFavTick((n) => n + 1);
+    });
     return () => {
+      cancelled = true;
       window.removeEventListener("storage", refresh);
       window.removeEventListener("focus", refresh);
     };
@@ -173,13 +159,7 @@ const Accueil = () => {
     if (FORMAT_FILTRES.includes(quickFiltre)) filters.type = quickFiltre;
     else if (appliedFiltres.type) filters.type = appliedFiltres.type;
 
-    if (quickFiltre === "demain") {
-      filters.date = getTomorrowISO();
-    } else if (quickFiltre === "weekend") {
-      filters.dates = getWeekendISOs().join(",");
-    } else if (appliedFiltres.date) {
-      filters.date = appliedFiltres.date;
-    }
+    if (appliedFiltres.date) filters.date = appliedFiltres.date;
 
     if (appliedFiltres.heure) filters.heure = appliedFiltres.heure;
     if (appliedFiltres.prix_max < 100000) filters.prix_max = appliedFiltres.prix_max;
@@ -209,14 +189,14 @@ const Accueil = () => {
 
   const activeFilterCount = useMemo(() => {
     let n = 0;
-    if (appliedFiltres.date && quickFiltre !== "demain") n += 1;
+    if (appliedFiltres.date) n += 1;
     if (appliedFiltres.heure) n += 1;
     if (appliedFiltres.type) n += 1;
     if (appliedFiltres.quartier.trim()) n += 1;
     if (appliedFiltres.prix_max < 100000) n += 1;
     if (!geo.denied && appliedFiltres.distance_max !== 10) n += 1;
     return n;
-  }, [appliedFiltres, geo.denied, quickFiltre]);
+  }, [appliedFiltres, geo.denied]);
 
   const dateLabel = useMemo(
     () => dateContextLabel(quickFiltre, appliedFiltres.date),
@@ -225,10 +205,15 @@ const Accueil = () => {
 
   const terrainsFiltres = useMemo(() => {
     void favTick;
-    if (quickFiltre !== "pres") return terrains;
-    return [...terrains]
-      .filter((t) => t.distance_km != null && Number(t.distance_km) <= 3)
-      .sort((a, b) => Number(a.distance_km) - Number(b.distance_km));
+    if (quickFiltre === "pres") {
+      return [...terrains]
+        .filter((t) => t.distance_km != null && Number(t.distance_km) <= 3)
+        .sort((a, b) => Number(a.distance_km) - Number(b.distance_km));
+    }
+    if (quickFiltre === "favori") {
+      return terrains.filter((t) => isTerrainFavorite(t.id));
+    }
+    return terrains;
   }, [terrains, quickFiltre, favTick]);
 
   const quartiers = Array.from(
@@ -241,11 +226,6 @@ const Accueil = () => {
 
   const applyFiltres = () => {
     setAppliedFiltres(draftFiltres);
-    if (draftFiltres.date === getTomorrowISO()) {
-      setQuickFiltre("demain");
-    } else if (draftFiltres.date) {
-      setQuickFiltre("tous");
-    }
     setShowFiltres(false);
   };
 
@@ -257,14 +237,6 @@ const Accueil = () => {
 
   const onQuickSelect = (id: QuickFiltre) => {
     setQuickFiltre(id);
-    if (id === "demain") {
-      const demain = getTomorrowISO();
-      setDraftFiltres((f) => ({ ...f, date: demain, type: "" }));
-      setAppliedFiltres((f) => ({ ...f, date: demain, type: "" }));
-    } else {
-      setDraftFiltres((f) => ({ ...f, date: "", type: "" }));
-      setAppliedFiltres((f) => ({ ...f, date: "", type: "" }));
-    }
   };
 
   const emptyMessage = (() => {
@@ -273,8 +245,7 @@ const Accueil = () => {
         ? "Active la localisation pour voir les terrains près de toi."
         : "Aucun terrain à moins de 3 km pour le moment.";
     }
-    if (quickFiltre === "demain") return "Aucun créneau libre demain. Essaie ce week-end ou tous les terrains.";
-    if (quickFiltre === "weekend") return "Aucun créneau libre ce week-end.";
+    if (quickFiltre === "favori") return "Aucun favori pour le moment. Appuie sur le cœur d'un terrain pour le retrouver ici.";
     if (FORMAT_FILTRES.includes(quickFiltre)) return `Aucun terrain ${quickFiltre} trouvé.`;
     return "Essaie d'autres filtres ou un quartier différent.";
   })();
@@ -343,7 +314,7 @@ const Accueil = () => {
           </SheetContent>
         </Sheet>
 
-        {/* Raccourcis date / features */}
+        {/* Formats d'abord, puis proximité et favoris */}
         <div
           className="mt-4 -mx-4 flex gap-2 overflow-x-auto scrollbar-none pl-4 pr-8 sm:-mx-6 sm:pl-6 sm:pr-10 lg:mx-0 lg:px-0"
           role="tablist"

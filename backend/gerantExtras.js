@@ -16,8 +16,9 @@ const photoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 5 },
   fileFilter: (_req, file, cb) => {
-    if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) cb(null, true);
-    else cb(new Error('Format image non supporté'));
+    const mime = String(file.mimetype || '').toLowerCase();
+    if (!mime || mime === 'application/octet-stream' || mime.startsWith('image/')) return cb(null, true);
+    cb(new Error('Le fichier doit être une image de 5 Mo maximum'));
   },
 });
 
@@ -30,8 +31,17 @@ function requireTerrain(req, res) {
   return terrainId;
 }
 
-function bufferToDataUrl(buffer, mimetype) {
-  const mime = String(mimetype || 'image/jpeg');
+function bufferToDataUrl(buffer, mimetype, filename) {
+  let mime = String(mimetype || '').toLowerCase();
+  if (!mime.startsWith('image/')) {
+    const ext = String(filename || '').split('.').pop().toLowerCase();
+    const byExt = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+      gif: 'image/gif', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff',
+      heic: 'image/heic', heif: 'image/heif', avif: 'image/avif', jfif: 'image/jpeg',
+    };
+    mime = byExt[ext] || 'image/jpeg';
+  }
   return `data:${mime};base64,${Buffer.from(buffer).toString('base64')}`;
 }
 
@@ -162,7 +172,7 @@ function mountGerantExtrasRoutes(app) {
         transaction(db, () => {
           if (files.length) {
             files.forEach((file, idx) => {
-              const dataUrl = bufferToDataUrl(file.buffer, file.mimetype);
+              const dataUrl = bufferToDataUrl(file.buffer, file.mimetype, file.originalname);
               created.push(
                 createTerrainPhoto(db, terrainId, {
                   dataUrl,

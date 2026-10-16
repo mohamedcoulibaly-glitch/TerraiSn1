@@ -191,6 +191,11 @@ export const superAdminApi = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  prixCarte: (terrainId: number, prix_carte_source: "demi" | "entier") =>
+    adminRequest(`/admin/terrains/${terrainId}/prix-carte`, {
+      method: "PATCH",
+      body: JSON.stringify({ prix_carte_source }),
+    }),
   delaiVerrouPaiement: (terrainId: number, delai_verrou_paiement_min: number) =>
     adminRequest(`/admin/terrains/${terrainId}/delai-verrou-paiement`, {
       method: "PATCH",

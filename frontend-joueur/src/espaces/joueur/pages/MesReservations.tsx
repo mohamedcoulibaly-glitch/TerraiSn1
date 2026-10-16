@@ -12,6 +12,7 @@ import ReservationDatesBlock from "@/components/ReservationDatesBlock";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
 import { useMesReservations, joueurKeys } from "@/hooks/useJoueurData";
 import { writeSwrCache } from "@/lib/swrCache";
+import { reservationAfficheQr, reservationVisibleJoueur } from "@/lib/reservationVisibilite";
 import {
   Dialog,
   DialogContent,
@@ -167,16 +168,8 @@ const Reservations = () => {
 
   const today = startOfToday();
   const filtered = reservations.filter((r) => {
-    // Tentatives de paiement expirées : retirées de l'historique
-    if (r.statut === "expire") return false;
-    if (
-      r.statut === "en_attente" &&
-      r.verrou_expire_at != null &&
-      Number(r.verrou_expire_at) > 0 &&
-      Number(r.verrou_expire_at) < Date.now()
-    ) {
-      return false;
-    }
+    // Aucune carte tant que le paiement n'est pas confirmé
+    if (!reservationVisibleJoueur(r)) return false;
     const day = reservationDay(r.date);
     const isPastDay = day < today;
     const isClosed = ["joue", "match_joue", "annule", "annulee", "refusee"].includes(r.statut);
@@ -186,7 +179,7 @@ const Reservations = () => {
     if (activeTab === "Passées") {
       return (isPastDay || isClosed) && r.statut !== "en_attente";
     }
-    // Toutes : historique + paiements en cours (jauge visible)
+    // Toutes : uniquement les réservations déjà confirmées ou closes
     return true;
   });
 
@@ -409,13 +402,12 @@ const Reservations = () => {
                         heureDebut={r.heure_debut}
                         heureFin={r.heure_fin}
                       />
-                      {r.code_reservation &&
-                        ["confirme", "match_joue", "joue", "acceptee"].includes(String(r.statut)) && (
+                      {r.code_reservation && reservationAfficheQr(r.statut) && (
                         <p className="text-[12px] text-[var(--color-text-muted)]">Code {r.code_reservation}</p>
                       )}
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-3">
-                          {r.statut === "confirme" && r.qr_code_url && (
+                          {reservationAfficheQr(r.statut) && r.qr_code_url && (
                             <a
                               href={r.qr_code_url}
                               target="_blank"

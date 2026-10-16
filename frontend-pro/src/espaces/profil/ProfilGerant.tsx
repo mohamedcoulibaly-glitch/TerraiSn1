@@ -201,7 +201,7 @@ export default function ProfilGerant() {
           <input
             ref={fileRef}
             type="file"
-            accept="image/png,image/jpeg,image/webp"
+            accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif"
             className="hidden"
             onChange={handlePhoto}
           />

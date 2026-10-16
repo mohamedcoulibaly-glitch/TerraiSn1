@@ -19,15 +19,20 @@ type Props = {
 };
 
 const MAX = 5;
-const ACCEPT = "image/jpeg,image/png,image/webp";
+const ACCEPT = "image/*,.heic,.heif,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.avif,.jfif";
 
 function fileOk(file: File) {
-  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
-    toast.error("JPG, PNG ou WEBP uniquement");
+  if (file.size <= 0) {
+    toast.error("Fichier vide");
     return false;
   }
   if (file.size > 5 * 1024 * 1024) {
     toast.error("5 Mo max par photo");
+    return false;
+  }
+  const type = file.type.toLowerCase();
+  if (type && !type.startsWith("image/") && type !== "application/octet-stream") {
+    toast.error("Le fichier doit être une image");
     return false;
   }
   return true;
@@ -179,7 +184,7 @@ export default function PhotoUploadTerrain({
         <Upload className="mx-auto mb-2" size={22} style={{ color: "var(--sa-primary)" }} />
         <p className="text-[13px] font-medium" style={{ color: "var(--sa-text)" }}>Glisse tes photos ici</p>
         <p className="mt-1 text-[11px]" style={{ color: "var(--sa-muted)" }}>
-          JPG, PNG, WEBP — 5 Mo max par photo — 5 photos max
+          Tout format image — 5 Mo max par photo — 5 photos max
         </p>
         <div className="mt-3 flex flex-wrap justify-center gap-2">
           <button

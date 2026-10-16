@@ -421,7 +421,27 @@ const defaultDevOrigins = [
   'https://app.terrainsn.com',
   'https://pro.terrainsn.com',
 ].join(',');
-const allowedOrigins = (
+function expandLoopbackOrigins(origins) {
+  const out = new Set();
+  for (const origin of origins) {
+    out.add(origin);
+    try {
+      const url = new URL(origin);
+      if (url.hostname === 'localhost') {
+        url.hostname = '127.0.0.1';
+        out.add(url.origin);
+      } else if (url.hostname === '127.0.0.1') {
+        url.hostname = 'localhost';
+        out.add(url.origin);
+      }
+    } catch {
+      /* origine relative ou invalide */
+    }
+  }
+  return [...out];
+}
+
+const allowedOrigins = expandLoopbackOrigins((
   process.env.CORS_ORIGINS
   || [
     process.env.APP_DOMAIN_JOUEUR,
@@ -433,7 +453,7 @@ const allowedOrigins = (
 )
   .split(',')
   .map((origin) => origin.trim())
-  .filter(Boolean);
+  .filter(Boolean));
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
@@ -1267,7 +1287,9 @@ app.get('/api/terrains', async (req, res) => {
       });
     }
 
-    res.json(attachPhotosToTerrains(db, terrains));
+    res.json(
+      attachPhotosToTerrains(db, terrains).map((t) => ({ ...t, ...lirePrixAffiche(t) })),
+    );
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -1366,12 +1388,20 @@ app.get('/api/terrains/:id/full-details', async (req, res) => {
       motif = 'Fermé ce jour';
     } else {
       // Disponibilité : hors résas actives / blocages (même esprit que /creneaux)
+      const nowMs = Date.now();
       const reserved = queryAll(
         db,
-        `SELECT heure_debut, heure_fin FROM reservations
+        `SELECT heure_debut, heure_fin, statut, verrou_expire_at FROM reservations
          WHERE terrain_id = ? AND date = ?
-           AND statut IN ('en_attente', 'confirme', 'acceptee', 'joue', 'match_joue')`,
-        [tid, dateStr],
+           AND (
+             statut IN ('confirme', 'acceptee', 'joue', 'match_joue')
+             OR (
+               statut IN ('en_attente', 'en_attente_paiement')
+               AND verrou_expire_at IS NOT NULL
+               AND verrou_expire_at > ?
+             )
+           )`,
+        [tid, dateStr, nowMs],
       );
       const blocages = queryAll(
         db,
@@ -1380,14 +1410,24 @@ app.get('/api/terrains/:id/full-details', async (req, res) => {
       );
       const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
       creneaux = planned.map((slot) => {
-        const taken =
-          reserved.some((r) => overlaps(slot.heure_debut, slot.heure_fin, r.heure_debut, r.heure_fin)) ||
-          blocages.some((b) => overlaps(slot.heure_debut, slot.heure_fin, b.heure_debut, b.heure_fin));
+        const hit = reserved.find((r) => overlaps(slot.heure_debut, slot.heure_fin, r.heure_debut, r.heure_fin));
+        const blocked = blocages.some((b) => overlaps(slot.heure_debut, slot.heure_fin, b.heure_debut, b.heure_fin));
+        const verrou = Boolean(
+          hit && (hit.statut === 'en_attente' || hit.statut === 'en_attente_paiement'),
+        );
+        const taken = Boolean(hit) || blocked;
         return {
           ...slot,
           heure: slot.heure_debut,
           disponible: !taken,
-          statut: taken ? 'occupe' : 'libre',
+          statut: blocked ? 'bloque' : verrou ? 'verrou' : taken ? 'reserve' : 'libre',
+          verrou_paiement: verrou,
+          verrou_expire_at: verrou ? hit.verrou_expire_at : null,
+          raison_indisponibilite: verrou
+            ? 'Réservé temporairement — paiement en cours'
+            : taken
+              ? 'Ce créneau est pris'
+              : null,
           label: slot.label || slot.heure_debut,
         };
       });
@@ -1395,6 +1435,7 @@ app.get('/api/terrains/:id/full-details', async (req, res) => {
 
     res.json({
       ...serializeTerrain(terrain),
+      ...lirePrixAffiche(terrain),
       formats: [
         { cle: 'moitie', label: 'Demi-terrain', prix_heure: Number(terrain.prix_moitie || 0), map_grille: 'demi' },
         { cle: 'entier', label: 'Terrain entier', prix_heure: Number(terrain.prix_entier || terrain.prix_heure || 0), map_grille: 'entier' },

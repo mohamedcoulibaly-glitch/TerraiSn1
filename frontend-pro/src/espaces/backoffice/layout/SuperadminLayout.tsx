@@ -113,9 +113,17 @@ const SECTIONS: { title: string; items: NavEntry[] }[] = [
   {
     title: "Finance",
     items: [
-      { kind: "link", to: "/backoffice/superadmin/caisse", label: "Caisse & Reversements", icon: Wallet },
-      { kind: "link", to: "/backoffice/superadmin/rapprochement", label: "Rapprochement", icon: Scale },
-      { kind: "link", to: "/backoffice/superadmin/revenus", label: "Revenus", icon: TrendingUp },
+      {
+        kind: "group",
+        label: "Finances",
+        icon: Wallet,
+        basePath: "/backoffice/superadmin",
+        children: [
+          { to: "/backoffice/superadmin/caisse", label: "Caisse & reversements", icon: Wallet },
+          { to: "/backoffice/superadmin/rapprochement", label: "Rapprochement", icon: Scale },
+          { to: "/backoffice/superadmin/revenus", label: "Revenus", icon: TrendingUp },
+        ],
+      },
     ],
   },
   {

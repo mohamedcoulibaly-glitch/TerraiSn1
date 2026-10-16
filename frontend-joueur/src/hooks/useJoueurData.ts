@@ -5,7 +5,7 @@ import { readSwrCache, writeSwrCache } from "@/lib/swrCache";
 import { localYmd } from "@/lib/localDate";
 
 /** Cache-first joueur : pas de refetch au focus si la donnée est encore fraîche. */
-const LIST_STALE_MS = 60_000;
+const LIST_STALE_MS = 15_000;
 const DETAIL_STALE_MS = 30_000;
 const RESA_STALE_MS = 20_000;
 const GC_MS = 1000 * 60 * 45;
@@ -48,8 +48,9 @@ export function useTerrainsList(
     initialDataUpdatedAt: cached?.at,
     staleTime: LIST_STALE_MS,
     gcTime: GC_MS,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+    refetchInterval: 20_000,
     placeholderData: (prev) => prev,
   });
 

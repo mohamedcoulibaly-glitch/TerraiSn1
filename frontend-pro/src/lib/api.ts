@@ -911,9 +911,11 @@ export const gerantApi = {
 
   async joueurByTelephone(numero: string) {
     return await request(`/joueurs/telephone/${encodeURIComponent(numero)}`) as {
+      categorie?: 'inscrit' | 'frequent' | 'nouveau';
       trouve: boolean;
+      visites?: number;
       joueur: {
-        id: number;
+        id: number | null;
         nom: string | null;
         prenom: string | null;
         display_nom: string;
@@ -923,13 +925,9 @@ export const gerantApi = {
     };
   },
 
-  /**
-   * Historique manuel d'un numéro (joueur sans compte). Tolérant : si l'API ne
-   * l'expose pas (404), on retourne une liste vide pour laisser le flux « nouveau joueur ».
-   */
   async joueurHistorique(numero: string) {
     try {
-      return (await request(`/gerant/joueurs/historique/${encodeURIComponent(numero)}`)) as {
+      return (await request(`/joueurs/historique/${encodeURIComponent(numero)}`)) as {
         reservations: Array<{ joueur_nom?: string | null; joueur_telephone?: string | null }>;
       };
     } catch {

@@ -136,6 +136,15 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
 
   const uploadPhoto = async (file?: File | null) => {
     if (!terrain?.id || !file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("5 Mo max par photo");
+      return;
+    }
+    const type = file.type.toLowerCase();
+    if (type && !type.startsWith("image/") && type !== "application/octet-stream") {
+      toast.error("Le fichier doit être une image");
+      return;
+    }
     setPhotoUploading(true);
     try {
       const dataUrl = await readFileAsDataUrl(file);
@@ -481,11 +490,11 @@ const TerrainFormModal = ({ open, onOpenChange, terrain, onSuccess }: TerrainFor
                     {photoUploading ? "Upload en cours..." : "Cliquez pour charger une photo"}
                   </p>
                   <p className="text-[10px] text-muted-foreground mt-1">
-                    JPG, PNG, WEBP - 5 Mo maximum
+                    Tout format image — 5 Mo maximum
                   </p>
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/webp"
+                    accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.avif,.jfif"
                     className="hidden"
                     disabled={photoUploading}
                     onChange={(e) => uploadPhoto(e.target.files?.[0])}

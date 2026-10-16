@@ -41,7 +41,12 @@ async function main() {
   });
   h.assert('heic converti jpg', String(heic.url).endsWith('.jpg'));
 
-  h.assertThrows('gif refusé', () => photo.parseImageDataUrl('data:image/gif;base64,R0lGODlhAQABAAAAACw='), 'Formats acceptés');
+  const gif = photo.createTerrainPhoto(db, monde.terrainAvance, {
+    dataUrl: dataUrl('image/gif', Buffer.from('GIF89a')),
+  });
+  h.assert('gif accepté', String(gif.url).endsWith('.gif'));
+
+  h.assertThrows('pdf refusé', () => photo.parseImageDataUrl('data:application/pdf;base64,JVBERi0='), 'Image invalide');
 
   const big = Buffer.alloc(photo.MAX_IMAGE_BYTES + 1, 1);
   h.assertThrows('trop lourd', () => photo.parseImageDataUrl(dataUrl('image/jpeg', big)), '5 Mo');

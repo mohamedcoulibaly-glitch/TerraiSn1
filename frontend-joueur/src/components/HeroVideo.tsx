@@ -42,7 +42,7 @@ export default function HeroVideo({
   return (
     <div
       className={`absolute inset-0 overflow-hidden ${fallbackClassName}`.trim()}
-      style={{ background: "var(--color-primary-dark, #063D24)" }}
+      style={{ background: "var(--color-primary-dark, #1E3A8A)" }}
       aria-hidden="true"
     >
       <video

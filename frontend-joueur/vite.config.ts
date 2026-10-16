@@ -6,6 +6,9 @@ import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
+  optimizeDeps: {
+    include: ["react", "react-dom", "react/jsx-dev-runtime", "react/jsx-runtime"],
+  },
   server: {
     host: "::",
     port: 5173,
@@ -85,7 +88,7 @@ export default defineConfig(({ mode }) => ({
         name: 'TerrainSN',
         short_name: 'TerrainSN',
         description: 'Réserve ton terrain de foot à Dakar',
-        theme_color: '#059669',
+        theme_color: '#1E40AF',
         background_color: '#0A0F1A',
         display: 'standalone',
         orientation: 'portrait',
@@ -133,6 +136,7 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
   ].filter(Boolean),
   resolve: {
+    preserveSymlinks: true,
     alias: {
       "@": path.resolve(__dirname, "./src"),
       "@shared": path.resolve(__dirname, "../shared"),

@@ -4,6 +4,7 @@ import { superAdminApi } from "@/services/superAdminApi";
 import ConfirmationModal from "@/espaces/backoffice/components/superadmin/ConfirmationModal";
 import Select2 from "@/components/Select2";
 import { fcfa } from "@/lib/saContrat";
+import { openWhatsAppChat } from "@/lib/openWhatsapp";
 
 const MOIS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 
@@ -151,9 +152,17 @@ export default function DettesCommissionsTab({ terrains }: { terrains: any[] }) 
                       <td>
                         {row.gerant_prenom || row.gerant_nom || "—"}
                         {row.gerant_telephone ? (
-                          <a href={`https://wa.me/221${String(row.gerant_telephone).replace(/\D/g, "").slice(-9)}`} className="block text-[11px]" style={{ color: "var(--sa-primary)" }} onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            className="block text-[11px]"
+                            style={{ color: "var(--sa-primary)" }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openWhatsAppChat(String(row.gerant_telephone));
+                            }}
+                          >
                             WhatsApp
-                          </a>
+                          </button>
                         ) : null}
                       </td>
                       <td>{moisLabel(row.periode)}</td>

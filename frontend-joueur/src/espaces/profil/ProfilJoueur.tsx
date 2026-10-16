@@ -8,6 +8,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { useTheme } from "@/contexts/ThemeContext";
 import { ProfileAccount, ProfileError, ProfileShell, StatGrid, readonlyInput } from "./ProfileBlocks";
 import { clearDraft, readDraft, usePersistedState } from "@/hooks/usePersistedState";
+import { useAuth } from "@/hooks/use-auth";
 
 type JoueurProfile = {
   account: ProfileAccount & { quartier?: string; date_naissance?: string };
@@ -16,12 +17,12 @@ type JoueurProfile = {
 
 type ProfilForm = { prenom: string; nom: string; quartier: string; date_naissance: string };
 
-const PROFIL_DRAFT_KEY = "joueur:profil-edit";
-
 export default function ProfilJoueur() {
   const { theme } = useTheme();
+  const { user } = useAuth();
+  const profilDraftKey = `joueur:profil-edit:${user?.id || "session"}`;
   const [data, setData] = useState<JoueurProfile | null>(null);
-  const [form, setForm, { clear: clearProfilDraft }] = usePersistedState<ProfilForm>(PROFIL_DRAFT_KEY, {
+  const [form, setForm, { clear: clearProfilDraft }] = usePersistedState<ProfilForm>(profilDraftKey, {
     prenom: "",
     nom: "",
     quartier: "",
@@ -41,7 +42,7 @@ export default function ProfilJoueur() {
       .then((payload: JoueurProfile) => {
         if (!mounted) return;
         setData(payload);
-        const draft = readDraft<ProfilForm>(PROFIL_DRAFT_KEY);
+        const draft = readDraft<ProfilForm>(profilDraftKey);
         const fromApi: ProfilForm = {
           prenom: payload.account.prenom || "",
           nom: payload.account.nom || "",
@@ -75,7 +76,7 @@ export default function ProfilJoueur() {
     return () => {
       mounted = false;
     };
-  }, [reloadKey, setForm]);
+  }, [reloadKey, setForm, profilDraftKey]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -85,7 +86,7 @@ export default function ProfilJoueur() {
       const refreshed = (await profilApi.getJoueur()) as JoueurProfile;
       setData(refreshed);
       clearProfilDraft();
-      clearDraft(PROFIL_DRAFT_KEY);
+      clearDraft(profilDraftKey);
       setForm({
         prenom: refreshed.account.prenom || "",
         nom: refreshed.account.nom || "",

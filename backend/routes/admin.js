@@ -48,8 +48,9 @@ const photoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 5 },
   fileFilter: (_req, file, cb) => {
-    if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) return cb(null, true);
-    cb(new Error('JPG, PNG ou WEBP uniquement'));
+    const mime = String(file.mimetype || '').toLowerCase();
+    if (!mime || mime === 'application/octet-stream' || mime.startsWith('image/')) return cb(null, true);
+    cb(new Error('Le fichier doit être une image de 5 Mo maximum'));
   },
 });
 const {

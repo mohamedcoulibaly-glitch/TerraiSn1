@@ -1,9 +1,9 @@
 import { MessageCircle } from "lucide-react";
+import { openWhatsAppChat } from "@/lib/openWhatsapp";
 
-function supportWhatsAppHref(message: string) {
+function supportPhone() {
   const raw = String(import.meta.env.VITE_SUPPORT_WHATSAPP || "221770000000").replace(/\D/g, "");
-  const phone = raw.startsWith("221") ? raw : raw.length === 9 ? `221${raw}` : raw;
-  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+  return raw.startsWith("221") ? raw : raw.length === 9 ? `221${raw}` : raw;
 }
 
 export default function ContacterAdminCard({ hint }: { hint?: string }) {
@@ -23,18 +23,20 @@ export default function ContacterAdminCard({ hint }: { hint?: string }) {
           {hint || "Ces infos sont gérées par l'administration pour éviter les erreurs."}
         </p>
       </div>
-      <a
-        href={supportWhatsAppHref(
-          "Bonjour, je suis gérant et j’ai besoin de modifier des informations sur mon compte / mon terrain.",
-        )}
-        target="_blank"
-        rel="noreferrer"
+      <button
+        type="button"
+        onClick={() =>
+          openWhatsAppChat(
+            supportPhone(),
+            "Bonjour, je suis gérant et j’ai besoin de modifier des informations sur mon compte / mon terrain.",
+          )
+        }
         className="w-full min-h-[48px] rounded-xl text-base font-semibold text-white inline-flex items-center justify-center gap-2"
         style={{ background: "#16a34a" }}
       >
         <MessageCircle className="w-5 h-5" />
         Contacter l&apos;administration
-      </a>
+      </button>
     </div>
   );
 }

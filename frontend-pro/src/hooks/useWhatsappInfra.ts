@@ -12,7 +12,7 @@ export function useWhatsappInfra(enabled = true) {
 
     async function ping() {
       try {
-        const res = await fetch(`${API_URL}/whatsapp/health`, { cache: "no-store", credentials: "include" });
+        const res = await fetch(`${API_URL}/whatsapp/status`, { cache: "no-store", credentials: "include" });
         const data = await res.json().catch(() => ({}));
         if (!cancelled) setDown(isWhatsappInfraDown(data));
       } catch {
@@ -21,7 +21,7 @@ export function useWhatsappInfra(enabled = true) {
     }
 
     ping();
-    const timer = window.setInterval(ping, 15000);
+    const timer = window.setInterval(ping, 8000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

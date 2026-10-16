@@ -64,6 +64,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("access_token");
     localStorage.removeItem("terrainsn_token");
     localStorage.removeItem("terrainsn_user");
+    const draftKeys: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.includes("profil-edit")) draftKeys.push(key);
+    }
+    draftKeys.forEach((key) => localStorage.removeItem(key));
     setUser(null);
     setAccessToken(null);
   }

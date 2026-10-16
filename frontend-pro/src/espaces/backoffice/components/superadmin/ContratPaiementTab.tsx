@@ -140,6 +140,9 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
   const [remb, setRemb] = useState(contrat.remboursement_autorise || Number(terrain.delai_remboursement_heures || 0) > 0);
   const [delai, setDelai] = useState(String(terrain.delai_remboursement_heures ?? 0));
   const [delaiVerrou, setDelaiVerrou] = useState(String(terrain.delai_verrou_paiement_min ?? 15));
+  const [prixCarte, setPrixCarte] = useState<"demi" | "entier">(
+    terrain.prix_carte_source === "entier" ? "entier" : "demi",
+  );
   const [mode, setMode] = useState<PayoutMode>(contrat.payout_mode);
   const [politique, setPolitique] = useState<FraisPolitique>(contrat.payout_frais_politique);
   const [pctG, setPctG] = useState(String(contrat.frais_payout_pct_gerant ?? 1));
@@ -198,6 +201,23 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
         `${nextPol} · ${updated?.delai_paiement_dette_jours ?? delaiDetteNum} j`,
       );
       toast.success("Politique de paiement enregistrée");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function savePrixCarte() {
+    setSaving("prix-carte");
+    try {
+      const updated = (await superAdminApi.prixCarte(terrain.id, prixCarte)) as {
+        prix_affiche?: number;
+        prix_carte_source?: string;
+      };
+      toast.success(
+        `Prix carte : ${Number(updated?.prix_affiche || 0).toLocaleString("fr-FR")} FCFA (${updated?.prix_carte_source || prixCarte})`,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
     } finally {
@@ -514,6 +534,52 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
             {saving === "delai-dette" ? "Enregistrement…" : "Enregistrer le délai"}
           </button>
         </div>
+      </section>
+
+      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-primary)" }}>
+        <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
+          Prix affiché sur la carte
+        </h3>
+        <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+          Ce montant apparaît sur l&apos;accueil joueur. Par défaut : demi-terrain.
+        </p>
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setPrixCarte("demi")}
+            className="min-h-[40px] px-3 rounded-lg text-[13px] font-semibold"
+            style={{
+              border: prixCarte === "demi" ? "2px solid var(--sa-primary)" : "1px solid var(--sa-border)",
+              background: prixCarte === "demi" ? "var(--sa-primary-glow)" : "var(--sa-surface)",
+            }}
+          >
+            Demi-terrain
+            {terrain.prix_moitie ? ` · ${Number(terrain.prix_moitie).toLocaleString("fr-FR")} F` : ""}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPrixCarte("entier")}
+            className="min-h-[40px] px-3 rounded-lg text-[13px] font-semibold"
+            style={{
+              border: prixCarte === "entier" ? "2px solid var(--sa-primary)" : "1px solid var(--sa-border)",
+              background: prixCarte === "entier" ? "var(--sa-primary-glow)" : "var(--sa-surface)",
+            }}
+          >
+            Terrain entier
+            {terrain.prix_entier || terrain.prix_heure
+              ? ` · ${Number(terrain.prix_entier || terrain.prix_heure).toLocaleString("fr-FR")} F`
+              : ""}
+          </button>
+        </div>
+        <button
+          type="button"
+          disabled={saving === "prix-carte"}
+          onClick={() => void savePrixCarte()}
+          className="mt-4 min-h-[44px] px-4 rounded-lg text-[13px] font-semibold text-white"
+          style={{ background: "var(--sa-primary)" }}
+        >
+          {saving === "prix-carte" ? "Enregistrement…" : "Enregistrer le prix carte"}
+        </button>
       </section>
 
       {/* BLOC 1 */}

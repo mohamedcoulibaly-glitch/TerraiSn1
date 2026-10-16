@@ -5,6 +5,7 @@ import { gerantApi } from "@/lib/api";
 import { formatPhoneDisplay, toLocal9 } from "@/auth/phone";
 import { FicheBlocageGroupe } from "@/espaces/backoffice/components/FicheBlocageGroupe";
 import { featureEnabled } from "@/lib/terrainFeatures";
+import { whatsAppHref } from "@/lib/openWhatsapp";
 
 type Onglet = "reservations" | "joueurs";
 type ResaSous = "matchs" | "abonnements" | "tournois";
@@ -23,11 +24,12 @@ type Reservation = {
 };
 
 type JoueurRow = {
-  id: number;
+  id: number | null;
   display_nom: string;
   telephone?: string | null;
   reservations_total?: number;
   last_reservation_at?: string | null;
+  categorie?: "inscrit" | "frequent" | "nouveau";
 };
 
 type FicheData = {
@@ -65,8 +67,8 @@ const RESA_FILTERS = [
 
 const JOUEUR_FILTERS = [
   { id: "all", label: "Tous" },
-  { id: "frequents", label: "Joueurs fréquents" },
-  { id: "nouveaux", label: "Nouveaux ce mois" },
+  { id: "frequents", label: "Fréquents · sans compte" },
+  { id: "nouveaux", label: "Tout nouveaux" },
 ] as const;
 
 function statusUi(statut?: string) {
@@ -86,10 +88,7 @@ function statusUi(statut?: string) {
 }
 
 function waLink(tel?: string | null) {
-  const digits = String(tel || "").replace(/\D/g, "");
-  if (!digits) return null;
-  const full = digits.startsWith("221") ? digits : `221${digits.slice(-9)}`;
-  return `https://wa.me/${full}`;
+  return whatsAppHref(String(tel || ""));
 }
 
 function fcfa(n?: number) {
@@ -676,15 +675,22 @@ export default function JoueursReservationsPage() {
             <ul className="space-y-2">
               {joueurs.map((j) => {
                 const link = waLink(j.telephone);
+                const badge = j.categorie === "inscrit"
+                  ? "Compte"
+                  : j.categorie === "frequent"
+                    ? "Fréquent"
+                    : "Nouveau";
                 return (
                   <li
-                    key={j.id}
+                    key={j.id ?? j.telephone ?? j.display_nom}
                     className="rounded-xl px-3 py-2.5 flex items-center gap-3"
                     style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}
                   >
                     <button
                       type="button"
-                      onClick={() => navigate(`/backoffice/gerant/joueurs/${j.id}`)}
+                      onClick={() => {
+                        if (j.id) navigate(`/backoffice/gerant/joueurs/${j.id}`);
+                      }}
                       className="flex items-center gap-3 flex-1 min-w-0 text-left min-h-[44px]"
                     >
                       <span
@@ -696,6 +702,9 @@ export default function JoueursReservationsPage() {
                       <div className="min-w-0">
                         <p className="text-sm font-semibold truncate" style={{ color: "var(--g-text)" }}>
                           {j.display_nom}
+                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--g-muted)" }}>
+                            {badge}
+                          </span>
                         </p>
                         <p className="text-xs" style={{ color: "var(--g-muted)" }}>
                           {j.telephone || "—"} · {j.reservations_total || 0} réservation{(j.reservations_total || 0) > 1 ? "s" : ""}

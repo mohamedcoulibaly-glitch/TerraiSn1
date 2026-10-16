@@ -128,7 +128,7 @@ export function ProfilePhoto({ account, onUpdated }: { account?: ProfileAccount 
       >
         <Camera className="w-3.5 h-3.5" />
       </button>
-      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" capture="environment" className="hidden" onChange={handlePhoto} />
+      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" className="hidden" onChange={handlePhoto} />
     </div>
   );
 }

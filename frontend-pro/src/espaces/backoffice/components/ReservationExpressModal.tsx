@@ -27,7 +27,7 @@ type JoueurConnu = {
   photo_url?: string | null;
 };
 
-/** inscrit = compte plateforme ; connu = historique manuel ; nouveau = inconnu */
+/** inscrit = compte plateforme ; connu = fréquent sans compte ; nouveau = jamais vu */
 type LookupKind = "idle" | "loading" | "inscrit" | "connu" | "nouveau";
 
 type Prefill = {
@@ -563,8 +563,10 @@ export default function ReservationExpressModal({
           const data = await gerantApi.joueurByTelephone(telLocal);
           if (cancelled) return;
 
+          const categorie = data?.categorie || (data?.trouve && data.joueur?.id ? "inscrit" : null);
+
           // CAS 1 — compte plateforme
-          if (data?.trouve && data.joueur) {
+          if (categorie === "inscrit" && data.joueur) {
             const known = data.joueur;
             const split = splitDisplayNom(known.display_nom);
             const prenomDb = String(known.prenom || "").trim();
@@ -592,8 +594,26 @@ export default function ReservationExpressModal({
             return;
           }
 
-          // CAS 2 — historique manuel sans compte
-          const hist = await gerantApi.joueurHistorique(telLocal);
+          // CAS 2 — déjà venu sur ce terrain, sans compte
+          if (categorie === "frequent" && data.joueur) {
+            const known = data.joueur;
+            const split = splitDisplayNom(known.display_nom || known.nom || "");
+            setJoueurConnu({
+              id: null,
+              display_nom: known.display_nom || known.nom || "Joueur",
+              prenom: split.prenom,
+              nom: split.nom,
+              telephone: known.telephone,
+              photo_url: null,
+            });
+            setJoueurId(null);
+            setJoueurPrenom(split.prenom);
+            setJoueurNomFamille(split.nom);
+            setLookupState("connu");
+            return;
+          }
+
+          const hist = categorie ? { reservations: [] } : await gerantApi.joueurHistorique(telLocal);
           if (cancelled) return;
           const last = hist?.reservations?.[0];
           if (last?.joueur_nom) {
@@ -1342,7 +1362,7 @@ export default function ReservationExpressModal({
                             {joueurConnu.display_nom}
                           </p>
                           <span className="mt-0.5 inline-flex rounded-full bg-neutral-500 px-2 py-0.5 text-[10px] font-semibold text-white">
-                            Joueur connu 📋
+                            Joueur fréquent · sans compte
                           </span>
                         </div>
                       </div>
@@ -1364,7 +1384,7 @@ export default function ReservationExpressModal({
                   {/* CAS 3 — numéro inconnu */}
                   {lookupState === "nouveau" && (
                     <div className="space-y-3">
-                      <p className="text-xs text-neutral-500">Nouveau joueur — saisis son prénom</p>
+                      <p className="text-xs text-neutral-500">Tout nouveau joueur — saisis son prénom</p>
                       <input
                         value={joueurPrenom}
                         onChange={(e) => setJoueurPrenom(e.target.value)}

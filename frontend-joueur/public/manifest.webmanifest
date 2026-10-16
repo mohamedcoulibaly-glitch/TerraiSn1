@@ -3,7 +3,7 @@
   "name": "TerrainSN",
   "short_name": "TerrainSN",
   "description": "Réserve ton terrain de foot à Dakar",
-  "theme_color": "#059669",
+  "theme_color": "#1E40AF",
   "background_color": "#0A0F1A",
   "display": "standalone",
   "orientation": "portrait",

@@ -24,6 +24,10 @@ export function messageErreurAuth(
     return "Trop de tentatives. Réessayez dans quelques minutes.";
   }
 
+  if (e?.code === "COMPTE_PRO" || /compte professionnel|espace pro|terrain ?sn pro/i.test(msg)) {
+    return "Ce numéro est un compte professionnel. Ouvre TerrainSN Pro.";
+  }
+
   if (e?.status === 403 || /suspendu/i.test(msg)) {
     return "Compte suspendu. Contacte l'administration.";
   }

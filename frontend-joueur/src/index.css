@@ -25,12 +25,12 @@
     --text-secondary:      #3D5166;
     --text-muted:          #7A8FA6;
 
-    /* Primaire — Vert terrain */
-    --primary:             #059669;
-    --primary-light:       #10B981;
-    --primary-dark:        #047857;
-    --primary-glow:        rgba(5, 150, 105, 0.12);
-    --primary-glow-strong: rgba(5, 150, 105, 0.25);
+    /* Primaire — bleu charte (dès le premier paint, avant .joueur-app) */
+    --primary:             #1E40AF;
+    --primary-light:       #3B82F6;
+    --primary-dark:        #1E3A8A;
+    --primary-glow:        rgba(30, 64, 175, 0.12);
+    --primary-glow-strong: rgba(30, 64, 175, 0.25);
 
     /* Accent — Or chaud */
     --accent:              #D97706;
@@ -47,10 +47,10 @@
     --orange-money:        #EA580C;
 
     /* Hero mode clair */
-    --hero-overlay-from:   rgba(5, 30, 20, 0.75);
-    --hero-overlay-to:     rgba(3, 20, 12, 0.95);
-    --hero-badge-bg:       rgba(5, 150, 105, 0.2);
-    --hero-badge-border:   rgba(5, 150, 105, 0.4);
+    --hero-overlay-from:   rgba(15, 23, 50, 0.75);
+    --hero-overlay-to:     rgba(10, 15, 40, 0.95);
+    --hero-badge-bg:       rgba(30, 64, 175, 0.20);
+    --hero-badge-border:   rgba(30, 64, 175, 0.40);
     --hero-search-bg:      rgba(255, 255, 255, 0.92);
     --hero-search-border:  rgba(255, 255, 255, 0.8);
     --hero-search-text:    #0D1B2A;
@@ -114,27 +114,27 @@
     --s-card-foreground: 210 50% 11%;
     --s-popover: 0 0% 100%;
     --s-popover-foreground: 210 50% 11%;
-    --s-primary: 160 84% 30%;
+    --s-primary: 225 71% 40%;
     --s-primary-foreground: 0 0% 100%;
     --s-secondary: 32 95% 44%;
     --s-secondary-foreground: 210 50% 11%;
     --s-muted: 214 32% 93%;
     --s-muted-foreground: 210 20% 45%;
-    --s-accent: 160 40% 94%;
-    --s-accent-foreground: 160 84% 24%;
+    --s-accent: 225 55% 95%;
+    --s-accent-foreground: 225 71% 32%;
     --s-destructive: 0 72% 51%;
     --s-destructive-foreground: 0 0% 100%;
     --s-border: 214 25% 85%;
     --s-input: 214 25% 85%;
-    --s-ring: 160 84% 30%;
+    --s-ring: 225 71% 40%;
     --s-sidebar-background: 210 36% 10%;
     --s-sidebar-foreground: 0 0% 98%;
-    --s-sidebar-primary: 160 84% 30%;
+    --s-sidebar-primary: 225 71% 40%;
     --s-sidebar-primary-foreground: 0 0% 100%;
     --s-sidebar-accent: 210 30% 16%;
     --s-sidebar-accent-foreground: 0 0% 98%;
     --s-sidebar-border: 210 20% 18%;
-    --s-sidebar-ring: 160 84% 30%;
+    --s-sidebar-ring: 225 71% 40%;
     --s-success: 160 84% 30%;
     --s-warning: 21 90% 48%;
     --s-info: 217 91% 55%;
@@ -184,11 +184,11 @@
     --text-secondary:      #8BAFC8;
     --text-muted:          #4A6278;
 
-    --primary:             #10B981;
-    --primary-light:       #34D399;
-    --primary-dark:        #059669;
-    --primary-glow:        rgba(16, 185, 129, 0.15);
-    --primary-glow-strong: rgba(16, 185, 129, 0.30);
+    --primary:             #3B82F6;
+    --primary-light:       #60A5FA;
+    --primary-dark:        #1E40AF;
+    --primary-glow:        rgba(59, 130, 246, 0.18);
+    --primary-glow-strong: rgba(59, 130, 246, 0.32);
 
     --accent:              #F59E0B;
     --accent-light:        #FBBF24;
@@ -203,8 +203,8 @@
 
     --hero-overlay-from:   rgba(7, 13, 20, 0.70);
     --hero-overlay-to:     rgba(7, 13, 20, 0.96);
-    --hero-badge-bg:       rgba(16, 185, 129, 0.15);
-    --hero-badge-border:   rgba(16, 185, 129, 0.35);
+    --hero-badge-bg:       rgba(59, 130, 246, 0.18);
+    --hero-badge-border:   rgba(59, 130, 246, 0.40);
     --hero-search-bg:      rgba(15, 25, 35, 0.85);
     --hero-search-border:  rgba(31, 45, 61, 0.9);
     --hero-search-text:    #F0F6FF;
@@ -227,19 +227,19 @@
     --s-card-foreground: 210 40% 96%;
     --s-popover: 210 36% 10%;
     --s-popover-foreground: 210 40% 96%;
-    --s-primary: 160 84% 39%;
+    --s-primary: 217 91% 60%;
     --s-primary-foreground: 210 40% 5%;
     --s-secondary: 38 92% 50%;
     --s-secondary-foreground: 210 40% 5%;
     --s-muted: 210 30% 14%;
     --s-muted-foreground: 210 20% 55%;
-    --s-accent: 160 30% 14%;
-    --s-accent-foreground: 160 84% 70%;
+    --s-accent: 225 30% 14%;
+    --s-accent-foreground: 213 94% 78%;
     --s-destructive: 0 84% 60%;
     --s-destructive-foreground: 0 0% 100%;
     --s-border: 210 25% 18%;
     --s-input: 210 25% 18%;
-    --s-ring: 160 84% 39%;
+    --s-ring: 217 91% 60%;
     --s-success: 160 84% 39%;
     --s-warning: 25 95% 53%;
     --s-info: 217 91% 60%;
@@ -1337,7 +1337,7 @@
   margin-top: 4px;
   border-radius: 50% 50% 50% 0;
   transform: rotate(-45deg);
-  background: var(--pin, #059669);
+  background: var(--pin, #1E40AF);
   border: 2.5px solid #fff;
   box-sizing: border-box;
 }
@@ -1564,22 +1564,21 @@
 }
 
 /* ============================================
-   LOGIN JOUEUR
-   Sport, énergie, vert terrain
+   LOGIN JOUEUR — même bleu que la charte
    ============================================ */
 .login-joueur {
-  --lj-overlay-from:    rgba(3, 20, 12, 0.35);
-  --lj-overlay-to:      rgba(3, 20, 12, 0.82);
+  --lj-overlay-from:    rgba(15, 23, 50, 0.35);
+  --lj-overlay-to:      rgba(10, 15, 40, 0.82);
   --lj-sheet-bg:        #FFFFFF;
   --lj-text:            #0D1B2A;
   --lj-muted:           #7A8FA6;
   --lj-border:          #D4DBE6;
-  --lj-primary:         #059669;
-  --lj-primary-dark:    #047857;
-  --lj-primary-glow:    rgba(5,150,105,0.12);
-  --lj-input-focus:     #059669;
+  --lj-primary:         #1E40AF;
+  --lj-primary-dark:    #1E3A8A;
+  --lj-primary-glow:    rgba(30, 64, 175, 0.12);
+  --lj-input-focus:     #1E40AF;
   --lj-error:           #DC2626;
-  --lj-tab-active:      #059669;
+  --lj-tab-active:      #1E40AF;
 }
 
 .dark .login-joueur {
@@ -1657,9 +1656,9 @@
 .login-joueur .login-bg-overlay {
   background: linear-gradient(
     180deg,
-    rgba(3, 20, 12, 0.28) 0%,
-    rgba(3, 20, 12, 0.18) 45%,
-    rgba(3, 20, 12, 0.55) 100%
+    rgba(15, 23, 50, 0.32) 0%,
+    rgba(15, 23, 50, 0.18) 45%,
+    rgba(10, 15, 40, 0.62) 100%
   );
 }
 

@@ -47,6 +47,9 @@ type CreneauSlot = {
   duree_minutes?: number;
   duree_label?: string;
   raison_indisponibilite?: string | null;
+  statut?: string;
+  verrou_paiement?: boolean;
+  verrou_expire_at?: number | null;
   prix_moitie?: number | null;
   prix_entier?: number | null;
 };
@@ -396,6 +399,8 @@ const FieldDetails = () => {
   useTerrainEvents(terrain?.id || id, (ev) => {
     if (
       ev.type === "tarifs" ||
+      ev.type === "config_updated" ||
+      ev.type === "reservation_confirmee" ||
       ev.type === "horaires" ||
       ev.type === "blocage" ||
       ev.type === "reservation" ||
@@ -940,6 +945,9 @@ const FieldDetails = () => {
                     const heure = slot.heure || slot.heure_debut;
                     const selected = selectedSlot === heure;
                     const available = Boolean(slot.disponible);
+                    const verrou = Boolean(slot.verrou_paiement) || slot.statut === "verrou";
+                    const expireAt = Number(slot.verrou_expire_at || 0);
+                    const minutesLeft = expireAt > Date.now() ? Math.max(1, Math.ceil((expireAt - Date.now()) / 60000)) : null;
                     const fin = slot.heure_fin || getEndTime(heure, selectedDuration);
                     const long = (slot.duree_minutes || selectedDuration * 60) > 60;
                     const labelCreneau = getLabelCreneau(
@@ -951,7 +959,9 @@ const FieldDetails = () => {
                       slot.raison_indisponibilite ||
                       (available
                         ? `${formatHourLabel(heure)} – ${formatHourLabel(fin)}`
-                        : "Indisponible");
+                        : verrou
+                          ? "Réservé temporairement — paiement en cours"
+                          : "Indisponible");
                     return (
                       <button
                         key={`${heure}-${fin}`}
@@ -970,7 +980,9 @@ const FieldDetails = () => {
                         className={`min-h-[52px] rounded-xl text-sm font-semibold transition-[transform,opacity] duration-200 border will-change-transform ${
                           long ? "col-span-2" : ""
                         } ${
-                          !available
+                          verrou
+                            ? "bg-amber-50 text-amber-800 border-amber-300 cursor-not-allowed"
+                            : !available
                             ? "bg-gray-100 dark:bg-[var(--surface-3)] text-gray-400 line-through cursor-not-allowed border-transparent"
                             : selected
                               ? "bg-[var(--primary)] text-white border-[var(--primary)] shadow-md scale-[1.03]"
@@ -1000,7 +1012,11 @@ const FieldDetails = () => {
                               selected ? "text-white/80" : "opacity-60"
                             }`}
                           >
-                            {!available
+                            {verrou
+                              ? minutesLeft
+                                ? `Paiement · ${minutesLeft} min`
+                                : "Paiement en cours"
+                              : !available
                               ? slot.raison_indisponibilite?.includes("chevauche") ||
                                 slot.raison_indisponibilite?.includes("match")
                                 ? "Non disponible"
@@ -1015,7 +1031,7 @@ const FieldDetails = () => {
                   })}
                 </div>
                 <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
-                  Bleu = disponible · Gris = indisponible
+                  Bleu = libre · Ambre = paiement en cours · Gris = pris
                 </p>
                 {hasSlot && stickyRecap && canBrowseSlots ? (
                   <div

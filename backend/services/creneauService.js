@@ -228,11 +228,15 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
   const now = Date.now();
   const reservations = queryAll(
     database,
-    `SELECT date, heure_debut, heure_fin, statut, joueur_nom FROM reservations
+    `SELECT date, heure_debut, heure_fin, statut, joueur_nom, verrou_expire_at FROM reservations
       WHERE terrain_id = ? AND date IN (${placeholders})
         AND (
           statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
-          OR (statut = 'en_attente' AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?)
+          OR (
+            statut IN ('en_attente', 'en_attente_paiement')
+            AND verrou_expire_at IS NOT NULL
+            AND verrou_expire_at > ?
+          )
         )`,
     [terrainId, ...datesNeeded, now],
   );
@@ -262,8 +266,9 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
       date: toYmd(r.date),
       heure_debut: hhmm(r.heure_debut),
       heure_fin: hhmm(r.heure_fin),
-      kind: 'reserve',
+      kind: r.statut === 'en_attente' || r.statut === 'en_attente_paiement' ? 'verrou' : 'reserve',
       label: r.joueur_nom || 'Réservé',
+      verrou_expire_at: r.verrou_expire_at || null,
     })),
     ...blocages.map((b) => ({
       date: toYmd(b.date),
@@ -312,6 +317,7 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
     let raison = null;
     if (enConflit) {
       if (premier.kind === 'bloque') raison = 'bloque';
+      else if (premier.kind === 'verrou') raison = 'verrou';
       else if (chevauche(debut, finBase, premier.heure_debut, premier.heure_fin) && duree === dureeBase) {
         raison = 'reserve';
       } else {
@@ -335,15 +341,19 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
       label_court: slotPlan.label_court || courtLabelHeureSenegal(slotDate, debut),
       est_minuit_culturel: Boolean(slotPlan.est_minuit_culturel),
       date_affichage: slotPlan.date_affichage || slotDate,
-      statut: enConflit ? (raison === 'bloque' ? 'bloque' : 'reserve') : 'libre',
+      statut: enConflit ? (raison === 'bloque' ? 'bloque' : raison === 'verrou' ? 'verrou' : 'reserve') : 'libre',
       disponible: !enConflit,
       bloque: raison === 'bloque',
+      verrou_paiement: raison === 'verrou',
+      verrou_expire_at: raison === 'verrou' ? premier.verrou_expire_at || null : null,
       raison_indisponibilite: enConflit
         ? raison === 'chevauchement'
           ? `Un match de ${formatDuree(dureeMinutesOf(premier.heure_debut, premier.heure_fin))} commence à ${premier.heure_debut.replace(':', 'h')}`
           : raison === 'bloque'
             ? 'Créneau bloqué'
-            : 'Ce créneau est pris'
+            : raison === 'verrou'
+              ? 'Réservé temporairement — paiement en cours'
+              : 'Ce créneau est pris'
         : null,
       conflit_avec: enConflit
         ? {
