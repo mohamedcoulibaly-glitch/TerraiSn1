@@ -30,7 +30,9 @@
     "test:paydunya-whatsapp": "node scripts/run-paydunya-whatsapp-suite.js",
     "test:paydunya-whatsapp:unit": "node scripts/test-paydunya-whatsapp-unit.js",
     "test:paydunya-whatsapp:integration": "node scripts/test-paydunya-whatsapp-integration.js",
-    "test:paydunya-whatsapp:e2e": "node scripts/test-paydunya-whatsapp-e2e.js"
+    "test:paydunya-whatsapp:e2e": "node scripts/test-paydunya-whatsapp-e2e.js",
+    "test:mohamed": "node scripts/run-mohamed-suite.js",
+    "seed:e2e": "node scripts/seed-e2e.js"
   },
   "keywords": [],
   "author": "",

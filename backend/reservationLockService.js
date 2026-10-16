@@ -1,4 +1,5 @@
 const { queryAll, queryOne } = require('./database');
+const { peutConfirmer } = require('./domain/reservationState');
 const {
   parseHour,
   formatHour,
@@ -35,7 +36,32 @@ function conflictError(message = 'Créneau déjà réservé ou en attente de pai
  * À appeler uniquement à l'intérieur de transaction() (BEGIN IMMEDIATE).
  * @returns {number} creneau_id principal (1ère heure)
  */
+function libererVerrousExpires(database, now = Date.now()) {
+  const expired = queryAll(
+    database,
+    `SELECT id, creneau_id, terrain_id, date, heure_debut, heure_fin, statut
+     FROM reservations
+     WHERE statut IN ('en_attente', 'en_attente_paiement')
+       AND verrou_expire_at IS NOT NULL
+       AND verrou_expire_at <= ?`,
+    [now],
+  );
+  const ids = [];
+  for (const reservation of expired) {
+    database.run(
+      `UPDATE reservations SET statut = 'expire'
+       WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')`,
+      [reservation.id],
+    );
+    if (rowsModified(database) !== 1) continue;
+    libererCreneauxReservation(database, reservation, ['en_attente_paiement']);
+    ids.push(reservation.id);
+  }
+  return ids;
+}
+
 function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
+  libererVerrousExpires(database);
   const slots = hourlySlots(heureDebut, heureFin);
   if (!slots.length) throw conflictError('Créneau invalide');
 
@@ -46,7 +72,7 @@ function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
       WHERE terrain_id = ? AND date = ?
         AND (
           statut IN ('confirme', 'acceptee')
-          OR (statut = 'en_attente' AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?)
+          OR (statut IN ('en_attente', 'en_attente_paiement') AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?)
         )
         AND heure_debut < ? AND heure_fin > ?`,
     [terrainId, date, now, heureFin, heureDebut],
@@ -67,7 +93,7 @@ function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
       database,
       `SELECT id FROM reservations
         WHERE terrain_id = ? AND date = ?
-          AND statut = 'en_attente'
+          AND statut IN ('en_attente', 'en_attente_paiement')
           AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?
           AND heure_debut < ? AND heure_fin > ?`,
       [terrainId, date, now, slotOrphelin.heure_fin, slotOrphelin.heure_debut],
@@ -218,7 +244,7 @@ function annulerReservationsConcurrentes(database, reservation) {
     database,
     `SELECT id, creneau_id, terrain_id, date, heure_debut, heure_fin FROM reservations
      WHERE terrain_id = ? AND date = ? AND id != ?
-       AND statut = 'en_attente'
+       AND statut IN ('en_attente', 'en_attente_paiement')
        AND heure_debut < ? AND heure_fin > ?`,
     [
       reservation.terrain_id,
@@ -230,7 +256,10 @@ function annulerReservationsConcurrentes(database, reservation) {
   );
   const loserIds = [];
   for (const loser of losers) {
-    database.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [loser.id]);
+    database.run(
+      "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')",
+      [loser.id],
+    );
     if (rowsModified(database) !== 1) continue;
     libererCreneauxReservation(database, loser, ['en_attente_paiement']);
     database.run(
@@ -251,7 +280,9 @@ module.exports = {
   normaliserDelaiVerrouPaiementMin,
   DEFAULT_DELAI_VERROU_PAIEMENT_MIN,
   lockCreneauxAtomique,
+  libererVerrousExpires,
   libererCreneauxReservation,
+  peutConfirmer,
   confirmerCreneauxReservation,
   annulerReservationsConcurrentes,
   conflictError,

@@ -31,6 +31,7 @@ const {
   terrainAUnePhotoPrincipale,
 } = require('../terrainPhotoService');
 const { syncApresModificationTerrain } = require('../services/configSync');
+const { appliquerPrixCarte } = require('../services/prixCarteService');
 const detteService = require('../services/detteCommissionService');
 const commoditesService = require('../services/commoditesService');
 const { logPhotoAction, listAuditPhotos } = require('../services/auditPhotos');
@@ -1383,6 +1384,17 @@ router.patch('/terrains/:id/politique-paiement', async (req, res) => {
     res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
   } catch (error) {
     console.error(error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+  }
+});
+
+router.patch('/terrains/:id/prix-carte', async (req, res) => {
+  try {
+    const db = await getDb();
+    const terrainId = Number(req.params.id);
+    const result = appliquerPrixCarte(db, terrainId, req.body?.prix_carte_source);
+    res.json(result);
+  } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
   }
 });

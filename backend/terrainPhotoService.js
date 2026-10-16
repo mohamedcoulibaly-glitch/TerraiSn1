@@ -11,7 +11,25 @@ const IMAGE_TYPES = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
 };
+
+let heicConverter = defaultHeicConverter;
+
+function defaultHeicConverter() {
+  const error = new Error('Conversion HEIC indisponible sur ce serveur. Envoyez un JPEG, PNG ou WebP.');
+  error.statusCode = 400;
+  throw error;
+}
+
+function _setHeicConverter(fn) {
+  heicConverter = typeof fn === 'function' ? fn : defaultHeicConverter;
+}
+
+function isHeic(mime) {
+  return mime === 'image/heic' || mime === 'image/heif';
+}
 
 function ensureUploadDir(terrainId) {
   const dir = path.join(UPLOAD_ROOT, 'terrains', String(terrainId));
@@ -20,19 +38,35 @@ function ensureUploadDir(terrainId) {
 }
 
 function parseImageDataUrl(dataUrl) {
-  const match = String(dataUrl || '').match(/^data:(image\/(?:jpeg|png|webp));base64,([a-zA-Z0-9+/=\r\n]+)$/);
+  const match = String(dataUrl || '').match(/^data:(image\/(?:jpeg|png|webp|heic|heif));base64,([a-zA-Z0-9+/=\r\n]+)$/);
   if (!match) {
-    const error = new Error('Image invalide. Utilisez JPG, PNG ou WEBP.');
+    const error = new Error('Image invalide. Formats acceptés : JPG, PNG, WEBP, HEIC.');
     error.statusCode = 400;
     throw error;
   }
   const mime = match[1];
-  const ext = IMAGE_TYPES[mime];
-  const buffer = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
-  if (!buffer.length || buffer.length > MAX_IMAGE_BYTES) {
+  let buffer = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
+  if (!buffer.length) {
+    const error = new Error('Image invalide. Fichier vide.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (buffer.length > MAX_IMAGE_BYTES) {
     const error = new Error('Image trop lourde. Taille maximale : 5 Mo.');
     error.statusCode = 400;
     throw error;
+  }
+  let ext = IMAGE_TYPES[mime];
+  if (isHeic(mime)) {
+    const jpeg = heicConverter(buffer);
+    const out = Buffer.isBuffer(jpeg) ? jpeg : Buffer.from(jpeg);
+    if (!out.length || out.length > MAX_IMAGE_BYTES) {
+      const error = new Error('Image trop lourde. Taille maximale : 5 Mo.');
+      error.statusCode = 400;
+      throw error;
+    }
+    buffer = out;
+    ext = 'jpg';
   }
   return { buffer, ext };
 }
@@ -109,6 +143,42 @@ function updateTerrainPhoto(database, terrainId, photoId, { est_principale, ordr
   return queryOne(database, 'SELECT * FROM terrain_photos WHERE id = ?', [photoId]);
 }
 
+function terrainAUnePhotoPrincipale(database, terrainId) {
+  return Boolean(queryOne(
+    database,
+    'SELECT id FROM terrain_photos WHERE terrain_id = ? AND est_principale = 1 LIMIT 1',
+    [terrainId],
+  ));
+}
+
+function setPhotoPrincipale(database, terrainId, photoId) {
+  const photo = queryOne(
+    database,
+    'SELECT id FROM terrain_photos WHERE id = ? AND terrain_id = ?',
+    [photoId, terrainId],
+  );
+  if (!photo) {
+    const error = new Error('Photo introuvable');
+    error.statusCode = 404;
+    throw error;
+  }
+  database.run('UPDATE terrain_photos SET est_principale = 0 WHERE terrain_id = ?', [terrainId]);
+  database.run('UPDATE terrain_photos SET est_principale = 1 WHERE id = ?', [photoId]);
+  syncTerrainPhotos(database, terrainId);
+  return queryOne(database, 'SELECT * FROM terrain_photos WHERE id = ?', [photoId]);
+}
+
+function reorderTerrainPhotos(database, terrainId, ordre) {
+  const ids = Array.isArray(ordre) ? ordre.map(Number) : [];
+  ids.forEach((id, index) => {
+    database.run(
+      'UPDATE terrain_photos SET ordre = ? WHERE id = ? AND terrain_id = ?',
+      [index, id, terrainId],
+    );
+  });
+  return listTerrainPhotos(database, terrainId);
+}
+
 function deleteTerrainPhoto(database, terrainId, photoId) {
   const photo = queryOne(database, 'SELECT * FROM terrain_photos WHERE id = ? AND terrain_id = ?', [photoId, terrainId]);
   if (!photo) {
@@ -134,9 +204,15 @@ function deleteTerrainPhoto(database, terrainId, photoId) {
 
 module.exports = {
   UPLOAD_ROOT,
+  MAX_IMAGE_BYTES,
   listTerrainPhotos,
   listPhotosByTerrainIds,
   createTerrainPhoto,
   updateTerrainPhoto,
   deleteTerrainPhoto,
+  terrainAUnePhotoPrincipale,
+  setPhotoPrincipale,
+  reorderTerrainPhotos,
+  parseImageDataUrl,
+  _setHeicConverter,
 };

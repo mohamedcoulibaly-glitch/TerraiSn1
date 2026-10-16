@@ -1180,6 +1180,40 @@ function initContratPaiementSchema(database) {
   )`);
   database.run('CREATE INDEX IF NOT EXISTS idx_resume_dette_terrain ON resume_dette_periode(terrain_id, periode, statut)');
 
+  database.run(`CREATE TABLE IF NOT EXISTS auth_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    action TEXT NOT NULL,
+    telephone_masque TEXT,
+    meta TEXT,
+    ip TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_auth_audit_action ON auth_audit(action, created_at)');
+
+  database.run(`CREATE TABLE IF NOT EXISTS openwa_sessions (
+    session_key TEXT PRIMARY KEY,
+    openwa_id TEXT,
+    status TEXT NOT NULL DEFAULT 'down',
+    last_qr TEXT,
+    last_error TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS ipn_reconciliation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id INTEGER NOT NULL,
+    ref_command TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    last_error TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(reservation_id, ref_command)
+  )`);
+
+  addColumnIfMissing(database, 'terrains', 'prix_carte_source', "TEXT DEFAULT 'demi'");
+  addColumnIfMissing(database, 'terrains', 'config_version', 'INTEGER DEFAULT 0');
+
   try {
     database.run(`INSERT OR IGNORE INTO gerants_terrains (
       gerant_id, terrain_id, est_principal, actif, date_debut, note

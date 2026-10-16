@@ -3,6 +3,8 @@
  * Actif en production, ou si AUTH_RATE_LIMIT=1 / RATE_LIMIT=1.
  */
 
+const { evaluer } = require('../domain/rateLimitPolicy');
+
 const buckets = new Map();
 
 function rateLimitEnabled() {
@@ -22,30 +24,39 @@ function buildKey(req, keyPrefix) {
 /**
  * @param {{ windowMs: number, max: number, keyPrefix: string, countFailuresOnly?: boolean }} opts
  */
-function rateLimit({ windowMs, max, keyPrefix, countFailuresOnly = false }) {
+function rateLimit({ windowMs, max, keyPrefix, countFailuresOnly = false, onLimited = null }) {
   return (req, res, next) => {
     if (!rateLimitEnabled()) return next();
 
     const key = buildKey(req, keyPrefix);
     const now = Date.now();
-    const bucket = buckets.get(key) || { count: 0, resetAt: now + windowMs };
-    if (bucket.resetAt <= now) {
-      bucket.count = 0;
-      bucket.resetAt = now + windowMs;
-    }
-    if (bucket.count >= max) {
-      return res.status(429).json({ error: 'Trop de tentatives. Veuillez reessayer plus tard.' });
-    }
+    const current = buckets.get(key) || null;
+
     if (!countFailuresOnly) {
-      bucket.count += 1;
-      buckets.set(key, bucket);
+      const decision = evaluer(current, { now, windowMs, max, increment: true });
+      buckets.set(key, decision.bucket);
+      if (decision.limited) {
+        if (typeof onLimited === 'function') {
+          Promise.resolve(onLimited(req, keyPrefix)).catch(() => {});
+        }
+        return res.status(429).json({ error: 'Trop de tentatives. Veuillez reessayer plus tard.' });
+      }
       return next();
     }
+
+    const peek = evaluer(current, { now, windowMs, max, increment: false });
+    buckets.set(key, peek.bucket);
+    if (peek.limited) {
+      if (typeof onLimited === 'function') {
+        Promise.resolve(onLimited(req, keyPrefix)).catch(() => {});
+      }
+      return res.status(429).json({ error: 'Trop de tentatives. Veuillez reessayer plus tard.' });
+    }
     res.on('finish', () => {
+      const live = buckets.get(key) || peek.bucket;
       if (res.statusCode === 401 || res.statusCode === 403) {
-        const current = buckets.get(key) || { count: 0, resetAt: now + windowMs };
-        current.count += 1;
-        buckets.set(key, current);
+        const decision = evaluer(live, { now: Date.now(), windowMs, max, increment: true });
+        buckets.set(key, decision.bucket);
       } else if (res.statusCode < 400) {
         buckets.delete(key);
       }

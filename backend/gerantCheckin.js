@@ -3,7 +3,9 @@ const { authMiddleware, requireRole } = require('./middleware/auth');
 const { logActivite } = require('./services/auditService');
 const scoreService = require('./services/scoreService');
 const { assertFenetreScanQr, calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
-const { parseQrPayload, assertQrMatchesReservation } = require('./services/qrPayload');
+const { assertQrMatchesReservation } = require('./services/qrPayload');
+const { assertScanSignature } = require('./domain/qrSignature');
+const { notifyTerrain } = require('./realtimeHub');
 const { assertStageTransition, playerGate, resolveOperationalStage } = require('./services/kanbanRules');
 const { encaisserSoldeSurPlace } = require('./services/portefeuilleService');
 const { rowsModified } = require('./reservationLockService');
@@ -167,8 +169,9 @@ async function traiterScanQrReservation(req, res) {
         code: 'QR_MISSING',
       });
     }
-    const parsed = parseQrPayload(rawQr);
+    let parsed;
     try {
+      parsed = assertScanSignature(rawQr);
       assertQrMatchesReservation(parsed, reservation);
     } catch (qrErr) {
       return res.status(qrErr.statusCode || 400).json({
@@ -189,6 +192,7 @@ async function traiterScanQrReservation(req, res) {
       reservation.reste_a_payer ?? reservation.montant_restant ?? 0,
     );
     await marquerReservationJouee({ db, reservation, gerantId: req.user.id, methode });
+    notifyTerrain(reservation.terrain_id, 'checkin', { reservation_id: reservation.id });
     await logActivite({
       gerant_id: req.user.id,
       terrain_id: reservation.terrain_id,

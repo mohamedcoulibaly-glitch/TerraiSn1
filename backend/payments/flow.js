@@ -16,7 +16,9 @@ const notificationService = require('../notificationService');
 const pushService = require('../pushService');
 const logger = require('../logger');
 const { calculerFenetreCheckIn } = require('../services/checkInFenetre');
-const { serializeQrPayload } = require('../services/qrPayload');
+const { signQrPayload } = require('../domain/qrSignature');
+const { peutConfirmer } = require('../domain/reservationState');
+const { gerantDeepLink } = require('../lib/gerantDeepLink');
 const {
   libererCreneauxReservation,
   confirmerCreneauxReservation,
@@ -107,10 +109,15 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
       action = 'already_confirmed';
       return;
     }
+    if (!peutConfirmer(currentReservation.statut)) {
+      action = 'ignore';
+      return;
+    }
 
     const confirmeAt = new Date().toISOString();
     db.run(
-      "UPDATE reservations SET statut = 'confirme', confirme_at = COALESCE(confirme_at, ?) WHERE id = ? AND statut = 'en_attente'",
+      `UPDATE reservations SET statut = 'confirme', confirme_at = COALESCE(confirme_at, ?)
+       WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')`,
       [confirmeAt, reservationId],
     );
     if (rowsModified(db) !== 1) {
@@ -139,7 +146,7 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
       heure_fin: currentReservation.heure_fin,
       fenetre_retard: retardRow?.fenetre_retard,
     });
-    const qrPayload = serializeQrPayload({
+    const qrPayload = signQrPayload({
       reservation_id: reservationId,
       code,
       creneau_id: currentReservation.creneau_id,
@@ -173,19 +180,75 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
   return { action, ledgerInfo };
 }
 
+function portsParDefaut(db) {
+  const realtimeHub = require('../realtimeHub');
+  return {
+    async confirmationJoueur(reservationId) {
+      await notificationService.envoyerConfirmation(reservationId);
+    },
+    async pushJoueur(reservationId) {
+      await pushService.envoyerConfirmationPush(reservationId);
+    },
+    async pushGerant(reservation) {
+      const terrain = queryOne(db, 'SELECT gerant_id FROM terrains WHERE id = ?', [reservation.terrain_id]);
+      if (!terrain?.gerant_id) return;
+      await pushService.notifyAccount({
+        userId: terrain.gerant_id,
+        accountType: 'employe',
+        url: gerantDeepLink(),
+        title: 'Réservation confirmée',
+        body: `Code ${reservation.code_reservation || reservation.id}`,
+        type: 'reservation_confirmee',
+        tag: `resa-confirmee-${reservation.id}`,
+      });
+    },
+    publish(terrainId, type, payload) {
+      realtimeHub.notifyTerrain(terrainId, type, payload);
+    },
+  };
+}
+
 async function confirmerPaiementEtNotifier(reservationId, refCommand, options = {}) {
   const db = await getDb();
   const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
   if (!reservation) return { action: 'missing' };
 
+  const ports = options.ports || portsParDefaut(db);
   const { action, ledgerInfo } = await traiterConfirmationPaytech(db, reservationId, refCommand, options);
   if (action === 'confirm') {
-    await notificationService.envoyerConfirmation(reservationId).catch((error) => {
+    const fraiche = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+    await ports.confirmationJoueur(reservationId).catch(async (error) => {
       logger.error('payments/flow.js', 'Notification confirmation', error);
+      try {
+        const retryQueue = require('../services/notificationRetryQueue');
+        await retryQueue.enfiler({
+          telephone: fraiche?.joueur_telephone || reservation.joueur_telephone || '221000000000',
+          message: `confirmation:${reservationId}`,
+          type: 'confirmation',
+          destinataire_type: 'joueur',
+          destinataire_id: fraiche?.joueur_id || reservation.joueur_id || 0,
+          erreur: error.message || String(error),
+          idempotency_key: `confirmation:${reservationId}`,
+        });
+      } catch (queueError) {
+        logger.error('payments/flow.js', 'File retry confirmation', queueError);
+      }
     });
-    await pushService.envoyerConfirmationPush(reservationId).catch((error) => {
+    await ports.pushJoueur(reservationId).catch((error) => {
       logger.error('payments/flow.js', 'Push confirmation', error);
     });
+    if (typeof ports.publish === 'function') {
+      ports.publish(reservation.terrain_id, 'reservation_confirmee', {
+        reservation_id: reservationId,
+        code: fraiche?.code_reservation || null,
+        statut: 'confirme',
+      });
+    }
+    if (typeof ports.pushGerant === 'function') {
+      await ports.pushGerant(fraiche || reservation).catch((error) => {
+        logger.error('payments/flow.js', 'Push gérant', error);
+      });
+    }
     if (ledgerInfo?.du && ledgerInfo?.contrat) {
       await notificationService.envoyerDuAccumuleGerant({
         contrat: ledgerInfo.contrat,
@@ -248,10 +311,13 @@ async function annulerReservationApresAnnulationPaytech(reservationId, refComman
   const db = await getDb();
   const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
   if (!reservation) return { action: 'missing' };
-  if (reservation.statut !== 'en_attente') return { action: 'ignore' };
+  if (!peutConfirmer(reservation.statut)) return { action: 'ignore' };
 
   transaction(db, () => {
-    db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
+    db.run(
+      "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')",
+      [reservationId],
+    );
     if (rowsModified(db) === 1) {
       libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
       const pending = queryOne(

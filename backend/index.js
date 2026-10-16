@@ -75,6 +75,7 @@ const { serializeQrPayload, parseQrPayload, assertQrMatchesReservation } = requi
 const {
   lockCreneauxAtomique,
   libererCreneauxReservation,
+  libererVerrousExpires,
   confirmerCreneauxReservation,
   rowsModified,
   normalizeHourString,
@@ -89,6 +90,14 @@ const {
   calculerCommissionPrelevee,
 } = require('./pricingService');
 const { estSansAvance } = require('./services/politiquePaiement');
+const { decisionCreation } = require('./domain/reservationState');
+const { signQrPayload } = require('./domain/qrSignature');
+const { lirePrixAffiche, } = require('./services/prixCarteService');
+const { reponseCacheConfig } = require('./domain/prixCarte');
+const authAudit = require('./services/authAudit');
+const { registerJoueur, verifyOtpJoueur } = require('./services/authAccountService');
+const { lireStatutPublic } = require('./services/whatsappStatus');
+const { mountTestRoutes } = require('./routes/testMode');
 const { executerAnnulation, evaluerRemboursement } = require('./services/annulationService');
 const { traiterFenetresExpirees } = require('./services/payoutEngine');
 const {
@@ -547,9 +556,28 @@ mountGerantExtrasRoutes(app);
 // Enregistré AVANT les anciens stubs 1:1 (/api/gerant/terrains, /api/gerant/heartbeat plus bas), qui sont masqués.
 registerGerantMultiRoutes(app);
 
-const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 12, keyPrefix: 'auth', countFailuresOnly: true });
-const otpRateLimit = rateLimit({ windowMs: 10 * 60 * 1000, max: 5, keyPrefix: 'otp' });
-const reservationRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, keyPrefix: 'resa' });
+function journalRateLimit(req, keyPrefix) {
+  const family = keyPrefix === 'resa' ? 'reservation' : keyPrefix;
+  getDb()
+    .then((db) => authAudit.ecrire(db, {
+      action: 'rate_limited',
+      telephone: req.body?.telephone || req.body?.identifier || null,
+      ip: req.ip,
+      meta: { famille: family },
+    }))
+    .catch(() => {});
+}
+
+const authRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 5, keyPrefix: 'auth', countFailuresOnly: true, onLimited: journalRateLimit,
+});
+const otpRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 5, keyPrefix: 'otp', onLimited: journalRateLimit,
+});
+const reservationRateLimit = rateLimit({
+  windowMs: 10 * 60 * 1000, max: 10, keyPrefix: 'resa', onLimited: journalRateLimit,
+});
+mountTestRoutes(app);
 
 // ============================================================
 // MIDDLEWARE AUTH (voir backend/middleware/auth.js)
@@ -579,59 +607,11 @@ function optionalAuth(req, res, next) {
 app.post('/api/auth/register', otpRateLimit, validateBody(validateRegisterBody), async (req, res) => {
   try {
     const db = await getDb();
-    const { prenom, nom, telephone, password, email } = req.body;
-
-    if (!otpService.isValidSenegalMobile(telephone)) {
-      return res.status(400).json({ error: 'Numéro invalide. Format attendu : 7X XXX XX XX' });
-    }
-
-    const phoneDigits = otpService.normalizeTelephone(telephone);
-    const prenomClean = String(prenom || '').trim();
-    const nomClean = String(nom || '').trim();
-
-    const existingPhone = queryAll(db, 'SELECT id, telephone, telephone_verified, role FROM users').find(
-      (u) => otpService.normalizeTelephone(u.telephone) === phoneDigits
-    );
-    if (existingPhone && Number(existingPhone.telephone_verified) === 1) {
-      return res.status(409).json({ error: 'Ce numéro est déjà utilisé' });
-    }
-
-    const password_hash = bcrypt.hashSync(password, 12);
-    const generatedEmail = email || `joueur-${phoneDigits}@terrainsn.local`;
-
-    let userId;
-    if (existingPhone && Number(existingPhone.telephone_verified) !== 1) {
-      // Réinscription d'un compte non vérifié : maj des infos + nouveau OTP
-      runSql(
-        db,
-        `UPDATE users SET nom = ?, prenom = ?, password_hash = ?, email = ?, role = 'joueur', is_active = 1, telephone_verified = 0
-         WHERE id = ?`,
-        [nomClean || null, prenomClean || null, password_hash, generatedEmail, existingPhone.id]
-      );
-      userId = existingPhone.id;
-    } else {
-      const existingEmail = queryOne(db, 'SELECT id FROM users WHERE email = ?', [generatedEmail]);
-      if (existingEmail) return res.status(409).json({ error: 'Compte déjà existant' });
-
-      const result = runSql(
-        db,
-        `INSERT INTO users (nom, prenom, email, password_hash, telephone, role, is_active, telephone_verified)
-         VALUES (?, ?, ?, ?, ?, 'joueur', 1, 0)`,
-        [nomClean || null, prenomClean || null, generatedEmail, password_hash, otpService.formatDisplayPhone(phoneDigits)]
-      );
-      userId = result.lastInsertRowid;
-    }
-
-    await otpService.createAndSendOtp(db, { telephone: phoneDigits, userId, prenom });
-
-    res.status(201).json({
-      success: true,
-      message: 'Code envoyé',
-      telephone: otpService.formatDisplayPhone(phoneDigits),
-    });
+    const result = await registerJoueur(db, req.body, { ip: req.ip });
+    res.status(result.status).json(result.payload);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message || 'Erreur serveur' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
   }
 });
 
@@ -639,40 +619,21 @@ app.post('/api/auth/register', otpRateLimit, validateBody(validateRegisterBody),
 app.post('/api/auth/verify-otp', otpRateLimit, validateBody(validateVerifyOtpBody), async (req, res) => {
   try {
     const db = await getDb();
-    const { telephone, code } = req.body;
+    const result = await verifyOtpJoueur(db, req.body, { ip: req.ip });
+    if (result.status !== 200) return res.status(result.status).json(result.payload);
 
-    const { otp, telephoneDigits, error } = otpService.findValidOtp(db, telephone, code);
-    if (error) return res.status(400).json({ error });
-
-    const user = queryAll(db, 'SELECT id, nom, prenom, email, telephone, role, telephone_verified FROM users')
-      .find((u) => otpService.normalizeTelephone(u.telephone) === telephoneDigits);
-
-    if (!user) return res.status(404).json({ error: 'Utilisateur introuvable. Réinscrivez-vous.' });
-
-    runSql(db, 'UPDATE auth_otps SET used = 1 WHERE id = ?', [otp.id]);
-    runSql(db, 'UPDATE users SET telephone_verified = 1 WHERE id = ?', [user.id]);
-    await otpService.invalidateOtps(db, telephoneDigits);
-
-    const name = splitDisplayName(user);
+    const name = splitDisplayName(result.user);
     const safeUser = {
-      id: user.id,
-      nom: name.nom || user.nom,
-      prenom: user.prenom || name.prenom,
-      email: user.email,
-      telephone: user.telephone,
+      id: result.user.id,
+      nom: name.nom || result.user.nom,
+      prenom: result.user.prenom || name.prenom,
+      email: result.user.email,
+      telephone: result.user.telephone,
       role: 'joueur',
       accountType: 'user',
       telephone_verified: 1,
     };
-
-    const accessToken = issueAuthTokens(res, db, {
-      id: user.id,
-      email: user.email,
-      telephone: user.telephone,
-      role: 'joueur',
-      accountType: 'user',
-    });
-
+    const accessToken = issueAuthTokens(res, db, result.tokenPayload);
     res.json({ success: true, user: safeUser, token: accessToken, accessToken });
   } catch (err) {
     console.error(err);
@@ -800,6 +761,12 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
         must_change_password: Boolean(asUser.must_change_password),
       };
       const accessToken = issueAuthTokens(res, db, tokenPayload);
+      authAudit.ecrire(db, {
+        userId: asUser.id,
+        action: 'login_succes',
+        telephone: asUser.telephone,
+        ip: req.ip,
+      });
       const { password_hash, ...safeAccount } = asUser;
       return res.json({
         user: { ...safeAccount, role: 'joueur', accountType: resolvedType },
@@ -819,6 +786,7 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
       });
     }
 
+    authAudit.ecrire(db, { action: 'login_echec', telephone: identifier, ip: req.ip });
     return res.status(401).json({ error: 'Identifiants incorrects' });
   } catch (err) {
     console.error(err);
@@ -1324,11 +1292,16 @@ app.get('/api/terrains/:id', async (req, res) => {
 
     if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
 
+    const cache = reponseCacheConfig(req.headers, terrain.config_version);
+    res.setHeader('ETag', cache.etag);
+    if (cache.status === 304) return res.status(304).end();
+
     const horaires = queryAll(db, "SELECT * FROM horaires WHERE terrain_id = ? ORDER BY CASE jour WHEN 'lundi' THEN 1 WHEN 'mardi' THEN 2 WHEN 'mercredi' THEN 3 WHEN 'jeudi' THEN 4 WHEN 'vendredi' THEN 5 WHEN 'samedi' THEN 6 WHEN 'dimanche' THEN 7 END", [terrain.id]);
     const avis = queryAll(db, 'SELECT a.*, u.nom as joueur_nom FROM avis a LEFT JOIN users u ON u.id = a.joueur_id WHERE a.terrain_id = ? ORDER BY a.created_at DESC', [terrain.id]);
     const employe = queryOne(db, 'SELECT whatsapp_number, nom FROM employes WHERE terrain_id = ? AND is_active = 1 LIMIT 1', [terrain.id]);
 
-    res.json({ ...attachPhotosToTerrains(db, [terrain])[0], horaires, avis, employe });
+    const prix = lirePrixAffiche(terrain);
+    res.json({ ...attachPhotosToTerrains(db, [terrain])[0], ...prix, horaires, avis, employe });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -1867,9 +1840,9 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     // Verrou paiement = contrat terrain (delai_verrou_paiement_min), joueur et gérant
     const delaiVerrouMin = normaliserDelaiVerrouPaiementMin(terrain.delai_verrou_paiement_min);
     const lockDurationMs = delaiVerrouMin * 60 * 1000;
-    const verrouExpireAt = mode === 'bloquer' ? null : Date.now() + lockDurationMs;
-    // Bloquer / sans_avance = confirmé. Paiement = en_attente jusqu'au webhook prestataire.
-    const statutInitial = mode === 'bloquer' ? 'confirme' : 'en_attente';
+    const decision = decisionCreation({ sansAvance, mode });
+    const verrouExpireAt = decision.poserVerrou ? Date.now() + lockDurationMs : null;
+    const statutInitial = decision.statut;
     const modePaiementInitial = sansAvance ? 'sans_avance' : (mode === 'bloquer' ? 'manuel' : 'en_ligne');
 
     // Lier au compte joueur pour que la résa apparaisse dans Mes réservations + push.
@@ -1960,8 +1933,8 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
       FROM reservations r JOIN terrains t ON t.id = r.terrain_id WHERE r.id = ?
     `, [reservationId]);
 
-    // Code + payload QR dès la création (scan / validation manuelle / WhatsApp)
-    if (!reservation.code_reservation) {
+    // QR signé seulement si la réservation naît déjà confirmée (bloquer / sans avance).
+    if (decision.genererQr && !reservation.code_reservation) {
       const code = genererCodeReservation(db);
       const fenetre = calculerFenetreCheckIn({
         date: reservation.date,
@@ -1969,12 +1942,12 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
         heure_fin: reservation.heure_fin,
         fenetre_retard: DEFAULT_FENETRE_RETARD_MIN,
       });
-      const qrPayload = serializeQrPayload({
+      const qrPayload = signQrPayload({
         reservation_id: reservation.id,
         code,
         creneau_id: reservation.creneau_id,
         terrain_id: reservation.terrain_id,
-        expire_at: fenetre.finFenetre,
+        expire_at: Math.floor(fenetre.finFenetre / 1000),
       });
       runSql(db, 'UPDATE reservations SET code_reservation = ?, qr_code_payload = ? WHERE id = ?', [
         code,
@@ -2012,6 +1985,20 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
       } catch (detteErr) {
         logger.error('index.js', 'Dette commission sans_avance', detteErr);
       }
+    }
+
+    if (decision.envoyerConfirmation) {
+      await notificationService.envoyerConfirmation(reservation.id).catch((error) => {
+        logger.error('index.js', 'Confirmation WhatsApp sans avance', error);
+      });
+      await pushService.envoyerConfirmationPush(reservation.id).catch((error) => {
+        logger.error('index.js', 'Push confirmation sans avance', error);
+      });
+      require('./realtimeHub').notifyTerrain(terrainId, 'reservation_confirmee', {
+        reservation_id: reservation.id,
+        code: reservation.code_reservation || null,
+        statut: 'confirme',
+      });
     }
 
     if (mode === 'paiement') {
@@ -2178,25 +2165,54 @@ app.get('/api/whatsapp/status', async (req, res) => {
   const mock = String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true';
   const hasApiKey = Boolean(String(process.env.OPENWA_API_KEY || '').trim());
   const sharedSession = Boolean(String(process.env.OPENWA_SHARED_SESSION_ID || '').trim());
-  let status = {
+  let memory = {
     connected: Boolean(whatsappClient.isReady),
     mock,
     provider: 'openwa',
+    session: 'platform',
   };
   if (typeof whatsappClient.getStatus === 'function') {
-    status = await whatsappClient.getStatus();
+    memory = await whatsappClient.getStatus();
   }
+  const db = await getDb();
+  const resolved = lireStatutPublic(db, { ...memory, mock, hasApiKey, session: memory.session || 'platform' });
   res.json({
-    ...status,
+    ...memory,
+    ...resolved,
     mock,
     config: {
       hasApiKey,
       sharedSessionConfigured: sharedSession,
       baseUrl: process.env.OPENWA_BASE_URL || 'https://mywa.tickets-place.net',
       appDomain: process.env.APP_DOMAIN || null,
-      readyForProd: !mock && hasApiKey && Boolean(status.connected),
+      readyForProd: resolved.readyForProd,
     },
   });
+});
+
+app.post('/api/whatsapp/reconnect', authMiddleware, async (req, res) => {
+  try {
+    const role = String(req.user?.role || '');
+    if (!['superadmin', 'super_admin', 'gerant'].includes(role)) {
+      return res.status(403).json({ error: 'Accès refusé' });
+    }
+    const store = require('./services/openwaSessionStore');
+    const db = await getDb();
+    const sessionKey = role === 'gerant' ? `gerant-${req.user.id}` : 'platform';
+    const row = store.sauver(db, {
+      sessionKey,
+      openwaId: req.body?.openwa_id || null,
+      status: 'down',
+      lastError: 'reconnect demandé',
+    });
+    require('./realtimeHub').notifyTerrain(req.user.terrain_id || 0, 'whatsapp_status', {
+      connected: false,
+      session_key: sessionKey,
+    });
+    res.json({ ok: true, session: row });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Reconnect impossible' });
+  }
 });
 
 app.get('/api/whatsapp/qr', async (req, res) => {
@@ -2437,6 +2453,9 @@ app.get('/api/reservations/:id(\\d+)/qr.png', optionalAuth, async (req, res) => 
       [Number(req.params.id)]
     );
     if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
+    if (reservation.statut === 'en_attente' || reservation.statut === 'en_attente_paiement') {
+      return res.status(404).json({ error: 'QR indisponible avant confirmation' });
+    }
     if (req.user && reservation.joueur_id && Number(reservation.joueur_id) !== Number(req.user.id) && req.user.role === 'joueur') {
       return res.status(403).json({ error: 'Accès interdit' });
     }
@@ -2449,7 +2468,7 @@ app.get('/api/reservations/:id(\\d+)/qr.png', optionalAuth, async (req, res) => 
         heure_fin: reservation.heure_fin,
         fenetre_retard: reservation.fenetre_retard,
       });
-      payload = serializeQrPayload({
+      payload = signQrPayload({
         reservation_id: reservation.id,
         code: reservation.code_reservation,
         creneau_id: reservation.creneau_id,
@@ -4252,14 +4271,7 @@ async function start() {
     try {
       const dbInterval = await getDb();
       transaction(dbInterval, () => {
-        const expired = queryAll(dbInterval, `SELECT id, creneau_id, terrain_id, date, heure_debut, heure_fin FROM reservations
-          WHERE statut = 'en_attente' AND verrou_expire_at IS NOT NULL AND verrou_expire_at < ?`, [Date.now()]);
-        for (const reservation of expired) {
-          dbInterval.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservation.id]);
-          if (rowsModified(dbInterval) === 1) {
-            libererCreneauxReservation(dbInterval, reservation, ['en_attente_paiement']);
-          }
-        }
+        libererVerrousExpires(dbInterval, Date.now());
       });
     } catch (error) {
       logger.error('index.js', 'Nettoyage des verrous', error);
