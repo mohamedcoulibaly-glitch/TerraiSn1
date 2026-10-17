@@ -51,6 +51,16 @@ function decisionCreation({ sansAvance = false, mode = 'paiement' } = {}) {
       poserVerrou: false,
     };
   }
+  // Espèces / Wave hors ligne : verrou sans lien PayTech, confirmation seulement après action gérant.
+  if (mode === 'manuel') {
+    return {
+      statut: 'en_attente_paiement',
+      genererQr: false,
+      envoyerConfirmation: false,
+      creerLienPaiement: false,
+      poserVerrou: true,
+    };
+  }
   return {
     statut: 'en_attente_paiement',
     genererQr: false,

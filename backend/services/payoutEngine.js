@@ -229,9 +229,12 @@ function appliquerStatutPayoutWebhook(db, {
   if (!payout && disburseId) {
     payout = queryOne(
       db,
-      `SELECT * FROM payouts WHERE ref_paytech = ? OR disburse_token = ? LIMIT 1`,
-      [String(disburseId), String(disburseId)],
+      `SELECT * FROM payouts WHERE ref_paytech = ? OR disburse_token = ? OR ref_manuelle = ? LIMIT 1`,
+      [String(disburseId), String(disburseId), String(disburseId)],
     );
+  }
+  if (!payout && ref) {
+    payout = queryOne(db, 'SELECT * FROM payouts WHERE ref_manuelle = ? LIMIT 1', [String(ref)]);
   }
   if (!payout) {
     logger.warn('payoutEngine.js', `Webhook payout sans matching (ref=${ref} token=${disburseToken})`);
@@ -391,13 +394,15 @@ async function executerPayoutAuto(db, du, contrat, { now = Date.now(), force = f
       reservationId: fresh.reservation_id,
       motif: 'reversement_gerant',
     });
+    const externalId = result.reference && result.reference !== result.ref_paytech ? result.reference : null;
     const ref = result.ref_paytech || result.reference || `PO-${payoutId}`;
     db.run(
-      `UPDATE payouts SET ref_paytech = ?, disburse_token = ?, provider = ?
+      `UPDATE payouts SET ref_paytech = ?, disburse_token = ?, ref_manuelle = COALESCE(?, ref_manuelle), provider = ?
        WHERE id = ?`,
       [
         ref,
         result.disburse_token || null,
+        externalId,
         result.provider || null,
         payoutId,
       ],
@@ -543,10 +548,11 @@ async function executerPayoutPourDu(db, du, contrat, {
       reservationId: fresh.reservation_id,
       motif: 'retrait_gerant',
     });
+    const externalId = result.reference && result.reference !== result.ref_paytech ? result.reference : null;
     const ref = result.ref_paytech || result.reference || `PO-${payoutId}`;
     db.run(
-      `UPDATE payouts SET ref_paytech = ?, disburse_token = ?, provider = ? WHERE id = ?`,
-      [ref, result.disburse_token || null, result.provider || null, payoutId],
+      `UPDATE payouts SET ref_paytech = ?, disburse_token = ?, ref_manuelle = COALESCE(?, ref_manuelle), provider = ? WHERE id = ?`,
+      [ref, result.disburse_token || null, externalId, result.provider || null, payoutId],
     );
 
     if (result.pending) {

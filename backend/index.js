@@ -1821,8 +1821,10 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
       methode_paiement: methodePaiementBody,
       canal_paiement: canalPaiementBody,
     } = req.body;
-    /** 'paiement' = lien prestataire + WA | 'bloquer' = hold sur place sans lien */
-    let mode = modeBody === 'bloquer' ? 'bloquer' : 'paiement';
+    /** 'paiement' = lien prestataire + WA | 'bloquer' = confirmé sur place | 'manuel' = verrou, confirmé ensuite par le gérant */
+    let mode = 'paiement';
+    if (modeBody === 'bloquer') mode = 'bloquer';
+    else if (modeBody === 'manuel') mode = 'manuel';
     const anonyme = Boolean(anonymeBody);
     const preferredChannel = methodePaiementBody || canalPaiementBody;
     const terrainId = terrainIdForce || Number(terrain_id);
@@ -1884,7 +1886,10 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     const decision = decisionCreation({ sansAvance, mode });
     const verrouExpireAt = decision.poserVerrou ? Date.now() + lockDurationMs : null;
     const statutInitial = decision.statut;
-    const modePaiementInitial = sansAvance ? 'sans_avance' : (mode === 'bloquer' ? 'manuel' : 'en_ligne');
+    const modePaiementInitial = sansAvance
+      ? 'sans_avance'
+      : (mode === 'bloquer' || mode === 'manuel' ? 'manuel' : 'en_ligne');
+    const stageInitial = statutInitial === 'confirme' ? 'reserved' : null;
 
     // Lier au compte joueur pour que la résa apparaisse dans Mes réservations + push.
     let resolvedJoueurId = null;
@@ -1930,8 +1935,8 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     const reservationId = transaction(db, () => {
       const creneauId = lockCreneauxAtomique(db, terrainId, date, heureDebutNorm, heureFinNorm);
       db.run(`INSERT INTO reservations
-        (terrain_id, creneau_id, joueur_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain, statut, expire_at, verrou_expire_at, cree_par, mode_paiement)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (terrain_id, creneau_id, joueur_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain, statut, expire_at, verrou_expire_at, cree_par, mode_paiement, operational_stage)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           terrainId,
           creneauId,
@@ -1953,6 +1958,7 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
           verrouExpireAt,
           creePar,
           modePaiementInitial,
+          stageInitial,
         ]);
       const newId = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
       // Confirmation immédiate (bloquer / sans_avance) : libérer le statut créneau
@@ -2065,6 +2071,11 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
           db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservation.id]);
         });
         throw error;
+      }
+      if (creePar === 'joueur') {
+        await notificationService.envoyerLienPaiement(reservation.id, { origine: 'joueur' }).catch((error) => {
+          logger.error('index.js', 'Lien paiement WhatsApp joueur', error);
+        });
       }
     }
 
@@ -2330,10 +2341,30 @@ app.post('/api/whatsapp/test', async (req, res) => {
 app.post('/api/reservations/:id/renvoyer-lien', authMiddleware, requireRole('gerant'), async (req, res) => {
   try {
     const db = await getDb();
-    const reservation = queryOne(db, 'SELECT id FROM reservations WHERE id = ? AND terrain_id = ? AND statut = ?', [Number(req.params.id), req.user.terrain_id, 'en_attente']);
+    const reservation = queryOne(
+      db,
+      `SELECT * FROM reservations WHERE id = ? AND terrain_id = ? AND statut IN ('en_attente', 'en_attente_paiement')`,
+      [Number(req.params.id), req.user.terrain_id],
+    );
     if (!reservation) return res.status(404).json({ error: 'Réservation en attente introuvable pour ce terrain' });
-    await notificationService.envoyerLienPaiement(reservation.id);
-    res.json({ message: 'Lien WhatsApp renvoyé' });
+    if (!reservation.lien_paiement) {
+      const payment = await paytechService.creerLienPaiement(reservation, {
+        preferredChannel: reservation.canal_paiement,
+      });
+      runSql(db, 'UPDATE reservations SET lien_paiement = ?, reference_paytech = ? WHERE id = ?', [
+        payment.redirectUrl,
+        payment.reference,
+        reservation.id,
+      ]);
+    }
+    const waResult = await notificationService.envoyerLienPaiement(reservation.id);
+    if (!waResult?.ok || waResult?.mocked) {
+      return res.status(503).json({
+        error: waResult?.error?.message || 'Envoi WhatsApp non confirmé',
+        whatsapp_sent: false,
+      });
+    }
+    res.json({ message: 'Lien WhatsApp renvoyé', whatsapp_sent: true });
   } catch (error) {
     console.error('Renvoi WhatsApp:', error);
     res.status(503).json({ error: error.message || 'Envoi WhatsApp impossible' });
@@ -2349,7 +2380,7 @@ app.post('/api/reservations/:id(\\d+)/relancer-paiement', authMiddleware, requir
       req.user.id,
     ]);
     if (!reservation) return res.status(404).json({ error: 'Réservation introuvable' });
-    if (reservation.statut !== 'en_attente') {
+    if (!['en_attente', 'en_attente_paiement'].includes(String(reservation.statut))) {
       return res.status(400).json({ error: 'Cette réservation n’est plus en attente de paiement' });
     }
     const payment = await paytechService.creerLienPaiement(reservation, {
@@ -2617,7 +2648,7 @@ app.put('/api/reservations/:id/annuler', optionalAuth, async (req, res) => {
       reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [Number(req.params.id)]);
     }
     if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
-    if (!['en_attente', 'confirme', 'acceptee'].includes(reservation.statut)) {
+    if (!['en_attente', 'en_attente_paiement', 'confirme', 'acceptee'].includes(reservation.statut)) {
       return res.status(400).json({ error: 'Réservation ne peut pas être annulée' });
     }
     const result = await executerAnnulation(db, reservation);
@@ -2633,7 +2664,7 @@ app.patch('/api/gerant/reservations/:id/annuler', authMiddleware, requireRole('g
     const db = await getDb();
     const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?', [Number(req.params.id), req.user.terrain_id]);
     if (!reservation) return res.status(404).json({ error: 'Reservation non trouvee pour ce terrain' });
-    if (!['en_attente', 'confirme', 'acceptee'].includes(reservation.statut)) {
+    if (!['en_attente', 'en_attente_paiement', 'confirme', 'acceptee'].includes(reservation.statut)) {
       return res.status(400).json({ error: 'Reservation ne peut pas etre annulee' });
     }
     const result = await executerAnnulation(db, reservation, { traitePar: req.user.id });
@@ -2665,7 +2696,7 @@ app.put('/api/reservations/:id/traiter', authMiddleware, requireRole('gerant', '
     const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [Number(req.params.id)]);
     if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
     transaction(db, () => {
-      db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')", [req.user.id, reservation.id]);
+      db.run("UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'acceptee')", [req.user.id, reservation.id]);
       libererCreneauxReservation(db, reservation, ['en_attente_paiement', 'reserve']);
     });
     if (req.user.role === 'gerant') {
@@ -3008,13 +3039,13 @@ app.get('/api/gerant/dashboard', authMiddleware, requireRole('gerant'), async (r
       WHERE r.terrain_id = ?
         AND r.date >= date('now', '-7 days')
         AND r.date <= date('now', '+60 days')
-        AND r.statut IN ('en_attente', 'confirme', 'acceptee', 'joue', 'match_joue')
+        AND r.statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'acceptee', 'joue', 'match_joue')
       ORDER BY r.date ASC, r.heure_debut ASC
     `, [terrainId]);
 
     const horaires = queryAll(db, "SELECT * FROM horaires WHERE terrain_id = ? ORDER BY CASE jour WHEN 'lundi' THEN 1 WHEN 'mardi' THEN 2 WHEN 'mercredi' THEN 3 WHEN 'jeudi' THEN 4 WHEN 'vendredi' THEN 5 WHEN 'samedi' THEN 6 WHEN 'dimanche' THEN 7 END", [terrainId]);
     const blocages = queryAll(db, 'SELECT * FROM blocages_creneaux WHERE terrain_id = ? ORDER BY date DESC', [terrainId]);
-    const pendingCount = queryOne(db, "SELECT COUNT(*) as count FROM reservations WHERE terrain_id = ? AND statut = 'en_attente'", [terrainId]);
+    const pendingCount = queryOne(db, "SELECT COUNT(*) as count FROM reservations WHERE terrain_id = ? AND statut IN ('en_attente', 'en_attente_paiement')", [terrainId]);
     const monthCount = queryOne(db, "SELECT COUNT(*) as count FROM reservations WHERE terrain_id = ?", [terrainId]);
 
     res.json({ terrain, reservations, horaires, blocages, pendingCount: pendingCount.count, monthReservations: monthCount.count });
@@ -3109,7 +3140,7 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
       db,
       `SELECT id, joueur_nom, heure_debut, heure_fin FROM reservations
         WHERE terrain_id = ? AND date = ?
-          AND statut IN ('en_attente', 'confirme', 'acceptee')
+          AND statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'acceptee')
           AND heure_debut < ? AND heure_fin > ?`,
       [terrainId, date, heure_fin, heure_debut],
     );
@@ -3179,7 +3210,7 @@ app.post('/api/gerant/blocages/batch', authMiddleware, requireRole('gerant'), as
         db,
         `SELECT id FROM reservations
           WHERE terrain_id = ? AND date = ?
-            AND statut IN ('en_attente', 'confirme', 'acceptee')
+            AND statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'acceptee')
             AND heure_debut < ? AND heure_fin > ?`,
         [terrainId, date, heure_fin, heure_debut],
       );
@@ -4326,6 +4357,27 @@ async function start() {
       try {
         const retryQueue = require('./services/notificationRetryQueue');
         const results = await retryQueue.rejouerPending(async (job) => {
+          const confirmationId = /^confirmation:(\d+)$/.exec(String(job.message || ''));
+          const confirmationKey = /^confirmation-texte:(\d+)$/.exec(String(job.idempotency_key || ''));
+          if (confirmationId || confirmationKey) {
+            const reservationId = Number(confirmationId?.[1] || confirmationKey?.[1] || 0);
+            const result = await notificationService.envoyerConfirmation(reservationId);
+            if (!result?.ok || result?.mocked) {
+              const err = new Error(result?.error?.message || 'Rejeu confirmation WhatsApp échoué');
+              err.statusCode = 503;
+              throw err;
+            }
+            return;
+          }
+          if (job.type === 'lien_paiement' && job.destinataire_id && !String(job.message || '').includes('http')) {
+            const result = await notificationService.envoyerLienPaiement(job.destinataire_id);
+            if (!result?.ok || result?.mocked) {
+              const err = new Error(result?.error?.message || 'Rejeu lien paiement WhatsApp échoué');
+              err.statusCode = 503;
+              throw err;
+            }
+            return;
+          }
           const result = await notificationService.envoyerMessage(
             job.telephone,
             job.message,

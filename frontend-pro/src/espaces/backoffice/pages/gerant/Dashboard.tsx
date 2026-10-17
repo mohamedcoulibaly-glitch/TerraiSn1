@@ -663,8 +663,10 @@ function buildQueueBlocks({
   }>;
   nowMs: number;
 }): Record<QueueBlock, TodayReservation[]> {
-  const occupying = reservations.filter((r) => r.statut !== "en_attente");
-  const pending = reservations.filter((r) => r.statut === "en_attente");
+  const isPendingPay = (statut?: string) =>
+    statut === "en_attente" || statut === "en_attente_paiement";
+  const occupying = reservations.filter((r) => !isPendingPay(r.statut));
+  const pending = reservations.filter((r) => isPendingPay(r.statut));
   const reservedHours = new Set(
     occupying
       .filter((r) => resolveLiveStatus(r, dayDate, nowMs) !== "termine")
@@ -1213,7 +1215,7 @@ const ManagerDashboard = () => {
       return sum;
     }, 0);
     return {
-      matchs: todayList.filter((r) => r.statut !== "en_attente").length,
+      matchs: todayList.filter((r) => r.statut !== "en_attente" && r.statut !== "en_attente_paiement").length,
       aEncaisser,
       libres: queueBlocks.libre.length,
     };

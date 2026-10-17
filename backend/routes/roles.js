@@ -330,7 +330,7 @@ router.post('/gerant/creneaux', authMiddleware, requireRole('gerant'), async (re
     db,
     `SELECT id FROM reservations
       WHERE terrain_id = ? AND date = ?
-        AND statut IN ('en_attente', 'confirme', 'match_joue', 'joue')
+        AND statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'match_joue', 'joue')
         AND heure_debut < ? AND heure_fin > ?`,
     [req.user.terrain_id, date, heure_fin, heure_debut],
   );

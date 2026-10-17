@@ -15,7 +15,9 @@ export default function FluxPage() {
   const [scanCard, setScanCard] = useState<FluxReservation | null>(null);
   const [linkCard, setLinkCard] = useState<FluxReservation | null>(null);
 
-  const cards = data?.reservations || [];
+  const cards = (data?.reservations || []).filter(
+    (card) => card.statut !== "en_attente" && card.statut !== "en_attente_paiement",
+  );
   const dateLabel = new Date(`${date}T00:00:00`).toLocaleDateString("fr-FR", {
     weekday: "short",
     day: "numeric",

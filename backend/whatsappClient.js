@@ -114,7 +114,10 @@ function requireConfig() {
 }
 
 function sanitizeKey(key) {
-  return String(key || 'platform').replace(/[^a-zA-Z0-9:_-]/g, '_');
+  const raw = String(key || 'platform');
+  const dashed = /^gerant-(\d+)$/.exec(raw);
+  if (dashed) return `gerant:${dashed[1]}`;
+  return raw.replace(/[^a-zA-Z0-9:_-]/g, '_');
 }
 
 function gerantSessionKey(gerantId) {

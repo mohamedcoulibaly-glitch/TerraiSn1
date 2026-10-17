@@ -187,7 +187,7 @@ function normalizeClientError(endpoint: string, status: number, data: unknown): 
     return 'Identifiants incorrects ou session expirée.';
   }
   if (isReservation) {
-    if (status === 409 && raw && !isTechnicalMessage(raw)) return raw;
+    if ((status === 400 || status === 409) && raw && !isTechnicalMessage(raw)) return raw;
     return 'Impossible de finaliser la réservation. Veuillez réessayer.';
   }
 
@@ -589,7 +589,18 @@ export const terrainsApi = {
 // RESERVATIONS
 // ============================================================
 export const reservationsApi = {
-  async create(data: { terrain_id: number; date: string; heure_debut: string; heure_fin: string; joueur_nom: string; joueur_telephone: string; format_terrain?: string }) {
+  async create(data: {
+    terrain_id: number;
+    date: string;
+    heure_debut: string;
+    heure_fin: string;
+    joueur_nom: string;
+    joueur_telephone: string;
+    format_terrain?: string;
+    sans_avance?: boolean;
+    canal_paiement?: string;
+    methode_paiement?: string;
+  }) {
     try {
       return await request('/reservations', { method: 'POST', body: JSON.stringify(data) });
     } catch (err) {

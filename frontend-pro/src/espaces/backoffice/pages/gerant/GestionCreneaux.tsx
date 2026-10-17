@@ -404,7 +404,7 @@ const ManagerCalendar = () => {
                 </div>
               </div>
 
-              {selectedReservation.statut === "en_attente" && (
+              {(selectedReservation.statut === "en_attente" || selectedReservation.statut === "en_attente_paiement") && (
                 <div className="space-y-3 pt-2">
                   <EnAttentePaiementActions
                     reservationId={selectedReservation.id}

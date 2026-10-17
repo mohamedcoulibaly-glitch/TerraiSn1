@@ -129,7 +129,7 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
      FROM reservations r
      JOIN terrains t ON t.id = r.terrain_id
      JOIN employes e ON e.terrain_id = t.id AND e.id = ?
-     WHERE r.id = ? AND r.statut = 'en_attente'`,
+     WHERE r.id = ? AND r.statut IN ('en_attente', 'en_attente_paiement')`,
     [gerantId, reservationId],
   );
 
@@ -184,8 +184,9 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
        confirme_manuellement_par = ?,
        confirme_manuellement_at = CURRENT_TIMESTAMP,
        confirme_at = COALESCE(confirme_at, CURRENT_TIMESTAMP),
-       note_gerant = ?
-     WHERE id = ? AND statut = 'en_attente'`,
+       note_gerant = ?,
+       operational_stage = 'reserved'
+     WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')`,
     [code, qrPayload, gerantId, noteGerant, reservationId],
   );
   if (rowsModified(db) !== 1) {

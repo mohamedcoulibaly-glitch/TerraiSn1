@@ -351,7 +351,7 @@ export default function ReservationsManuelles() {
                   {meta.label}
                 </span>
               </div>
-              {r.statut === "en_attente" ? (
+              {(r.statut === "en_attente" || r.statut === "en_attente_paiement") ? (
                 <PaymentLockGauge
                   className="mt-2"
                   expiresAt={Number(r.verrou_expire_at)}
@@ -369,7 +369,7 @@ export default function ReservationsManuelles() {
                     ) : null}
                   </p>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    {r.statut === "en_attente" && (
+                    {(r.statut === "en_attente" || r.statut === "en_attente_paiement") && (
                       <div className="w-full">
                         <EnAttentePaiementActions
                           reservationId={r.id}
@@ -450,7 +450,7 @@ export default function ReservationsManuelles() {
                           minute: "2-digit",
                         })
                       : "—"}
-                    {r.statut === "en_attente" ? (
+                    {(r.statut === "en_attente" || r.statut === "en_attente_paiement") ? (
                       <PaymentLockGauge
                         className="mt-2 max-w-[140px]"
                         expiresAt={Number(r.verrou_expire_at)}
@@ -468,7 +468,7 @@ export default function ReservationsManuelles() {
                     </span>
                   </td>
                   <td className="space-y-2 min-w-[220px]">
-                    {r.statut === "en_attente" && (
+                    {(r.statut === "en_attente" || r.statut === "en_attente_paiement") && (
                       <EnAttentePaiementActions
                         reservationId={r.id}
                         montantAvance={r.montant_avance ?? r.acompte}
@@ -485,7 +485,7 @@ export default function ReservationsManuelles() {
                       >
                         Fiche / scanner
                       </button>
-                    ) : r.statut !== "en_attente" ? (
+                    ) : r.statut !== "en_attente" && r.statut !== "en_attente_paiement" ? (
                       "—"
                     ) : null}
                   </td>

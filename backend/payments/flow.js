@@ -158,7 +158,8 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
       `UPDATE reservations SET code_reservation = ?, qr_code_payload = ?, acompte = ?, montant_avance = ?,
         reste_a_payer = MAX(0, COALESCE(prix_total, montant, 0) - ?),
         montant_restant = MAX(0, COALESCE(prix_total, montant, 0) - ?),
-        confirme_at = COALESCE(confirme_at, ?)
+        confirme_at = COALESCE(confirme_at, ?),
+        operational_stage = 'reserved'
        WHERE id = ?`,
       [code, qrPayload, montantAvance, montantAvance, montantAvance, montantAvance, confirmeAt, reservationId],
     );
@@ -286,7 +287,7 @@ async function confirmerPaiementEtNotifier(reservationId, refCommand, options = 
     await paytechService.rembourser(refCommand);
     transaction(db, () => {
       const row = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-      db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'confirme')", [reservationId]);
+      db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement', 'confirme')", [reservationId]);
       if (row) libererCreneauxReservation(db, row, ['en_attente_paiement', 'reserve']);
       const pending = queryOne(
         db,
@@ -473,7 +474,12 @@ async function handlePaytechIpn(payload, headers) {
     throw error;
   }
 
-  const typeEvent = String(payload.type_event || payload.typeEvent || 'sale_complete').toLowerCase();
+  // Ne jamais présumer un paiement réussi : un IPN sans type_event (ouverture du checkout)
+  // confirmait la réservation dès le clic sur Payer.
+  const typeEvent = String(payload.type_event || payload.typeEvent || '').toLowerCase();
+  if (!typeEvent) {
+    return { received: true, ignored: true, reason: 'type_event_manquant' };
+  }
   const db = await getDb();
   const { reservationId, reservation, refCommand, custom, canal } = resoudreReservationDepuisIpn(db, payload);
   if (!refCommand) {

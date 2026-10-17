@@ -71,7 +71,10 @@ function mapReservationGerantRow(row) {
     heure_debut: String(row.heure_debut || '').slice(0, 5),
     heure_fin: String(row.heure_fin || '').slice(0, 5),
     statut: row.statut,
-    operational_stage: resolveOperationalStage(row),
+    operational_stage:
+      row.statut === 'en_attente' || row.statut === 'en_attente_paiement'
+        ? 'pending_payment'
+        : resolveOperationalStage(row),
     checked_in_at: row.checked_in_at || null,
     checkout_at: row.checkout_at || null,
     montant_total: montantTotal,
@@ -417,9 +420,16 @@ function mountGerantCheckinRoutes(app) {
         LEFT JOIN creneaux c ON c.id = r.creneau_id
         WHERE r.terrain_id = ?
           AND r.date = ?
-          AND r.statut IN ('confirme', 'match_joue', 'joue')
+          AND (
+            r.statut IN ('confirme', 'match_joue', 'joue')
+            OR (
+              r.statut IN ('en_attente', 'en_attente_paiement')
+              AND r.verrou_expire_at IS NOT NULL
+              AND r.verrou_expire_at > ?
+            )
+          )
         ORDER BY r.heure_debut ASC, r.heure_fin ASC
-      `, [terrainId, date]);
+      `, [terrainId, date, Date.now()]);
 
       res.json({
         date,
@@ -458,7 +468,7 @@ function mountGerantCheckinRoutes(app) {
           AND r.date >= ? AND r.date <= ?
           AND (
             r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
-            OR (r.statut = 'en_attente' AND r.verrou_expire_at IS NOT NULL AND r.verrou_expire_at > ?)
+            OR (r.statut IN ('en_attente', 'en_attente_paiement') AND r.verrou_expire_at IS NOT NULL AND r.verrou_expire_at > ?)
           )
         ORDER BY r.date ASC, r.heure_debut ASC, r.heure_fin ASC
       `, [terrainId, from, toTech, Date.now()]);

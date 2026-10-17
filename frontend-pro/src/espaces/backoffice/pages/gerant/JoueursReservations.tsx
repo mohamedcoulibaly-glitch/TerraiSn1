@@ -75,7 +75,7 @@ function statusUi(statut?: string) {
   if (statut === "confirme" || statut === "acceptee") {
     return { label: "Confirmée", color: "var(--g-reserve)", bg: "var(--g-reserve-bg)" };
   }
-  if (statut === "en_attente") {
+  if (statut === "en_attente" || statut === "en_attente_paiement") {
     return { label: "Paiement en cours (éphémère)", color: "var(--g-en-attente)", bg: "var(--g-en-attente-bg)" };
   }
   if (statut === "match_joue" || statut === "joue") {

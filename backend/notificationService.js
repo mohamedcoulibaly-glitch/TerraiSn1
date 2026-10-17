@@ -145,6 +145,7 @@ async function details(reservationId) {
   return queryOne(
     db,
     `SELECT r.*, t.nom AS terrain_nom, t.adresse, t.ville, t.latitude, t.longitude,
+      t.delai_verrou_paiement_min,
       e.id AS gerant_id, e.nom AS gerant_nom, e.telephone AS gerant_telephone, e.whatsapp_number AS gerant_whatsapp,
       u.prenom AS joueur_prenom, u.telephone AS joueur_tel_user
      FROM reservations r
@@ -235,7 +236,7 @@ async function envoyerOTP({ telephone, prenom, code }) {
 }
 
 /** Template 3 — Lien paiement réservation téléphone / gérant */
-async function envoyerLienPaiement(reservationId) {
+async function envoyerLienPaiement(reservationId, options = {}) {
   const data = await details(reservationId);
   if (!data) return { ok: false, error: new Error('Réservation introuvable') };
   const prenom = prenomJoueur(data);
@@ -244,18 +245,24 @@ async function envoyerLienPaiement(reservationId) {
   const lien = data.lien_paiement || data.lien_paytech;
   if (!lien) return { ok: false, error: new Error('Lien de paiement manquant') };
   const waKey = sessionKeyFromReservation(data);
+  const minutes = Math.max(1, Number(data.delai_verrou_paiement_min) || 15);
+  const intro = options.origine === 'joueur'
+    ? `Ta réservation sur *${data.terrain_nom}* est enregistrée ` +
+      `pour le ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}.\n\n` +
+      `Elle n'est pas encore payée.`
+    : `Le gérant de *${data.terrain_nom}* a enregistré ta résa ` +
+      `pour le ${formaterDate(data.date)} ` +
+      `à ${formaterHeure(data.heure_debut)}.`;
   return envoyerWhatsApp(
     tel,
     `👋 Salut ${prenom} !\n\n` +
-      `Le gérant de *${data.terrain_nom}* a enregistré ta résa ` +
-      `pour le ${formaterDate(data.date)} ` +
-      `à ${formaterHeure(data.heure_debut)}.\n\n` +
+      `${intro}\n\n` +
       `Pour confirmer ta place, paie ton avance de ` +
       `*${formaterMontant(data.montant_avance || data.acompte)}* ici :\n` +
       `👉 ${lien}\n\n` +
       `Le reste (*${formaterMontant(data.montant_restant || data.reste_a_payer)}*) ` +
       `tu l'amènes le jour du match, pas de stress 😊\n\n` +
-      `⚠️ Ce lien est valable *2 heures*. Après ça, la place repart.`,
+      `⚠️ Ce lien est valable *${minutes} min*. Après ça, la place repart.`,
     waKey,
     {
       type: 'lien_paiement',
@@ -270,7 +277,7 @@ async function envoyerLienPaiement(reservationId) {
 async function envoyerConfirmation(reservationId) {
   const qrUrl = await assurerQrCodeUrl(reservationId);
   const data = await details(reservationId);
-  if (!data) return;
+  if (!data) return { ok: false, error: new Error('Réservation introuvable') };
   if (qrUrl) data.qr_code_url = qrUrl;
 
   const prenom = prenomJoueur(data);
@@ -295,7 +302,12 @@ async function envoyerConfirmation(reservationId) {
     `⚠️ Ce QR code est à usage unique — ne le partage pas.`;
 
   const waKey = sessionKeyFromReservation(data);
-  await envoyerWhatsApp(tel, message, waKey);
+  const texte = await envoyerWhatsApp(tel, message, waKey, {
+    type: 'confirmation',
+    destinataire_type: 'joueur',
+    destinataire_id: data.joueur_id || 0,
+    idempotency_key: `confirmation-texte:${reservationId}`,
+  });
 
   if (data.qr_code_url) {
     const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
@@ -344,6 +356,7 @@ async function envoyerConfirmation(reservationId) {
       { destinataire_type: 'gerant', destinataire_id: data.gerant_id, type: 'avance_payee_gerant' },
     );
   }
+  return texte || { ok: true };
 }
 
 /** Template 4 — Remboursement créneau pris */

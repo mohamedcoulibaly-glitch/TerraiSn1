@@ -47,6 +47,7 @@ const Payment = () => {
   const setName = (v: string) => setPayDraft((d) => ({ ...d, name: v }));
   const setPhone = (v: string) => setPayDraft((d) => ({ ...d, phone: v }));
   const [processing, setProcessing] = useState(false);
+  const [canal, setCanal] = useState<"wave" | "orange_money" | "">("");
   const deposit = calculerMontantAvance(montant, terrain?.pourcentage_avance);
   const reste = Math.max(0, montant - deposit);
   const sansAvance = ["sans_avance", "sans_acompte"].includes(
@@ -91,6 +92,10 @@ const Payment = () => {
       toast.error(phoneErr || "Veuillez saisir votre nom et numéro de téléphone");
       return;
     }
+    if (!sansAvance && !canal) {
+      toast.error("Choisis Wave ou Orange Money pour payer");
+      return;
+    }
     setProcessing(true);
     try {
       const reservation = await reservationsApi.create({
@@ -101,21 +106,27 @@ const Payment = () => {
         joueur_nom: name,
         joueur_telephone: toLocal9(phone),
         format_terrain: fieldFormat,
-        ...(sansAvance ? { sans_avance: true } : {}),
+        ...(sansAvance
+          ? { sans_avance: true }
+          : { canal_paiement: canal, methode_paiement: canal }),
       });
 
       localStorage.setItem("terrainsn_last_reservation_id", String(reservation.id));
       clearPayDraft();
       clearDraft(`joueur:fiche:${id || "x"}`);
-      hapticSuccess();
 
       if (sansAvance || reservation.sans_avance || reservation.mode_paiement === "sans_avance") {
+        hapticSuccess();
         navigate(`/reservation/succes?id=${reservation.id}&sans_avance=1`);
         return;
       }
 
-      if (!reservation.redirect_url) throw new Error("Lien de paiement indisponible");
-      window.location.assign(reservation.redirect_url);
+      const payUrl = String(reservation.redirect_url || reservation.lien_paiement || "");
+      if (!/^https:\/\//i.test(payUrl)) {
+        throw new Error("Lien de paiement indisponible. La réservation n'est pas payée.");
+      }
+      hapticSuccess();
+      window.location.assign(payUrl);
     } catch (err: unknown) {
       const error = err as Error & {
         offline?: boolean;
@@ -303,6 +314,38 @@ const Payment = () => {
             </div>
           </div>
         </div>
+
+        {!sansAvance && !enLigneIndispo ? (
+          <div className="space-y-2">
+            <p className="text-[12px] text-[var(--color-text-muted)]">Moyen de paiement</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setCanal("wave")}
+                className={`min-h-[52px] rounded-[var(--radius-md)] border px-3 text-sm font-semibold inline-flex items-center justify-center gap-2 ${
+                  canal === "wave"
+                    ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
+                    : "border-[var(--color-border)] bg-[var(--surface)]"
+                }`}
+              >
+                <img src={waveIcon} alt="" className="w-5 h-5 rounded-sm object-cover" />
+                Wave
+              </button>
+              <button
+                type="button"
+                onClick={() => setCanal("orange_money")}
+                className={`min-h-[52px] rounded-[var(--radius-md)] border px-3 text-sm font-semibold inline-flex items-center justify-center gap-2 ${
+                  canal === "orange_money"
+                    ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
+                    : "border-[var(--color-border)] bg-[var(--surface)]"
+                }`}
+              >
+                <img src={omIcon} alt="" className="w-5 h-5 rounded-sm object-cover" />
+                Orange Money
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="fixed bottom-16 inset-x-0 z-30 border-t border-[var(--color-border)] bg-[var(--surface)] px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
@@ -314,7 +357,7 @@ const Payment = () => {
           <button
             type="button"
             onClick={handlePay}
-            disabled={processing || enLigneIndispo}
+            disabled={processing || enLigneIndispo || (!sansAvance && !canal)}
             className="w-full h-[52px] rounded-[14px] bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
             style={{ fontFamily: "var(--font-display)" }}
           >

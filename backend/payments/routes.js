@@ -97,7 +97,7 @@ function mountPaymentRoutes(app) {
       try {
         const db = await getDb();
         const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-        if (reservation?.statut === 'en_attente') {
+        if (reservation?.statut === 'en_attente' || reservation?.statut === 'en_attente_paiement') {
           const { annulerReservationApresAnnulationPaytech } = require('./flow');
           await annulerReservationApresAnnulationPaytech(
             reservationId,
@@ -256,7 +256,7 @@ function mountPaymentRoutes(app) {
 
       if (action !== 'success') {
         transaction(db, () => {
-          db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut = 'en_attente'", [reservationId]);
+          db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')", [reservationId]);
           libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
           db.run(
             `UPDATE paiements SET statut = 'annule' WHERE reservation_id = ? AND statut = 'en_attente'`,
@@ -308,7 +308,7 @@ function mountPaymentRoutes(app) {
           code: 'SANS_AVANCE',
         });
       }
-      if (reservation.statut !== 'en_attente') {
+      if (!['en_attente', 'en_attente_paiement'].includes(String(reservation.statut))) {
         return res.status(400).json({ error: 'Cette réservation n’est plus en attente de paiement' });
       }
       if (reservation.lien_paiement && reservation.reference_paytech) {

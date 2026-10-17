@@ -286,7 +286,7 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
         const fin = hhmm(c.heure_fin);
         return resaActives.some(
           (r) =>
-            r.statut === 'en_attente' &&
+            (r.statut === 'en_attente' || r.statut === 'en_attente_paiement') &&
             r.date === d &&
             chevauche(debut, fin, r.heure_debut, r.heure_fin),
         );
@@ -295,7 +295,7 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
         date: toYmd(c.date),
         heure_debut: hhmm(c.heure_debut),
         heure_fin: hhmm(c.heure_fin),
-        kind: c.statut === 'bloque' ? 'bloque' : 'reserve',
+        kind: c.statut === 'bloque' ? 'bloque' : (c.statut === 'en_attente_paiement' ? 'verrou' : 'reserve'),
         label: c.statut,
       })),
   ];

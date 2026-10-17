@@ -235,7 +235,8 @@ export default function DetailReservation() {
     canValidateEntree &&
     (typeof reservation.scannable_now === "boolean" ? reservation.scannable_now : true);
   const bloqueParPriorite = canValidateEntree && !canScan;
-  const canResendPaymentLink = reservation.statut === "en_attente";
+  const canResendPaymentLink =
+    reservation.statut === "en_attente" || reservation.statut === "en_attente_paiement";
   const canResendQr =
     Boolean(reservation.code_reservation) &&
     ["confirme", "acceptee"].includes(reservation.statut) &&

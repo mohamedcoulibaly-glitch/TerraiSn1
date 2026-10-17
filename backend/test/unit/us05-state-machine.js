@@ -16,6 +16,8 @@ h.assertEqual('sans avance confirmé', decisionCreation({ sansAvance: true, mode
 h.assert('sans avance notifie', decisionCreation({ sansAvance: true }).envoyerConfirmation === true);
 h.assert('sans avance sans lien', decisionCreation({ sansAvance: true }).creerLienPaiement === false);
 
+h.assert('manuel sans lien', decisionCreation({ mode: 'manuel' }).creerLienPaiement === false);
+h.assertEqual('manuel en attente', decisionCreation({ mode: 'manuel' }).statut, 'en_attente_paiement');
 h.assert('bloquer confirme sans notif sans-avance', decisionCreation({ mode: 'bloquer' }).envoyerConfirmation === false);
 h.assertEqual('bloquer statut', decisionCreation({ mode: 'bloquer' }).statut, 'confirme');
 

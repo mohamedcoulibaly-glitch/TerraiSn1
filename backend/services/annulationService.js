@@ -112,12 +112,12 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
   transaction(db, () => {
     if (traitePar) {
       db.run(
-        "UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')",
+        "UPDATE reservations SET statut = 'annule', traite_par = ? WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'acceptee')",
         [traitePar, reservation.id],
       );
     } else {
       db.run(
-        "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'confirme', 'acceptee')",
+        "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'acceptee')",
         [reservation.id],
       );
     }
@@ -126,7 +126,7 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
       error.statusCode = 400;
       throw error;
     }
-    if (reservation.statut === 'en_attente') {
+    if (reservation.statut === 'en_attente' || reservation.statut === 'en_attente_paiement') {
       libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
     } else {
       libererCreneauxReservation(db, reservation, ['reserve', 'en_attente_paiement']);
