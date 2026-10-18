@@ -13,6 +13,18 @@ import FinancesView, {
 import CommissionDueCard from "@/espaces/backoffice/components/CommissionDueCard";
 import { featureEnabled } from "@/lib/terrainFeatures";
 
+type Portefeuille = {
+  payout_mode?: "auto" | "retrait";
+  solde_disponible?: number;
+  solde_net_apres_dette?: number;
+  solde_demande_retrait?: number;
+  bouton_retirer?: boolean;
+};
+
+function fcfa(amount?: number) {
+  return `${Number(amount || 0).toLocaleString("fr-FR")} FCFA`;
+}
+
 export default function FinancesPage() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -21,23 +33,28 @@ export default function FinancesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
+  const [portefeuille, setPortefeuille] = useState<Portefeuille | null>(null);
+  const [retraitPending, setRetraitPending] = useState(false);
   const [detteRefreshKey, setDetteRefreshKey] = useState(0);
   const refreshTimer = useRef<number | null>(null);
 
-  const load = useCallback((quiet = false) => {
+  const load = useCallback(async (quiet = false) => {
     if (!quiet) {
       setLoading(true);
       setData(null);
     }
     setError("");
-    gerantApi
-      .finances(periode)
-      .then((payload) => setData(payload as FinancesData))
-      .catch((err) => {
-        setData(null);
-        setError(err instanceof Error ? err.message : "Impossible de charger les finances");
-      })
-      .finally(() => setLoading(false));
+    try {
+      const [finances, wallet] = await Promise.all([gerantApi.finances(periode), gerantApi.portefeuille()]);
+      setData(finances as FinancesData);
+      setPortefeuille(wallet as Portefeuille);
+    } catch (err) {
+      setData(null);
+      setPortefeuille(null);
+      setError(err instanceof Error ? err.message : "Impossible de charger les finances");
+    } finally {
+      setLoading(false);
+    }
   }, [periode]);
 
   useEffect(() => {
@@ -75,6 +92,21 @@ export default function FinancesPage() {
       mounted = false;
     };
   }, []);
+
+  const demanderRetrait = async () => {
+    if (retraitPending || !portefeuille?.bouton_retirer) return;
+    if (!window.confirm(`Demander le retrait de ${fcfa(portefeuille.solde_net_apres_dette || portefeuille.solde_disponible)} ?`)) return;
+    setRetraitPending(true);
+    try {
+      const result = await gerantApi.demanderRetrait() as { montant?: number; statut?: string };
+      toast.success(`Retrait demandé : ${fcfa(result.montant)}. Vous serez notifié à son traitement.`);
+      await load(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Impossible de demander le retrait");
+    } finally {
+      setRetraitPending(false);
+    }
+  };
 
   useTerrainEvents(user?.terrain_id, (ev) => {
     if (!["reservation", "encaissement", "blocage", "sante"].includes(String(ev.type))) return;
@@ -120,6 +152,35 @@ export default function FinancesPage() {
         key={detteRefreshKey}
         enabled={featureEnabled(features, "dette_commission", true)}
       />
+
+      {portefeuille?.payout_mode === "retrait" ? (
+        <section className="rounded-2xl p-4 space-y-2" style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>Solde à retirer</h2>
+              <p className="text-lg font-bold" style={{ color: "var(--g-primary)", fontFamily: "var(--font-display)" }}>
+                {fcfa(portefeuille.solde_net_apres_dette || portefeuille.solde_disponible)}
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={!portefeuille.bouton_retirer || retraitPending}
+              onClick={() => void demanderRetrait()}
+              className="min-h-[44px] px-4 rounded-xl text-sm font-semibold text-white disabled:opacity-50"
+              style={{ background: "var(--g-primary)" }}
+            >
+              {retraitPending ? "Demande en cours…" : portefeuille.solde_demande_retrait ? "Retrait en cours" : "Retirer"}
+            </button>
+          </div>
+          <p className="text-[12px]" style={{ color: "var(--g-muted)" }}>
+            {portefeuille.solde_demande_retrait
+              ? "Une demande est déjà en cours de traitement."
+              : portefeuille.bouton_retirer
+                ? "Le montant est envoyé à l’équipe pour validation et versement."
+                : "Le retrait devient disponible après validation du canal Wave ou Orange Money et des revenus."}
+          </p>
+        </section>
+      ) : null}
 
       {loading ? (
         <FinancesSkeleton />

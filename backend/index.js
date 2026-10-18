@@ -2517,7 +2517,7 @@ app.get('/api/reservations/:id(\\d+)/qr.png', optionalAuth, async (req, res) => 
     const db = await getDb();
     const reservation = queryOne(
       db,
-      `SELECT r.id, r.joueur_id, r.code_reservation, r.qr_code_payload, r.creneau_id, r.terrain_id, r.date, r.heure_debut, r.heure_fin,
+      `SELECT r.id, r.joueur_id, r.statut, r.code_reservation, r.qr_code_payload, r.creneau_id, r.terrain_id, r.date, r.heure_debut, r.heure_fin,
               COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
        FROM reservations r
        LEFT JOIN creneaux c ON c.id = r.creneau_id
@@ -2525,7 +2525,7 @@ app.get('/api/reservations/:id(\\d+)/qr.png', optionalAuth, async (req, res) => 
       [Number(req.params.id)]
     );
     if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
-    if (reservation.statut === 'en_attente' || reservation.statut === 'en_attente_paiement') {
+    if (!['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(reservation.statut))) {
       return res.status(404).json({ error: 'QR indisponible avant confirmation' });
     }
     if (req.user && reservation.joueur_id && Number(reservation.joueur_id) !== Number(req.user.id) && req.user.role === 'joueur') {
@@ -4350,10 +4350,20 @@ async function start() {
     }
   }, 5 * 60 * 1000);
 
-  // Rejeu des notifications WhatsApp en échec (toutes les 2 min)
-  const RETRY_MS = Number(process.env.WHATSAPP_RETRY_INTERVAL_MS || 120000);
+  // Rejeu des notifications WhatsApp en échec. Une notification est tentée au
+  // moment de l'événement ; si OpenWA est momentanément indisponible, elle ne
+  // doit jamais rester en file plus de cinq secondes avant la tentative suivante.
+  const configuredRetryMs = Number(process.env.WHATSAPP_RETRY_INTERVAL_MS || 5000);
+  const RETRY_MS = Number.isFinite(configuredRetryMs)
+    ? Math.min(5000, Math.max(1000, configuredRetryMs))
+    : 5000;
   if (String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
-    setInterval(async () => {
+    let retryInFlight = false;
+    const replayWhatsappQueue = async () => {
+      // Un fournisseur lent ne doit pas provoquer des workers concurrents qui
+      // enverraient deux fois le même message.
+      if (retryInFlight) return;
+      retryInFlight = true;
       try {
         const retryQueue = require('./services/notificationRetryQueue');
         const results = await retryQueue.rejouerPending(async (job) => {
@@ -4402,8 +4412,14 @@ async function start() {
         }
       } catch (error) {
         logger.error('index.js', 'WhatsApp retry queue', error);
+      } finally {
+        retryInFlight = false;
       }
-    }, Math.max(30000, RETRY_MS));
+    };
+    // Traite aussi les messages persistés avant le démarrage, sans attendre le
+    // premier tick.
+    void replayWhatsappQueue();
+    setInterval(() => void replayWhatsappQueue(), RETRY_MS);
   }
 
   app.listen(PORT, () => {

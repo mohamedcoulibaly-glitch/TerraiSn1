@@ -5,6 +5,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useEffect, useState } from "react";
+import { fetchReservationQrDataUrl } from "@/lib/api";
 import { reservationHasStadiumAccess } from "@/lib/offlineStore";
 
 export type AccesTerrainReservation = {
@@ -30,10 +32,31 @@ type Props = {
 
 /** Passe d'accès affichable hors-ligne (QR data URL + code). */
 export default function AccesTerrainPass({ reservation, open, onOpenChange, offline }: Props) {
+  const [fetchedQr, setFetchedQr] = useState<string | null>(null);
+  const [qrFailed, setQrFailed] = useState(false);
+  const reservationId = reservation?.id;
+  const canShow = reservationHasStadiumAccess(reservation?.statut);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFetchedQr(null);
+    setQrFailed(false);
+    // Le PNG est généré par l'API à la demande. Cela évite de dépendre d'une
+    // URL /uploads relative au frontend ou d'un disque éphémère en production.
+    if (!open || !canShow || !reservationId || reservation?.qr_code_data_url) return undefined;
+    void fetchReservationQrDataUrl(reservationId).then((dataUrl) => {
+      if (cancelled) return;
+      if (dataUrl) setFetchedQr(dataUrl);
+      else setQrFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, canShow, reservationId, reservation?.qr_code_data_url]);
+
   if (!reservation) return null;
 
-  const qrSrc = reservation.qr_code_data_url || reservation.qr_code_url || null;
-  const canShow = reservationHasStadiumAccess(reservation.statut);
+  const qrSrc = reservation.qr_code_data_url || fetchedQr || reservation.qr_code_url || null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -81,14 +104,17 @@ export default function AccesTerrainPass({ reservation, open, onOpenChange, offl
                 <img
                   src={qrSrc}
                   alt={`QR ${reservation.code_reservation || reservation.id}`}
-                  className="w-[200px] h-[200px] object-contain mx-auto"
+                  className="w-[min(200px,calc(100vw-7rem))] h-[min(200px,calc(100vw-7rem))] object-contain mx-auto"
+                  onError={() => setQrFailed(true)}
                 />
               </div>
             ) : (
               <p className="text-sm text-[var(--color-text-muted)] px-2">
                 {offline
                   ? "QR non synchronisé. Reconnecte-toi une fois pour le télécharger, le code ci-dessus reste valable."
-                  : "QR en cours de préparation…"}
+                  : qrFailed
+                    ? "Impossible de charger le QR pour le moment. Réessaie dans quelques secondes ; le code ci-dessus reste valable."
+                    : "QR en cours de préparation…"}
               </p>
             )}
           </div>

@@ -11,6 +11,9 @@ type Wa = {
   phone?: string | null;
   dataUrl?: string | null;
   initializing?: boolean;
+  error?: string | null;
+  waState?: string | null;
+  config?: { hasApiKey?: boolean; sharedSessionConfigured?: boolean; readyForProd?: boolean };
 };
 
 export default function WhatsAppPlateformePage() {
@@ -18,9 +21,11 @@ export default function WhatsAppPlateformePage() {
   const [status, setStatus] = useState<Wa | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [confirmOff, setConfirmOff] = useState(false);
   const [testTel, setTestTel] = useState("");
   const [modal, setModal] = useState(false);
+  const testTelValid = /^2217\d{8}$/.test(testTel.replace(/\D/g, ""));
 
   const refresh = useCallback(async () => {
     const s = (await superAdminApi.whatsappStatus()) as Wa;
@@ -82,8 +87,11 @@ export default function WhatsAppPlateformePage() {
           </>
         ) : (
           <>
-            <p className="text-sm font-semibold" style={{ color: "var(--sa-danger)" }}>WhatsApp déconnecté</p>
+            <p className="text-sm font-semibold" style={{ color: "var(--sa-danger)" }}>
+              {status?.initializing ? "Connexion WhatsApp en cours…" : "WhatsApp déconnecté"}
+            </p>
             <p className="text-[13px]" style={{ color: "var(--sa-muted)" }}>Les notifications joueurs, gérants et alertes de reversement sont suspendues.</p>
+            {status?.error ? <p className="text-[12px]" style={{ color: "var(--sa-danger)" }}>{status.error}</p> : null}
             <button type="button" disabled={busy} onClick={() => connect(false)} className="min-h-[44px] px-4 rounded-lg text-[13px] font-semibold text-white inline-flex items-center gap-2" style={{ background: "#25D366" }}>
               {busy ? <Loader2 size={14} className="animate-spin" /> : null}
               Reconnecter WhatsApp
@@ -104,19 +112,25 @@ export default function WhatsAppPlateformePage() {
         <input className="w-full h-11 rounded-lg px-3 text-sm" placeholder="2217XXXXXXXX" value={testTel} onChange={(e) => setTestTel(e.target.value)} style={{ border: "1px solid var(--sa-border)" }} />
         <button
           type="button"
+          disabled={testing || !testTelValid || !status?.connected}
           onClick={async () => {
+            setTesting(true);
             try {
               await superAdminApi.whatsappTest(testTel);
               toast.success("Message envoyé ✓");
             } catch (err) {
               toast.error(err instanceof Error ? err.message : "Échec");
+            } finally {
+              setTesting(false);
             }
           }}
-          className="min-h-[44px] px-4 rounded-lg text-[13px] font-semibold text-white"
+          className="min-h-[44px] px-4 rounded-lg text-[13px] font-semibold text-white disabled:opacity-50"
           style={{ background: "var(--sa-primary)" }}
         >
-          Envoyer un message test
+          {testing ? "Envoi en cours…" : "Envoyer un message test"}
         </button>
+        {!status?.connected ? <p className="text-[11px]" style={{ color: "var(--sa-muted)" }}>Connectez d’abord la session WhatsApp pour tester l’envoi.</p> : null}
+        {testTel.trim() && !testTelValid ? <p className="text-[11px]" style={{ color: "var(--sa-danger)" }}>Utilisez un numéro sénégalais au format 2217XXXXXXXX.</p> : null}
       </section>
 
       <section className="rounded-xl p-5 space-y-2" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>

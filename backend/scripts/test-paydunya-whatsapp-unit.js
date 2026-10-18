@@ -342,6 +342,32 @@ async function main() {
       idempotency_key: 'unit-fail-1',
     });
     h.assert('idempotency_key déduplique en file', dup.deduped === true);
+
+    const replay = await retryQueue.rejouerPending(async (job) => {
+      const result = await notificationService.envoyerMessage(
+        job.telephone,
+        job.message,
+        job.session_key,
+        { skipRetryQueue: true, type: job.type },
+      );
+      if (!result.ok) throw result.error || new Error('rejeu WhatsApp échoué');
+    });
+    h.assert('rejeu WhatsApp délivre le job en attente', replay.length === 1 && replay[0].ok === true);
+    h.assertEqual('rejeu WhatsApp vide la file après succès', await retryQueue.compterPending(), 0);
+
+    const dead = await retryQueue.enfiler({
+      telephone: MOHAMED.telephoneRaw,
+      message: 'Message définitivement indisponible',
+      idempotency_key: 'unit-dead-1',
+      max_tentatives: 1,
+    });
+    const failedReplay = await retryQueue.rejouerPending(async () => {
+      throw new Error('timeout fournisseur');
+    });
+    h.assert(
+      'rejeu WhatsApp timeout passe le job en dead-letter à la limite',
+      failedReplay[0]?.id === dead.id && failedReplay[0]?.dead === true,
+    );
   } finally {
     client.sendMessageForSession = origSend;
     client.sendImageForSession = origImg;
