@@ -909,7 +909,7 @@ export const gerantApi = {
    */
   async joueurHistorique(numero: string) {
     try {
-      return (await request(`/gerant/joueurs/historique/${encodeURIComponent(numero)}`)) as {
+      return (await request(`/joueurs/historique/${encodeURIComponent(numero)}`)) as {
         reservations: Array<{ joueur_nom?: string | null; joueur_telephone?: string | null }>;
       };
     } catch {
