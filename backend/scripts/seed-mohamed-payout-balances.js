@@ -10,6 +10,10 @@ const {
   DEMO_PASSWORD,
   GERANT_EMAIL,
   MOHAMED_PHONE_STORE,
+  AVANCE_FCFA,
+  POURCENTAGE_AVANCE,
+  PAYOUT_MODE,
+  PRIX_HEURE,
 } = require('./ensure-mohamed-accounts');
 const PHONE_STORE = MOHAMED_PHONE_STORE || '+221 77 826 12 25';
 const { traiterConfirmationPaytech } = require('../payments/flow');
@@ -47,7 +51,7 @@ function creerReservationEnAttente(db, { terrainId, joueurId, date, heure, prix,
     runSql(db, "UPDATE creneaux SET statut = 'en_attente_paiement' WHERE id = ?", [creneau.id]);
   }
 
-  const avance = Math.round(prix * 0.125);
+  const avance = AVANCE_FCFA;
   return runSql(
     db,
     `INSERT INTO reservations (
@@ -85,9 +89,9 @@ async function main() {
       terrainId,
       {
         gerant_id: gerantId,
-        payout_mode: 'retrait',
+        payout_mode: PAYOUT_MODE,
         remboursement_autorise: 0,
-        pourcentage_avance: 12.5,
+        pourcentage_avance: POURCENTAGE_AVANCE,
         commission_pourcentage: 10,
         paiement_production: 1,
         numeros_identiques_whatsapp: 1,
@@ -109,13 +113,18 @@ async function main() {
       { auteurId: gerantId },
     );
   });
+  runSql(
+    db,
+    `UPDATE terrains SET montant_acompte = ?, acompte = ?, pourcentage_avance = ?, payout_mode = ? WHERE id = ?`,
+    [AVANCE_FCFA, AVANCE_FCFA, POURCENTAGE_AVANCE, PAYOUT_MODE, terrainId],
+  );
 
   const slots = [
-    { day: 3, heure: '10:00', prix: 40000 },
-    { day: 3, heure: '14:00', prix: 50000 },
-    { day: 4, heure: '11:00', prix: 35000 },
-    { day: 4, heure: '16:00', prix: 45000 },
-    { day: 5, heure: '18:00', prix: 40000 },
+    { day: 3, heure: '10:00', prix: PRIX_HEURE },
+    { day: 3, heure: '14:00', prix: PRIX_HEURE },
+    { day: 4, heure: '11:00', prix: PRIX_HEURE },
+    { day: 4, heure: '16:00', prix: PRIX_HEURE },
+    { day: 5, heure: '18:00', prix: PRIX_HEURE },
   ];
 
   const created = [];
@@ -159,9 +168,9 @@ async function main() {
         wave_numero = COALESCE(NULLIF(wave_numero, ''), '221778261225'),
         om_numero = COALESCE(NULLIF(om_numero, ''), '221778261225'),
         canal_reversement = COALESCE(NULLIF(canal_reversement, ''), 'wave'),
-        payout_mode = 'retrait'
+        payout_mode = ?
      WHERE terrain_id = ? AND statut IN ('en_fenetre', 'payable', 'echec')`,
-    [gerantId, terrainId],
+    [gerantId, PAYOUT_MODE, terrainId],
   );
   saveDb();
 

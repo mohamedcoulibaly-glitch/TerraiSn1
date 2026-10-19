@@ -20,6 +20,11 @@ const GERANT_EMAIL = 'mohamed.gerant@gmail.com';
 const PROPRIO_EMAIL = 'mohamed.proprietaire@gmail.com';
 const ADMIN_EMAIL = 'mohamed.admin@gmail.com';
 const TERRAIN_NOM = 'Arena Mohamed Parcelles';
+/** Avance fixe pour smoke payin prod (PayTech) — payout manuel uniquement. */
+const AVANCE_FCFA = 10;
+const PRIX_HEURE = 8000;
+const POURCENTAGE_AVANCE = (AVANCE_FCFA * 100) / PRIX_HEURE; // 0.125 % → 10 FCFA
+const PAYOUT_MODE = 'retrait';
 
 function ymd(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -120,32 +125,40 @@ function upsertTerrainMohamed(db, proprioId) {
     `SELECT id FROM terrains WHERE nom = ? OR telephone LIKE '%778261225%' OR telephone LIKE '%77 826 12 25%' LIMIT 1`,
     [TERRAIN_NOM],
   );
-  const prix = 8000;
+  const prix = PRIX_HEURE;
   const commodites = JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking']);
-  const description = 'Terrain de test Mohamed — WhatsApp / Wave / OM : 77 826 12 25.';
+  const description = 'Terrain de test Mohamed — avance 10 FCFA, payout manuel (retrait). WhatsApp / Wave / OM : 77 826 12 25.';
   if (existing) {
     runSql(
       db,
       `UPDATE terrains SET proprietaire_id = ?, nom = ?, adresse = ?, ville = ?, sport = ?, type = ?,
         prix_heure = ?, prix_entier = ?, prix_moitie = ?, description = ?, telephone = ?,
+        montant_acompte = ?, acompte = ?, pourcentage_avance = ?, payout_mode = ?,
         is_active = 1, commodites = ?, latitude = COALESCE(latitude, ?), longitude = COALESCE(longitude, ?)
        WHERE id = ?`,
       [proprioId, TERRAIN_NOM, 'Parcelles Assainies, Dakar', 'Dakar', 'foot', '7v7',
-        prix, prix, Math.round(prix * 0.6), description, PHONE_STORE, commodites,
-        14.7640, -17.4370, existing.id],
+        prix, prix, Math.round(prix * 0.6), description, PHONE_STORE,
+        AVANCE_FCFA, AVANCE_FCFA, POURCENTAGE_AVANCE, PAYOUT_MODE,
+        commodites, 14.7640, -17.4370, existing.id],
     );
     assurerHorairesEtCreneaux(db, existing.id);
-    return existing.id;
+    return { terrainId: existing.id, created: false };
   }
   const terrainId = Number(runSql(
     db,
-    `INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites, latitude, longitude)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-    [proprioId, TERRAIN_NOM, 'Parcelles Assainies, Dakar', 'Dakar', 'foot', '7v7', prix, description, PHONE_STORE, '[]', commodites, 14.7640, -17.4370],
+    `INSERT INTO terrains (
+      proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos,
+      is_active, commodites, montant_acompte, acompte, pourcentage_avance, payout_mode, latitude, longitude
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      proprioId, TERRAIN_NOM, 'Parcelles Assainies, Dakar', 'Dakar', 'foot', '7v7', prix, description,
+      PHONE_STORE, '[]', commodites, AVANCE_FCFA, AVANCE_FCFA, POURCENTAGE_AVANCE, PAYOUT_MODE,
+      14.7640, -17.4370,
+    ],
   ).lastInsertRowid);
   runSql(db, 'UPDATE terrains SET prix_entier = ?, prix_moitie = ? WHERE id = ?', [prix, Math.round(prix * 0.6), terrainId]);
   assurerHorairesEtCreneaux(db, terrainId);
-  return terrainId;
+  return { terrainId, created: true };
 }
 
 function upsertGerant(db, hash, terrainId, proprioId) {
@@ -185,7 +198,7 @@ function nettoyerAnciennesResasMohamed(db, joueurId, terrainId) {
   }
 }
 
-function creerReservationEnAttente(db, { terrainId, joueurId, date, heure, prix }) {
+function creerReservationEnAttente(db, { terrainId, joueurId, date, heure, prix = PRIX_HEURE, avance = AVANCE_FCFA }) {
   const heureFin = `${String(Number(heure.slice(0, 2)) + 1).padStart(2, '0')}:00`;
   let creneau = queryOne(
     db,
@@ -203,7 +216,6 @@ function creerReservationEnAttente(db, { terrainId, joueurId, date, heure, prix 
   } else {
     runSql(db, "UPDATE creneaux SET statut = 'en_attente_paiement' WHERE id = ?", [creneau.id]);
   }
-  const avance = Math.round(prix * 0.125);
   const reservationId = runSql(
     db,
     `INSERT INTO reservations (
@@ -221,8 +233,8 @@ function creerReservationEnAttente(db, { terrainId, joueurId, date, heure, prix 
 }
 
 /**
- * Crée / met à jour les comptes Mohamed + Arena + résas démo.
- * @param {{ db?: object, silent?: boolean }} [opts]
+ * Crée / met à jour les comptes Mohamed + Arena (avance 10 FCFA, payout retrait).
+ * @param {{ db?: object, silent?: boolean, seedReservations?: boolean }} [opts]
  */
 async function ensureMohamedAccounts(opts = {}) {
   const db = opts.db || (await getDb());
@@ -232,16 +244,19 @@ async function ensureMohamedAccounts(opts = {}) {
   const joueurId = upsertJoueur(db, hash);
   upsertAdmin(db, hash);
   const proprioId = upsertProprio(db, hash);
-  const terrainId = upsertTerrainMohamed(db, proprioId);
+  const { terrainId, created: terrainCreated } = upsertTerrainMohamed(db, proprioId);
   const gerantId = upsertGerant(db, hash, terrainId, proprioId);
+  const seedReservations = opts.seedReservations !== undefined
+    ? Boolean(opts.seedReservations)
+    : true;
 
   transaction(db, () => {
     enregistrerContrat(db, terrainId, {
       gerant_id: gerantId,
       numeros_identiques_whatsapp: 1,
-      payout_mode: 'retrait',
+      payout_mode: PAYOUT_MODE,
       remboursement_autorise: 0,
-      pourcentage_avance: 12.5,
+      pourcentage_avance: POURCENTAGE_AVANCE,
       commission_pourcentage: 10,
     }, { auteurId: gerantId });
   });
@@ -253,60 +268,88 @@ async function ensureMohamedAccounts(opts = {}) {
     }, { auteurId: gerantId });
   });
 
-  nettoyerAnciennesResasMohamed(db, joueurId, terrainId);
-
-  const r1 = creerReservationEnAttente(db, {
-    terrainId, joueurId, date: ymd(addDays(1)), heure: '18:00', prix: 40000,
-  });
-  const r2 = creerReservationEnAttente(db, {
-    terrainId, joueurId, date: ymd(addDays(2)), heure: '19:00', prix: 40000,
-  });
-
-  const c1 = await traiterConfirmationPaytech(db, r1, `TF-${r1}-${Date.now()}-MOH1`);
-  const c2 = await traiterConfirmationPaytech(db, r2, `TF-${r2}-${Date.now()}-MOH2`);
-
-  runSql(db, "DELETE FROM notifications WHERE contenu LIKE '%Mohamed%' AND type IN ('confirmation','du_accumule','seed_mohamed')");
+  // Filet : force montant_acompte = 10 FCFA même si un avenant recalcule autrement
   runSql(
     db,
-    `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
-     VALUES ('user', ?, 'confirmation', 'whatsapp', ?, 0)`,
-    [joueurId, `Réservation confirmée (${TERRAIN_NOM}). Avance payée. Présente ton QR au gérant.`],
+    `UPDATE terrains SET montant_acompte = ?, acompte = ?, pourcentage_avance = ?, payout_mode = ?
+     WHERE id = ?`,
+    [AVANCE_FCFA, AVANCE_FCFA, POURCENTAGE_AVANCE, PAYOUT_MODE, terrainId],
   );
-  runSql(
-    db,
-    `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
-     VALUES ('gerant', ?, 'du_accumule', 'whatsapp', ?, 0)`,
-    [gerantId, `Avance joueur Mohamed confirmée sur ${TERRAIN_NOM}. Ouvre Finances pour Retirer.`],
-  );
+
+  let r1 = null;
+  let r2 = null;
+  let c1 = null;
+  let c2 = null;
+  let dus = [];
+
+  if (seedReservations) {
+    nettoyerAnciennesResasMohamed(db, joueurId, terrainId);
+
+    r1 = creerReservationEnAttente(db, {
+      terrainId, joueurId, date: ymd(addDays(1)), heure: '18:00',
+    });
+    r2 = creerReservationEnAttente(db, {
+      terrainId, joueurId, date: ymd(addDays(2)), heure: '19:00',
+    });
+
+    c1 = await traiterConfirmationPaytech(db, r1, `TF-${r1}-${Date.now()}-MOH1`);
+    c2 = await traiterConfirmationPaytech(db, r2, `TF-${r2}-${Date.now()}-MOH2`);
+
+    runSql(db, "DELETE FROM notifications WHERE contenu LIKE '%Mohamed%' AND type IN ('confirmation','du_accumule','seed_mohamed')");
+    runSql(
+      db,
+      `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
+       VALUES ('user', ?, 'confirmation', 'whatsapp', ?, 0)`,
+      [joueurId, `Réservation confirmée (${TERRAIN_NOM}). Avance ${AVANCE_FCFA} FCFA payée. Présente ton QR au gérant.`],
+    );
+    runSql(
+      db,
+      `INSERT INTO notifications (destinataire_type, destinataire_id, type, canal, contenu, lu)
+       VALUES ('gerant', ?, 'du_accumule', 'whatsapp', ?, 0)`,
+      [gerantId, `Avance ${AVANCE_FCFA} FCFA Mohamed confirmée sur ${TERRAIN_NOM}. Payout manuel — ouvre Finances pour Retirer.`],
+    );
+    dus = queryAll(db, 'SELECT id, statut, du_gerant, avance FROM dus WHERE reservation_id IN (?, ?)', [r1, r2]);
+  }
 
   saveDb();
 
   const joueur = queryOne(db, 'SELECT id, email, telephone, role, is_active FROM users WHERE email = ?', [JOUEUR_EMAIL]);
   const admin = queryOne(db, 'SELECT id, email, role, is_active FROM users WHERE email = ?', [ADMIN_EMAIL]);
   const gerant = queryOne(db, 'SELECT id, email, telephone, whatsapp_number, terrain_id, is_active FROM employes WHERE email = ?', [GERANT_EMAIL]);
-  const terrain = queryOne(db, 'SELECT id, nom, telephone, is_active FROM terrains WHERE id = ?', [terrainId]);
-  const contrat = queryOne(db, 'SELECT payout_mode, wave_numero, wave_statut, gerant_id FROM terrains WHERE id = ?', [terrainId]);
-  const dus = queryAll(db, 'SELECT id, statut, du_gerant FROM dus WHERE reservation_id IN (?, ?)', [r1, r2]);
+  const terrain = queryOne(
+    db,
+    `SELECT id, nom, telephone, is_active, montant_acompte, acompte, pourcentage_avance, payout_mode
+     FROM terrains WHERE id = ?`,
+    [terrainId],
+  );
+  const contrat = queryOne(db, 'SELECT payout_mode, wave_numero, wave_statut, gerant_id, montant_acompte FROM terrains WHERE id = ?', [terrainId]);
 
   const okLoginJoueur = Boolean(joueur?.id && joueur.is_active && bcrypt.compareSync(DEMO_PASSWORD, queryOne(db, 'SELECT password_hash FROM users WHERE id = ?', [joueur.id]).password_hash));
   const okLoginGerant = Boolean(gerant?.id && gerant.is_active && bcrypt.compareSync(DEMO_PASSWORD, queryOne(db, 'SELECT password_hash FROM employes WHERE id = ?', [gerant.id]).password_hash));
   const okLoginAdmin = Boolean(admin?.id && admin.is_active);
+  const okAvance = Number(terrain?.montant_acompte ?? terrain?.acompte) === AVANCE_FCFA;
+  const okPayout = terrain?.payout_mode === PAYOUT_MODE;
 
   if (!silent) {
     console.log('\n=== Terrain + comptes Mohamed ===');
-    console.log(`Terrain  ${terrain.nom}  id=${terrain.id}  tel=${terrain.telephone}  actif=${terrain.is_active}`);
+    console.log(`Terrain  ${terrain.nom}  id=${terrain.id}  tel=${terrain.telephone}  actif=${terrain.is_active}  created=${terrainCreated}`);
+    console.log(`Avance   ${terrain.montant_acompte} FCFA (pct=${terrain.pourcentage_avance})  payout=${terrain.payout_mode}`);
     console.log(`Joueur   ${joueur.email}  tel=${joueur.telephone}  login=${okLoginJoueur}`);
     console.log(`Gérant   ${gerant.email}  tel=${gerant.telephone}  wa=${gerant.whatsapp_number}  terrain=${gerant.terrain_id}  login=${okLoginGerant}`);
     console.log(`Proprio  ${PROPRIO_EMAIL}`);
     console.log(`Admin    ${ADMIN_EMAIL}  login=${okLoginAdmin}`);
     console.log(`Mot de passe : ${DEMO_PASSWORD}`);
     console.log(`Contrat : mode=${contrat.payout_mode} wave=${contrat.wave_numero} ${contrat.wave_statut}`);
-    console.log('Dûs :', dus);
-    console.log('Confirm flow :', c1.action, c2.action);
+    if (seedReservations) {
+      console.log('Dûs :', dus);
+      console.log('Confirm flow :', c1?.action, c2?.action);
+    } else {
+      console.log('Résas démo : ignorées (seedReservations=false)');
+    }
   }
 
-  if (!okLoginJoueur || !okLoginGerant || !okLoginAdmin || contrat.wave_statut !== 'verifie' || !String(terrain.telephone).includes('826')) {
-    const err = new Error('ensure-mohamed-accounts : validation login / contrat échouée');
+  if (!okLoginJoueur || !okLoginGerant || !okLoginAdmin || contrat.wave_statut !== 'verifie' || !String(terrain.telephone).includes('826') || !okAvance || !okPayout) {
+    const err = new Error('ensure-mohamed-accounts : validation login / contrat / avance 10 FCFA / payout retrait échouée');
     if (!silent) process.exitCode = 1;
     throw err;
   }
@@ -317,6 +360,8 @@ async function ensureMohamedAccounts(opts = {}) {
     proprioId,
     terrainId,
     adminId: admin.id,
+    avanceFcfa: AVANCE_FCFA,
+    payoutMode: PAYOUT_MODE,
   };
 }
 
@@ -330,6 +375,10 @@ module.exports = {
   PROPRIO_EMAIL,
   ADMIN_EMAIL,
   TERRAIN_NOM,
+  AVANCE_FCFA,
+  PRIX_HEURE,
+  POURCENTAGE_AVANCE,
+  PAYOUT_MODE,
 };
 
 if (require.main === module) {
