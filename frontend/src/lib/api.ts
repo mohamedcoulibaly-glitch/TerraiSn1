@@ -978,6 +978,10 @@ export const gerantApi = {
     return await request('/gerant/portefeuille');
   },
 
+  async demanderRetrait() {
+    return await request('/gerant/portefeuille/retirer', { method: 'POST' });
+  },
+
   async finances(periode: 'aujourd_hui' | 'semaine' | 'mois' | 'annee' = 'aujourd_hui') {
     return await request(`/gerant/finances?periode=${encodeURIComponent(periode)}`);
   },
