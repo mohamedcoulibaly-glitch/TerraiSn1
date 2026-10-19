@@ -207,6 +207,94 @@ router.get('/proprietaire/contrat/:terrainId', authMiddleware, requireRole('prop
   });
 });
 
+/** KPIs + historique encaissements pour la page Finances gérant. */
+router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    if (!req.user.terrain_id) return res.status(400).json({ error: 'Gérant sans terrain' });
+
+    const periodeRaw = String(req.query.periode || 'aujourd_hui');
+    const periode = ['aujourd_hui', 'semaine', 'mois', 'annee'].includes(periodeRaw)
+      ? periodeRaw
+      : 'aujourd_hui';
+    const today = new Date().toISOString().slice(0, 10);
+    const from = periode === 'aujourd_hui'
+      ? today
+      : periodStart(periode);
+    const terrainId = Number(req.user.terrain_id);
+
+    const reservations = queryAll(
+      db,
+      `SELECT r.id, r.date, r.heure_debut, r.joueur_nom, r.joueur_telephone, r.statut,
+              r.montant_avance, r.acompte, r.montant, r.prix_total, t.nom AS terrain_nom, t.id AS terrain_id
+       FROM reservations r
+       JOIN terrains t ON t.id = r.terrain_id
+       WHERE r.terrain_id = ?
+         AND r.date >= ?
+         AND r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'en_attente')
+       ORDER BY r.date DESC, r.heure_debut DESC
+       LIMIT 500`,
+      [terrainId, from],
+    );
+
+    const historique = reservations.map((r) => ({
+      id: r.id,
+      date: r.date,
+      heure_debut: r.heure_debut,
+      joueur_nom: r.joueur_nom || '—',
+      joueur_telephone: r.joueur_telephone || null,
+      montant_avance: Number(r.montant_avance ?? r.acompte ?? 0),
+      terrain_nom: r.terrain_nom,
+      statut: r.statut,
+      source: r.statut,
+    }));
+
+    const avanceConfirmee = (r) =>
+      ['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut))
+        ? Number(r.montant_avance ?? r.acompte ?? 0)
+        : 0;
+
+    const totalEncaisse = historique.reduce(
+      (s, r) => s + (['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut)) ? Number(r.montant_avance || 0) : 0),
+      0,
+    );
+    const matchsJoues = reservations.filter((r) => ['match_joue', 'joue'].includes(String(r.statut))).length;
+    const aVenir = reservations.filter(
+      (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
+    ).length;
+
+    const byDay = new Map();
+    for (const r of reservations) {
+      if (!['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut))) continue;
+      const key = String(r.date).slice(0, 10);
+      const cur = byDay.get(key) || { label: key, montant: 0, matchs: 0 };
+      cur.montant += avanceConfirmee(r);
+      cur.matchs += 1;
+      byDay.set(key, cur);
+    }
+    const graphique = [...byDay.values()].sort((a, b) => String(a.label).localeCompare(String(b.label)));
+
+    res.json({
+      periode,
+      from,
+      to: today,
+      total_encaisse: totalEncaisse,
+      avances_recues: totalEncaisse,
+      matchs_joues: matchsJoues,
+      a_venir: aVenir,
+      historique,
+      graphique,
+      mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
+      encaisse_abonnements: 0,
+      encaisse_tournois: 0,
+      encaisse_blocages: 0,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
 router.get('/gerant/portefeuille', authMiddleware, requireRole('gerant'), async (req, res) => {
   const db = await getDb();
   if (!req.user.terrain_id) return res.status(400).json({ error: 'Gérant sans terrain' });
