@@ -4433,7 +4433,7 @@ async function start() {
     await ensureSeedData(db);
   }
 
-  // Toujours upsert Arena Mohamed (avance 10 FCFA, payout retrait) — même avec SKIP_SEED=true en prod.
+  // Toujours upsert Arena Mohamed (avance 100 FCFA, payout retrait) — même avec SKIP_SEED=true en prod.
   // Les résas démo ne sont créées que si le terrain n'existait pas encore.
   try {
     const { ensureMohamedAccounts, TERRAIN_NOM, AVANCE_FCFA, PAYOUT_MODE } = require('./scripts/ensure-mohamed-accounts');

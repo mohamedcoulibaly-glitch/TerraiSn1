@@ -20,10 +20,12 @@ const GERANT_EMAIL = 'mohamed.gerant@gmail.com';
 const PROPRIO_EMAIL = 'mohamed.proprietaire@gmail.com';
 const ADMIN_EMAIL = 'mohamed.admin@gmail.com';
 const TERRAIN_NOM = 'Arena Mohamed Parcelles';
-/** Avance fixe pour smoke payin prod (PayTech) — payout manuel uniquement. */
-const AVANCE_FCFA = 10;
+/** Avance fixe pour smoke payin prod (PayTech) — payout manuel uniquement. Min PayTech = 100 XOF. */
+const AVANCE_FCFA = 100;
 const PRIX_HEURE = 8000;
-const POURCENTAGE_AVANCE = (AVANCE_FCFA * 100) / PRIX_HEURE; // 0.125 % → 10 FCFA
+const PRIX_MOITIE = Math.round(PRIX_HEURE * 0.6); // 4800
+// % calé sur le prix moitié pour que l’avance reste ≥ 100 FCFA (entier ≈ 167 FCFA).
+const POURCENTAGE_AVANCE = (AVANCE_FCFA * 100) / PRIX_MOITIE;
 const PAYOUT_MODE = 'retrait';
 
 function ymd(d) {
@@ -127,7 +129,7 @@ function upsertTerrainMohamed(db, proprioId) {
   );
   const prix = PRIX_HEURE;
   const commodites = JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking']);
-  const description = 'Terrain de test Mohamed — avance 10 FCFA, payout manuel (retrait). WhatsApp / Wave / OM : 77 826 12 25.';
+  const description = 'Terrain de test Mohamed — avance 100 FCFA, payout manuel (retrait). WhatsApp / Wave / OM : 77 826 12 25.';
   if (existing) {
     runSql(
       db,
@@ -233,7 +235,7 @@ function creerReservationEnAttente(db, { terrainId, joueurId, date, heure, prix 
 }
 
 /**
- * Crée / met à jour les comptes Mohamed + Arena (avance 10 FCFA, payout retrait).
+ * Crée / met à jour les comptes Mohamed + Arena (avance 100 FCFA, payout retrait).
  * @param {{ db?: object, silent?: boolean, seedReservations?: boolean }} [opts]
  */
 async function ensureMohamedAccounts(opts = {}) {
@@ -349,7 +351,7 @@ async function ensureMohamedAccounts(opts = {}) {
   }
 
   if (!okLoginJoueur || !okLoginGerant || !okLoginAdmin || contrat.wave_statut !== 'verifie' || !String(terrain.telephone).includes('826') || !okAvance || !okPayout) {
-    const err = new Error('ensure-mohamed-accounts : validation login / contrat / avance 10 FCFA / payout retrait échouée');
+    const err = new Error('ensure-mohamed-accounts : validation login / contrat / avance 100 FCFA / payout retrait échouée');
     if (!silent) process.exitCode = 1;
     throw err;
   }
