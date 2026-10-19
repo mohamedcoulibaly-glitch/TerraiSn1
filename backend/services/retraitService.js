@@ -94,11 +94,13 @@ async function demanderRetrait(db, { terrainId, gerantId, now = Date.now() }) {
   if (!contrat) {
     const err = new Error('Contrat introuvable');
     err.statusCode = 404;
+    err.code = 'CONTRAT_INTROUVABLE';
     throw err;
   }
   if (contrat.payout_mode !== 'retrait') {
     const err = new Error('Le bouton Retirer n’est disponible qu’en mode retrait');
     err.statusCode = 400;
+    err.code = 'MODE_RETRAIT_REQUIS';
     throw err;
   }
   const employe = queryOne(
@@ -109,12 +111,14 @@ async function demanderRetrait(db, { terrainId, gerantId, now = Date.now() }) {
   if (!employe || Number(employe.is_active) !== 1 || Number(employe.terrain_id) !== Number(terrainId)) {
     const err = new Error('Ce portefeuille n’appartient pas à ce gérant');
     err.statusCode = 403;
+    err.code = 'PORTEFEUILLE_INTERDIT';
     throw err;
   }
 
   if (!auMoinsUnCanalVerifie(contrat)) {
     const err = new Error('Aucun canal Wave/OM vérifié : le dû s’accumule mais le retrait ne peut pas aboutir');
     err.statusCode = 409;
+    err.code = 'CANAL_NON_VERIFIE';
     throw err;
   }
   const pending = queryOne(
@@ -125,6 +129,7 @@ async function demanderRetrait(db, { terrainId, gerantId, now = Date.now() }) {
   if (pending) {
     const err = new Error('Une demande de retrait est déjà en cours');
     err.statusCode = 409;
+    err.code = 'DEMANDE_EN_COURS';
     throw err;
   }
 
@@ -137,6 +142,7 @@ async function demanderRetrait(db, { terrainId, gerantId, now = Date.now() }) {
   if (montantBrut <= 0 || !dus.length) {
     const err = new Error('Aucun dû disponible au retrait');
     err.statusCode = 400;
+    err.code = 'AUCUN_DU';
     throw err;
   }
 

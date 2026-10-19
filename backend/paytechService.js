@@ -171,6 +171,17 @@ async function creerPaiement({
     provider: result.provider || targetProvider(),
   });
 
+  try {
+    require('./services/paymentEvents').push('checkout_ok', {
+      reservationId,
+      reference: result.reference || refCommand,
+      canal,
+      provider: result.provider || targetProvider(),
+    });
+  } catch {
+    /* ignore */
+  }
+
   return result;
 }
 

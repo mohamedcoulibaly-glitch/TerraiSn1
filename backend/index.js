@@ -502,9 +502,19 @@ app.get(['/health', '/api/health'], (_req, res) => {
     metrics: {
       'event.rappel_match': metrics['event.rappel_match'] || 0,
       'event.checkin_whatsapp': metrics['event.checkin_whatsapp'] || 0,
+      'event.payin_confirm': metrics['event.payin_confirm'] || 0,
+      'event.payin_ignore': metrics['event.payin_ignore'] || 0,
+      'event.checkout_failed': metrics['event.checkout_failed'] || 0,
       'log.error': metrics['log.error'] || 0,
       'log.warn': metrics['log.warn'] || 0,
     },
+    payment_events: (() => {
+      try {
+        return require('./services/paymentEvents').recent(10);
+      } catch {
+        return [];
+      }
+    })(),
     sqlite_engine: 'sql.js',
     warnings: [
       ...(estSimulation() && process.env.NODE_ENV === 'production'
@@ -2071,6 +2081,13 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
           libererCreneauxReservation(db, reservation, ['en_attente_paiement']);
           db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservation.id]);
         });
+        if (!error.code) error.code = 'PAYTECH_CHECKOUT_FAILED';
+        if (!error.statusCode) error.statusCode = 502;
+        logger.event('checkout_failed', {
+          reservationId: reservation.id,
+          code: error.code,
+          message: error.message,
+        });
         throw error;
       }
       if (creePar === 'joueur') {
@@ -2189,7 +2206,10 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     });
   } catch (err) {
     console.error(err);
-    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+    res.status(err.statusCode || 500).json({
+      error: err.message || 'Erreur serveur',
+      code: err.code || null,
+    });
   }
 }
 
@@ -2493,31 +2513,66 @@ app.get('/api/reservations/:id(\\d+)', optionalAuth, async (req, res) => {
 });
 
 /** Statut paiement / réservation — polling page succès PayTech */
+async function repondrePaiementStatut(req, res, reservationId) {
+  const db = await getDb();
+  const reservation = queryOne(
+    db,
+    `SELECT id, joueur_id, statut, code_reservation, reference_paytech, montant_avance,
+            montant_restant, prix_total, verrou_expire_at, expire_at
+     FROM reservations WHERE id = ?`,
+    [Number(reservationId)],
+  );
+  if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
+  if (
+    req.user
+    && reservation.joueur_id
+    && Number(reservation.joueur_id) !== Number(req.user.id)
+    && req.user.role === 'joueur'
+  ) {
+    return res.status(403).json({ error: 'Accès interdit' });
+  }
+  const paiement = queryOne(
+    db,
+    `SELECT id, statut, reference_paytech FROM paiements
+      WHERE reservation_id = ?
+      ORDER BY id DESC LIMIT 1`,
+    [reservation.id],
+  );
+  const statutResa = String(reservation.statut || '');
+  let paiementStatut = 'pending';
+  if (['confirme', 'match_joue', 'joue', 'acceptee'].includes(statutResa) || paiement?.statut === 'paye') {
+    paiementStatut = 'paid';
+  } else if (statutResa === 'annule' || paiement?.statut === 'annule' || paiement?.statut === 'rembourse') {
+    paiementStatut = 'failed';
+  } else if (statutResa === 'expire') {
+    paiementStatut = 'expired';
+  } else {
+    const lockMs = Number(reservation.verrou_expire_at || reservation.expire_at || 0);
+    if (lockMs > 0 && lockMs < Date.now()) paiementStatut = 'expired';
+  }
+  const masked = maskCodeReservationForJoueur(reservation);
+  return res.json({
+    id: masked.id,
+    statut: masked.statut,
+    paiement_statut: paiementStatut,
+    confirme: paiementStatut === 'paid',
+    code_reservation: masked.code_reservation,
+    reference_paytech: reservation.reference_paytech || paiement?.reference_paytech || null,
+  });
+}
+
 app.get('/api/paiement/statut/:reservationId', optionalAuth, async (req, res) => {
   try {
-    const db = await getDb();
-    const reservation = queryOne(
-      db,
-      `SELECT id, joueur_id, statut, code_reservation, reference_paytech, montant_avance, montant_restant, prix_total
-       FROM reservations WHERE id = ?`,
-      [Number(req.params.reservationId)],
-    );
-    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
-    if (
-      req.user
-      && reservation.joueur_id
-      && Number(reservation.joueur_id) !== Number(req.user.id)
-      && req.user.role === 'joueur'
-    ) {
-      return res.status(403).json({ error: 'Accès interdit' });
-    }
-    const masked = maskCodeReservationForJoueur(reservation);
-    res.json({
-      id: masked.id,
-      statut: masked.statut,
-      confirme: ['confirme', 'match_joue', 'joue', 'acceptee'].includes(String(masked.statut)),
-      code_reservation: masked.code_reservation,
-    });
+    await repondrePaiementStatut(req, res, req.params.reservationId);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.get('/api/reservations/:id(\\d+)/paiement-statut', optionalAuth, async (req, res) => {
+  try {
+    await repondrePaiementStatut(req, res, req.params.id);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur serveur' });

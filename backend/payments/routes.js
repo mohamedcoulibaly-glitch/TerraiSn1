@@ -155,8 +155,25 @@ function mountPaymentRoutes(app) {
   app.post('/webhook/paytech', async (req, res) => {
     try {
       const result = await handlePaytechIpn(req.body || {}, req.headers);
+      try {
+        require('../services/paymentEvents').push('ipn_paytech', {
+          ok: true,
+          action: result?.action || result?.status || null,
+        });
+      } catch {
+        /* ignore */
+      }
       return res.status(200).json(result);
     } catch (error) {
+      try {
+        require('../services/paymentEvents').push('ipn_invalid', {
+          message: error.message,
+          statusCode: error.statusCode || 500,
+        });
+      } catch {
+        /* ignore */
+      }
+      logger.event('ipn_invalid', { message: error.message });
       if (error.statusCode === 400) {
         return res.status(400).json({ error: error.message });
       }

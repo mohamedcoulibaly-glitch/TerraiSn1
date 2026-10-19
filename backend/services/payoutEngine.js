@@ -126,6 +126,106 @@ function raisonsBlocagePayout(db, du, contrat) {
   return null;
 }
 
+/**
+ * Diagnostic portefeuille terrain (UI gérant / admin) — première raison bloquante.
+ */
+function diagnostiquerBlocageTerrain(db, terrainId) {
+  const contrat = chargerContrat(db, Number(terrainId));
+  if (!contrat) {
+    return {
+      raison_blocage: 'du_introuvable',
+      message_lisible: messageBlocage('du_introuvable'),
+      code: 'CONTRAT_INTROUVABLE',
+    };
+  }
+  if (!auMoinsUnCanalVerifie(contrat)) {
+    return {
+      raison_blocage: 'aucun_canal_verifie',
+      message_lisible: messageBlocage('aucun_canal_verifie'),
+      code: 'CANAL_NON_VERIFIE',
+    };
+  }
+  if (contrat.payout_mode === 'auto' && Number(contrat.paiement_production) !== 1 && !payoutPaydunyaTestActif()) {
+    return {
+      raison_blocage: 'pas_en_production',
+      message_lisible: messageBlocage('pas_en_production'),
+      code: 'PAS_EN_PRODUCTION',
+    };
+  }
+  if (contrat.payout_mode === 'auto' && !payoutAutoAutorise()) {
+    return {
+      raison_blocage: 'payout_non_autorise',
+      message_lisible: messageBlocage('payout_non_autorise'),
+      code: 'PAYOUT_NON_AUTORISE',
+    };
+  }
+
+  const enFenetre = queryOne(
+    db,
+    `SELECT COUNT(*) AS n, COALESCE(SUM(du_gerant), 0) AS total
+     FROM dus WHERE terrain_id = ? AND statut = 'en_fenetre'`,
+    [Number(terrainId)],
+  );
+  const payable = queryOne(
+    db,
+    `SELECT COUNT(*) AS n, COALESCE(SUM(du_gerant), 0) AS total
+     FROM dus WHERE terrain_id = ? AND statut IN ('payable', 'echec')`,
+    [Number(terrainId)],
+  );
+  const demande = queryOne(
+    db,
+    `SELECT id FROM demandes_retrait
+      WHERE terrain_id = ? AND statut IN ('en_attente', 'en_cours') LIMIT 1`,
+    [Number(terrainId)],
+  );
+
+  if (demande) {
+    return {
+      raison_blocage: 'demande_en_cours',
+      message_lisible: 'Une demande de retrait est déjà en cours',
+      code: 'DEMANDE_EN_COURS',
+    };
+  }
+  if (Number(enFenetre?.n || 0) > 0 && Number(payable?.total || 0) <= 0) {
+    return {
+      raison_blocage: 'en_fenetre',
+      message_lisible: messageBlocage('en_fenetre'),
+      code: 'EN_FENETRE',
+    };
+  }
+  if (Number(payable?.total || 0) <= 0 && Number(enFenetre?.n || 0) <= 0) {
+    return {
+      raison_blocage: 'montant_0',
+      message_lisible: messageBlocage('montant_0'),
+      code: 'AUCUN_DU',
+    };
+  }
+
+  // Premier dû payable (mode auto) : raisons unitaires (caisse, tentatives…)
+  if (contrat.payout_mode === 'auto') {
+    const du = queryOne(
+      db,
+      `SELECT * FROM dus
+        WHERE terrain_id = ? AND statut IN ('payable', 'echec')
+        ORDER BY updated_at ASC LIMIT 1`,
+      [Number(terrainId)],
+    );
+    if (du) {
+      const code = raisonsBlocagePayout(db, du, contrat);
+      if (code) {
+        return {
+          raison_blocage: code,
+          message_lisible: messageBlocage(code),
+          code: String(code).toUpperCase(),
+          du_id: du.id,
+        };
+      }
+    }
+  }
+
+  return { raison_blocage: null, message_lisible: null, code: null };
+}
+
 function finaliserPayoutSucces(db, payout, { now = Date.now(), ref = null } = {}) {
   const iso = new Date(now).toISOString();
   const fresh = queryOne(db, 'SELECT * FROM payouts WHERE id = ?', [payout.id]) || payout;
@@ -620,6 +720,11 @@ async function traiterFenetresExpirees(db, now = Date.now()) {
       });
     }
     const auto = await tenterAutoSiPayable(db, { du: payable, contrat, now });
+    if (auto?.attempted && !auto.ok && auto.raison) {
+      // Soft-block (prod, canal, caisse…) : ne pas passer le dû en « echec »
+      // pour laisser une relance ultérieure. L’échec prestataire est déjà persisté.
+      logger.warn('payoutEngine.js', `Auto payout bloqué resa=${du.reservation_id} — ${auto.raison}`);
+    }
     if (auto?.ok && !auto.pending) {
       await notificationService.envoyerPayoutAutoOk({
         contrat,
@@ -627,7 +732,13 @@ async function traiterFenetresExpirees(db, now = Date.now()) {
         dest: auto.dest,
       }).catch((error) => logger.error('payoutEngine.js', 'Notif payout auto OK', error));
     }
-    results.push({ reservation_id: du.reservation_id, du: auto.du || payable, auto });
+    results.push({
+      reservation_id: du.reservation_id,
+      du: auto.du || payable,
+      auto,
+      raison_blocage: auto?.ok ? null : (auto?.raison || null),
+      message_lisible: auto?.ok ? null : (auto?.message_lisible || messageBlocage(auto?.raison)),
+    });
   }
   return results;
 }
@@ -702,6 +813,7 @@ module.exports = {
   payoutPaydunyaTestActif,
   caisseDisponible,
   raisonsBlocagePayout,
+  diagnostiquerBlocageTerrain,
   messageBlocage,
   humaniserErreurPayout,
   appliquerApresPayin,

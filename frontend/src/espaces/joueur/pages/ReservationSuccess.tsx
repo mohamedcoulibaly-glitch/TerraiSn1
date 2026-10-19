@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Check, Loader2 } from "lucide-react";
 import { reservationsApi } from "@/lib/api";
 
 const STATUTS_CONFIRMES = new Set(["confirme", "match_joue", "joue", "acceptee"]);
 const STATUTS_ATTENTE = new Set(["en_attente", "en_attente_paiement"]);
+/** Polling IPN borné (~2,5 min à 3 s d’intervalle) */
+const POLL_MS = 3000;
+const POLL_MAX = 50;
 
 const ReservationSuccess = () => {
   const [params] = useSearchParams();
@@ -13,6 +16,8 @@ const ReservationSuccess = () => {
   const [error, setError] = useState("");
   const [showAnim, setShowAnim] = useState(true);
   const [polling, setPolling] = useState(false);
+  const [pollTimedOut, setPollTimedOut] = useState(false);
+  const pollsRef = useRef(0);
 
   const reservationId =
     params.get("id") || localStorage.getItem("terrainsn_last_reservation_id") || "";
@@ -41,23 +46,32 @@ const ReservationSuccess = () => {
     return () => clearTimeout(t);
   }, []);
 
-  // Polling tant que le webhook PayTech n'a pas confirmé
+  // Polling borné tant que le webhook PayTech n'a pas confirmé
   useEffect(() => {
     if (!reservationId || !reservation) return;
     const statut = String(reservation.statut || "");
     if (!STATUTS_ATTENTE.has(statut)) {
       setPolling(false);
+      setPollTimedOut(false);
       return;
     }
     setPolling(true);
+    pollsRef.current = 0;
     const id = window.setInterval(() => {
+      pollsRef.current += 1;
+      if (pollsRef.current > POLL_MAX) {
+        window.clearInterval(id);
+        setPolling(false);
+        setPollTimedOut(true);
+        return;
+      }
       reservationsApi
         .get(reservationId)
         .then((data) => setReservation(data))
         .catch(() => {
           /* ignore — on continue le polling */
         });
-    }, 3000);
+    }, POLL_MS);
     return () => window.clearInterval(id);
   }, [reservationId, reservation?.statut]);
 
@@ -111,11 +125,13 @@ const ReservationSuccess = () => {
             className="text-[20px] font-bold text-[var(--color-primary)]"
             style={{ fontFamily: "var(--font-display)" }}
           >
-            {enAttente
-              ? "Paiement en cours de confirmation..."
-              : confirme
-                ? "Confirmé !"
-                : "Réservation enregistrée"}
+            {pollTimedOut && enAttente
+              ? "Confirmation en attente"
+              : enAttente
+                ? "Paiement en cours de confirmation..."
+                : confirme
+                  ? "Confirmé !"
+                  : "Réservation enregistrée"}
           </h1>
           {sansAvance && confirme ? (
             <p className="mt-2 text-[13px] text-[var(--color-text-secondary)]">
@@ -132,12 +148,36 @@ const ReservationSuccess = () => {
             </p>
           </div>
 
-          {enAttente || polling ? (
+          {enAttente && polling ? (
             <div className="flex flex-col items-center gap-3 py-4">
               <Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary)]" />
               <p className="text-[13px] text-[var(--color-text-secondary)]">
                 On attend la confirmation du paiement…
               </p>
+            </div>
+          ) : null}
+
+          {enAttente && pollTimedOut ? (
+            <div className="rounded-[var(--radius-md)] bg-[var(--color-warning-bg,rgba(180,120,0,0.12))] py-4 px-3 space-y-2">
+              <p className="text-[14px] font-medium text-[var(--color-text)]">
+                La confirmation tarde un peu
+              </p>
+              <p className="text-[12px] text-[var(--color-text-muted)]">
+                Si tu as bien payé (Wave / Orange Money), ta réservation sera confirmée dès réception
+                du paiement. Tu peux aussi ouvrir Mes réservations ou contacter le support TerrainSN.
+              </p>
+              <button
+                type="button"
+                className="text-[13px] font-medium text-[var(--color-primary)] underline"
+                onClick={() => {
+                  setPollTimedOut(false);
+                  setPolling(true);
+                  pollsRef.current = 0;
+                  reservationsApi.get(reservationId).then(setReservation).catch(() => undefined);
+                }}
+              >
+                Réessayer
+              </button>
             </div>
           ) : null}
 

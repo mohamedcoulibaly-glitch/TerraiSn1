@@ -228,6 +228,17 @@ async function createCheckout({
     const detail = payload.message || payload.error || JSON.stringify(payload).slice(0, 200);
     const error = new Error(detail || 'Impossible de créer le paiement en ligne');
     error.statusCode = 502;
+    error.code = 'PAYTECH_CHECKOUT_FAILED';
+    try {
+      require('../../paymentEvents').push('checkout_failed', {
+        reservationId,
+        kind,
+        detail: String(detail || '').slice(0, 200),
+        httpStatus: response.status,
+      });
+    } catch {
+      /* ignore */
+    }
     throw error;
   }
 

@@ -18,7 +18,11 @@ type Portefeuille = {
   solde_disponible?: number;
   solde_net_apres_dette?: number;
   solde_demande_retrait?: number;
+  solde_en_fenetre?: number;
   bouton_retirer?: boolean;
+  raison_blocage?: string | null;
+  message_lisible?: string | null;
+  code_blocage?: string | null;
 };
 
 function fcfa(amount?: number) {
@@ -153,6 +157,18 @@ export default function FinancesPage() {
         enabled={featureEnabled(features, "dette_commission", true)}
       />
 
+      {portefeuille?.payout_mode === "auto" && (portefeuille.message_lisible || Number(portefeuille.solde_en_fenetre) > 0) ? (
+        <section className="rounded-2xl p-4 space-y-1" style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>Reversement automatique</h2>
+          <p className="text-[12px]" style={{ color: "var(--g-muted)" }}>
+            {portefeuille.message_lisible
+              || (Number(portefeuille.solde_en_fenetre) > 0
+                ? `Encore en fenêtre de remboursement (${fcfa(portefeuille.solde_en_fenetre)}).`
+                : "Les dûs sont versés automatiquement après la fenêtre de remboursement.")}
+          </p>
+        </section>
+      ) : null}
+
       {portefeuille?.payout_mode === "retrait" ? (
         <section className="rounded-2xl p-4 space-y-2" style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}>
           <div className="flex items-center justify-between gap-3">
@@ -177,7 +193,8 @@ export default function FinancesPage() {
               ? "Une demande est déjà en cours de traitement."
               : portefeuille.bouton_retirer
                 ? "Le montant est envoyé à l’équipe pour validation et versement."
-                : "Le retrait devient disponible après validation du canal Wave ou Orange Money et des revenus."}
+                : (portefeuille.message_lisible
+                  || "Le retrait devient disponible après validation du canal Wave ou Orange Money et des revenus.")}
           </p>
         </section>
       ) : null}

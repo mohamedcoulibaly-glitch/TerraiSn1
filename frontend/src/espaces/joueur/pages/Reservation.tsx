@@ -166,7 +166,15 @@ const Payment = () => {
         return;
       }
       hapticError();
-      toast.error(error.message || "Erreur lors du paiement");
+      const codeHint =
+        error.code === "PAYTECH_CHECKOUT_FAILED"
+          ? " (paiement en ligne indisponible — réessaie)"
+          : error.code === "CANAL_PAIEMENT_REQUIS"
+            ? " — choisis Wave ou Orange Money"
+            : error.code
+              ? ` [${error.code}]`
+              : "";
+      toast.error(`${error.message || "Erreur lors du paiement"}${codeHint}`);
     } finally {
       if (!redirectingRef.current) setProcessing(null);
     }

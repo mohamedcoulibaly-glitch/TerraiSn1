@@ -357,7 +357,7 @@ export default function ContratPaiementTab({ terrain, contrat, gerant, onChange,
   async function activerProduction() {
     await persist({ production_paiement: true }, "Production paiement", "inactive", "active");
     setConfirmProd(false);
-    toast.success("Production paiement activée (flag local — moteur à brancher)");
+    toast.success("Production paiement activée — les payouts auto partiront après la fenêtre de remboursement");
   }
 
   const twoNumbers = Boolean(digitsSn(wave) && digitsSn(om));

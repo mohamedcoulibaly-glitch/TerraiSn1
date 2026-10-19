@@ -1,7 +1,11 @@
 const { queryOne, queryAll } = require('../database');
 const { chargerContrat, auMoinsUnCanalVerifie } = require('./contratService');
 const { ventilationDu } = require('./ledgerService');
-const { caisseDisponible } = require('./payoutEngine');
+const {
+  caisseDisponible,
+  raisonsBlocagePayout,
+  messageBlocage,
+} = require('./payoutEngine');
 
 function n(value) {
   return Number(value || 0);
@@ -107,8 +111,20 @@ function fileFenetre(db) {
   );
 }
 
+function enrichirDuAvecBlocage(db, row) {
+  const contrat = chargerContrat(db, row.terrain_id);
+  const raison = raisonsBlocagePayout(db, row, contrat || {});
+  return {
+    ...row,
+    raison_blocage: raison,
+    message_lisible: raison ? messageBlocage(raison) : null,
+    canal_verifie: auMoinsUnCanalVerifie(contrat || {}),
+    paiement_production: Number(contrat?.paiement_production) === 1 ? 1 : 0,
+  };
+}
+
 function filePayableAuto(db) {
-  return queryAll(
+  const rows = queryAll(
     db,
     `SELECT d.*, t.nom AS terrain_nom, r.code_reservation, t.wave_numero, t.om_numero, t.wave_statut, t.om_statut
      FROM dus d
@@ -117,10 +133,11 @@ function filePayableAuto(db) {
      WHERE d.payout_mode = 'auto' AND d.statut IN ('payable', 'echec')
      ORDER BY d.updated_at ASC`,
   );
+  return rows.map((row) => enrichirDuAvecBlocage(db, row));
 }
 
 function filePayable(db) {
-  return queryAll(
+  const rows = queryAll(
     db,
     `SELECT d.*, t.nom AS terrain_nom, r.code_reservation, t.wave_numero, t.om_numero,
             t.wave_statut, t.om_statut, t.payout_mode AS contrat_payout_mode,
@@ -132,6 +149,7 @@ function filePayable(db) {
      WHERE d.statut IN ('payable', 'echec', 'demande_retrait')
      ORDER BY d.updated_at ASC`,
   );
+  return rows.map((row) => enrichirDuAvecBlocage(db, row));
 }
 
 function rapprochement(db) {

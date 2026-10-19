@@ -22,6 +22,9 @@ const files = [
   'test/unit/us23-config-events.js',
   'test/unit/us25-ratelimit.js',
   'test/unit/us28-fixtures.js',
+  'test/unit/us29-payout-blocages.js',
+  'test/unit/us30-payin-checkout.js',
+  'test/unit/us31-portefeuille-api.js',
   'test/parcours/p01-verrou.js',
   'test/parcours/p02-ipn-confirm.js',
   'test/parcours/p03-double-ipn.js',
@@ -40,6 +43,12 @@ const files = [
   'test/parcours/p16-ratelimit.js',
   'test/parcours/p17-e2e-mode.js',
   'test/parcours/p18-annulation.js',
+  'test/parcours/p19-payin-ipn-ledger.js',
+  'test/parcours/p20-fenetre-puis-auto.js',
+  'test/parcours/p21-auto-bloque-prod.js',
+  'test/parcours/p22-retrait-manuel.js',
+  'test/parcours/p23-retrait-canal-refuse.js',
+  'test/parcours/p24-double-ipn-payout.js',
 ];
 
 const legacy = [

@@ -22,7 +22,8 @@ Puis **Environment** → variables de base :
 | `NODE_ENV` | `production` |
 | `JWT_SECRET` | une longue chaîne aléatoire |
 | `JWT_REFRESH_SECRET` | une autre chaîne aléatoire |
-| `SKIP_SEED` | `false` |
+| `SKIP_SEED` | `true` (**obligatoire** en prod — évite de réécrire / polluer la DB) |
+| `FORCE_SEED` | `false` (ne jamais mettre `true` en prod) |
 | `COOKIE_SAMESITE` | `lax` |
 | `APP_DOMAIN` | `https://terraisn1-1.onrender.com` (domaine prod canonique) |
 | `APP_DOMAIN_JOUEUR` | `https://terraisn1-1.onrender.com` |
@@ -60,6 +61,21 @@ Puis **Environment** → variables de base :
 | `WHATSAPP_DEV_NUMBER` | numéro SN équipe (alertes retraits manuels) |
 
 Laisser `PAYTECH_PAYOUT_ENABLED=false` tant que les payouts ne sont pas autorisés (file manuelle + WhatsApp dév).
+
+### Checklist contrat terrain (sinon payin OK / payout bloqué)
+
+1. Super Admin → terrain → onglet paiement : Wave **ou** OM **vérifié**
+2. Activer **Production paiement** (`paiement_production=1`) pour le mode **auto**
+3. Mode **retrait** : le gérant clique **Retirer** dans Finances (`/pro`), puis admin traite dans **Caisse**
+4. Mode **auto** : attendre la fin de fenêtre de remboursement ; vérifier `raison_blocage` sur le portefeuille gérant / file payable
+
+### Runbook smoke prod
+
+1. `GET https://terraisn1-1.onrender.com/api/health` → `payment.readyForProd: true`, `payouts.paytechEnabled` cohérent
+2. Joueur : réserver + payer Wave/OM → page succès passe à **Confirmé** (IPN)
+3. Ledger : un `dus` créé (`en_fenetre` ou `payable`)
+4. Auto : après fenêtre → payout `envoye` **ou** message `pas_en_production` / canal
+5. Retrait : gérant **Retirer** → Caisse **Envoyer**
 
 ## WhatsApp en production
 

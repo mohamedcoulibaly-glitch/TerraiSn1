@@ -13,10 +13,14 @@ const whatsappClient = require('../whatsappClient');
 const { normalizeTelephoneStore } = require('../notificationService');
 const { chargerContrat, contratLectureGerant, contratLectureProprio } = require('../services/contratService');
 const { portefeuilleTerrain } = require('../services/ledgerService');
+const {
+  diagnostiquerBlocageTerrain,
+  messageBlocage,
+  historiquePayouts,
+} = require('../services/payoutEngine');
 const { demanderRetrait } = require('../services/retraitService');
 const { normaliserNumeroSn } = require('../services/calculsPaiement');
 const detteService = require('../services/detteCommissionService');
-const { historiquePayouts } = require('../services/payoutEngine');
 
 const router = express.Router();
 
@@ -216,12 +220,23 @@ router.get('/gerant/portefeuille', authMiddleware, requireRole('gerant'), async 
   const soldeBrut = Number(wallet.solde_disponible || 0);
   const detteOuverte = Number(dette.total || 0);
   const soldeNetRetrait = Math.max(0, soldeBrut - detteOuverte);
+  const boutonRetirer = Boolean(wallet.bouton_retirer) && (soldeBrut > 0 || detteOuverte > 0);
+  const diagnostic = diagnostiquerBlocageTerrain(db, req.user.terrain_id);
+  // Mode auto : toujours exposer le diagnostic. Mode retrait : seulement si bouton inactif.
+  const blocage = wallet.payout_mode === 'auto'
+    ? diagnostic
+    : (boutonRetirer
+      ? { raison_blocage: null, message_lisible: null, code: null }
+      : diagnostic);
   res.json({
     ...wallet,
     dette_commission_ouverte: detteOuverte,
     dette_nb: dette.nb,
     solde_net_apres_dette: soldeNetRetrait,
-    bouton_retirer: Boolean(wallet.bouton_retirer) && (soldeBrut > 0 || detteOuverte > 0),
+    bouton_retirer: boutonRetirer,
+    raison_blocage: blocage.raison_blocage,
+    message_lisible: blocage.message_lisible || (blocage.raison_blocage ? messageBlocage(blocage.raison_blocage) : null),
+    code_blocage: blocage.code || null,
     historique_payouts: payouts,
   });
 });
@@ -278,7 +293,11 @@ router.post('/gerant/portefeuille/retirer', authMiddleware, requireRole('gerant'
     });
     res.status(201).json(result);
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message || 'Erreur serveur' });
+    res.status(error.statusCode || 500).json({
+      error: error.message || 'Erreur serveur',
+      code: error.code || null,
+      message_lisible: error.message || 'Erreur serveur',
+    });
   }
 });
 

@@ -212,11 +212,25 @@ function portsParDefaut(db) {
 async function confirmerPaiementEtNotifier(reservationId, refCommand, options = {}) {
   const db = await getDb();
   const reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-  if (!reservation) return { action: 'missing' };
+  if (!reservation) {
+    logger.event('payin_ignore', { reservationId, reason: 'missing' });
+    return { action: 'missing' };
+  }
 
   const ports = options.ports || portsParDefaut(db);
   const { action, ledgerInfo } = await traiterConfirmationPaytech(db, reservationId, refCommand, options);
+  try {
+    const paymentEvents = require('../services/paymentEvents');
+    paymentEvents.push(action === 'confirm' ? 'payin_confirm' : `payin_${action}`, {
+      reservationId,
+      refCommand,
+      action,
+    });
+  } catch {
+    /* ignore */
+  }
   if (action === 'confirm') {
+    logger.event('payin_confirm', { reservationId, refCommand });
     const fraiche = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
     await ports.confirmationJoueur(reservationId).catch(async (error) => {
       logger.error('payments/flow.js', 'Notification confirmation', error);
@@ -283,6 +297,10 @@ async function confirmerPaiementEtNotifier(reservationId, refCommand, options = 
         });
       }
     }
+  } else if (action === 'already_confirmed') {
+    logger.event('payin_ignore', { reservationId, reason: 'already_confirmed' });
+  } else if (action === 'ignore') {
+    logger.event('payin_ignore', { reservationId, reason: 'ignore' });
   } else if (action === 'refund') {
     await paytechService.rembourser(refCommand);
     transaction(db, () => {
