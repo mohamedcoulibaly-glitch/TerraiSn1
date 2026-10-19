@@ -1177,6 +1177,18 @@ function serializeCommodites(raw) {
   return '[]';
 }
 
+/** Catalogue public des commodités (picker joueur / gérant). */
+app.get('/api/commodites', async (_req, res) => {
+  try {
+    const db = await getDb();
+    const rows = commoditesService.listCommodites(db, { actif: 1 });
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // Liste publique
 app.get('/api/terrains', async (req, res) => {
   try {

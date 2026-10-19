@@ -180,7 +180,7 @@ function mountGerantCrmRoutes(app) {
     }
   });
 
-  app.get('/api/joueurs/historique/:numero', authMiddleware, requireRole('gerant'), async (req, res) => {
+  async function historiqueParNumero(req, res) {
     try {
       const db = await getDb();
       const terrainId = req.user.terrain_id;
@@ -213,7 +213,11 @@ function mountGerantCrmRoutes(app) {
       console.error(err);
       res.status(500).json({ error: 'Erreur serveur', reservations: [] });
     }
-  });
+  }
+
+  app.get('/api/joueurs/historique/:numero', authMiddleware, requireRole('gerant'), historiqueParNumero);
+  // Alias front joueur / anciens clients
+  app.get('/api/gerant/joueurs/historique/:numero', authMiddleware, requireRole('gerant'), historiqueParNumero);
 
   app.get('/api/gerant/joueurs', authMiddleware, requireRole('gerant'), async (req, res) => {
     try {

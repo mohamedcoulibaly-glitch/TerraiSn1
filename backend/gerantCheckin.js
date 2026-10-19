@@ -396,6 +396,61 @@ function mountGerantCheckinRoutes(app) {
     }
   });
 
+  /** Liste filtrable (page Joueurs / Réservations gérant). */
+  app.get('/api/gerant/reservations', authMiddleware, requireRole('gerant'), async (req, res) => {
+    try {
+      const db = await getDb();
+      const terrainId = req.user.terrain_id;
+      if (!terrainId) return res.status(400).json({ error: 'Aucun terrain associé à ce gérant', reservations: [] });
+
+      const statutFilter = String(req.query.statut || 'all').trim().toLowerCase();
+      const q = String(req.query.q || '').trim().toLowerCase();
+      const params = [terrainId];
+      let where = 'r.terrain_id = ?';
+
+      if (statutFilter === 'confirme') {
+        where += " AND r.statut IN ('confirme', 'acceptee')";
+      } else if (statutFilter === 'en_attente') {
+        where += " AND r.statut IN ('en_attente', 'en_attente_paiement')";
+      } else if (statutFilter === 'joue') {
+        where += " AND r.statut IN ('match_joue', 'joue')";
+      } else if (statutFilter === 'annulee') {
+        where += " AND r.statut IN ('annulee', 'refusee', 'expiree')";
+      }
+
+      if (q) {
+        where += ' AND (LOWER(COALESCE(r.joueur_nom, \'\')) LIKE ? OR COALESCE(r.joueur_telephone, \'\') LIKE ? OR LOWER(COALESCE(r.code_reservation, \'\')) LIKE ?)';
+        const like = `%${q}%`;
+        params.push(like, like, like);
+      }
+
+      const rows = queryAll(
+        db,
+        `SELECT r.*, t.nom AS terrain_nom,
+                COALESCE(r.joueur_nom, u.nom) AS joueur_nom,
+                COALESCE(r.joueur_telephone, u.telephone) AS joueur_telephone,
+                COALESCE(u.is_banned, 0) AS is_banned,
+                COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
+         FROM reservations r
+         JOIN terrains t ON t.id = r.terrain_id
+         LEFT JOIN users u ON u.id = r.joueur_id
+         LEFT JOIN creneaux c ON c.id = r.creneau_id
+         WHERE ${where}
+         ORDER BY r.date DESC, r.heure_debut DESC
+         LIMIT 300`,
+        params,
+      );
+
+      res.json({
+        terrain_id: terrainId,
+        reservations: rows.map(mapReservationGerantRow),
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Erreur serveur', reservations: [] });
+    }
+  });
+
   app.get('/api/gerant/reservations/today', authMiddleware, requireRole('gerant'), async (req, res) => {
     try {
       const db = await getDb();
