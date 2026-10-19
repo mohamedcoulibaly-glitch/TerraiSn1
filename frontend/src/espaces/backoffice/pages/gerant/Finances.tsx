@@ -48,17 +48,25 @@ export default function FinancesPage() {
       setData(null);
     }
     setError("");
-    try {
-      const [finances, wallet] = await Promise.all([gerantApi.finances(periode), gerantApi.portefeuille()]);
-      setData(finances as FinancesData);
-      setPortefeuille(wallet as Portefeuille);
-    } catch (err) {
-      setData(null);
+    // Portefeuille et KPIs sont indépendants : un 404 finances ne doit pas masquer Retirer.
+    const [financesResult, walletResult] = await Promise.allSettled([
+      gerantApi.finances(periode),
+      gerantApi.portefeuille(),
+    ]);
+    if (walletResult.status === "fulfilled") {
+      setPortefeuille(walletResult.value as Portefeuille);
+    } else {
       setPortefeuille(null);
-      setError(err instanceof Error ? err.message : "Impossible de charger les finances");
-    } finally {
-      setLoading(false);
     }
+    if (financesResult.status === "fulfilled") {
+      setData(financesResult.value as FinancesData);
+      setError("");
+    } else {
+      setData(null);
+      const err = financesResult.reason;
+      setError(err instanceof Error ? err.message : "Impossible de charger les finances");
+    }
+    setLoading(false);
   }, [periode]);
 
   useEffect(() => {
