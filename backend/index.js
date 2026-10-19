@@ -4001,6 +4001,25 @@ async function start() {
   } else if (!skipSeed) {
     await ensureSeedData(db);
   }
+
+  // Toujours upsert Arena Mohamed (avance 10 FCFA, payout retrait) — même avec SKIP_SEED=true en prod.
+  // Les résas démo ne sont créées que si le terrain n'existait pas encore.
+  try {
+    const { ensureMohamedAccounts, TERRAIN_NOM, AVANCE_FCFA, PAYOUT_MODE } = require('./scripts/ensure-mohamed-accounts');
+    const arenaExistante = queryOne(db, 'SELECT id FROM terrains WHERE nom = ? LIMIT 1', [TERRAIN_NOM]);
+    const result = await ensureMohamedAccounts({
+      db,
+      silent: true,
+      seedReservations: !arenaExistante,
+    });
+    logger.info(
+      'index.js',
+      `Mohamed assuré : terrain #${result.terrainId}, avance=${AVANCE_FCFA} FCFA, payout=${PAYOUT_MODE}` +
+        (arenaExistante ? ' (contrat mis à jour)' : ' (création + résas démo)'),
+    );
+  } catch (error) {
+    logger.warn('index.js', `ensure Mohamed: ${error.message}`);
+  }
   programmerResumeHebdomadaire();
   programmerSurveillanceConfiance();
   programmerRappelsReservations();
