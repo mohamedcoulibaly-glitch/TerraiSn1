@@ -358,13 +358,14 @@ async function testB2_IpnFraude() {
   // Act
   const resForged = await httpApp.request('POST', '/api/payments/webhook', { body: forged });
 
-  // Assert
-  h.assertEqual('B2a HTTP 400 (signature)', resForged.status, 400);
+  // Assert — ACK 200 même si signature invalide (évite retries PayTech)
+  h.assertEqual('B2a HTTP 200 (ack, signature rejetée)', resForged.status, 200);
   h.assert(
     'B2a message Signature invalide',
     /Signature PayTech invalide/i.test(String(resForged.body?.error || '')),
     resForged.body?.error,
   );
+  h.assert('B2a processing_error', resForged.body?.processing_error === true);
   assertPending(db, pending.reservationId, 'B2a after forge');
   h.assert(
     'B2a alerte sécurité loguée',
@@ -422,7 +423,8 @@ async function testB2_IpnFraude() {
     custom_field: JSON.stringify({ reservation_id: pending.reservationId }),
   };
   const resNaked = await httpApp.request('POST', '/api/payments/webhook', { body: naked });
-  h.assertEqual('B2c HTTP 400 sans signature', resNaked.status, 400);
+  h.assertEqual('B2c HTTP 200 sans signature (ack, rejeté)', resNaked.status, 200);
+  h.assert('B2c processing_error', resNaked.body?.processing_error === true);
   assertPending(db, pending.reservationId, 'B2c after naked');
 }
 

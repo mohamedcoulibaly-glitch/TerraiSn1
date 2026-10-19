@@ -24,15 +24,12 @@ function isInReminderWindow(startAt, now = new Date(), opts = {}) {
 }
 
 function buildRappelWhatsAppMessage({ prenom, terrain_nom, date, heure_debut, code_reservation }) {
-  const name = String(prenom || '').trim() || 'champion';
-  const code = code_reservation ? `\n🏷️ Code : *${code_reservation}*` : '';
+  const name = String(prenom || '').trim();
+  const code = code_reservation ? `\nCode : *${code_reservation}*` : '';
   return (
-    `⏰ Rappel TerrainSN ${name} !\n\n` +
-    `Ton match approche :\n` +
-    `📍 ${terrain_nom}\n` +
-    `🗓️ ${date} à ${String(heure_debut || '').slice(0, 5)}\n` +
-    `${code}\n\n` +
-    `Montre ton QR (même hors-ligne dans l'app) à l'entrée. Bon match ⚽`
+    `Rappel${name ? ` ${name}` : ''} — *${terrain_nom}*\n` +
+    `${date} ${String(heure_debut || '').slice(0, 5)}${code}\n` +
+    `Présente ton QR à l'entrée.`
   );
 }
 

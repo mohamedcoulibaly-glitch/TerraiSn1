@@ -1200,6 +1200,29 @@ function initContratPaiementSchema(database) {
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  /** Sessions WhatsApp métier (façade OpenWA) — audit gérant / superadmin */
+  database.run(`CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id TEXT NOT NULL UNIQUE,
+    gerant_id INTEGER,
+    telephone TEXT,
+    statut TEXT DEFAULT 'deconnecte'
+      CHECK(statut IN ('initializing','qr','connecte','deconnecte')),
+    derniere_connexion DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run(`CREATE TABLE IF NOT EXISTS whatsapp_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id TEXT NOT NULL,
+    telephone TEXT,
+    message_extrait TEXT,
+    statut TEXT CHECK(statut IN ('envoye','echec')),
+    erreur TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  database.run('CREATE INDEX IF NOT EXISTS idx_wa_sessions_gerant ON whatsapp_sessions(gerant_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_wa_logs_client ON whatsapp_logs(client_id, created_at)');
+
   database.run(`CREATE TABLE IF NOT EXISTS ipn_reconciliation (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reservation_id INTEGER NOT NULL,

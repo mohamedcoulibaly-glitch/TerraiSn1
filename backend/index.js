@@ -18,6 +18,7 @@ if (!process.env.CORS_ORIGINS) {
 }
 
 require('./whatsappClient');
+const whatsappManager = require('./services/whatsappManager');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -469,7 +470,7 @@ app.use(cookieParser());
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
-app.get(['/health', '/api/health'], (_req, res) => {
+app.get(['/health', '/api/health'], async (_req, res) => {
   const paymentService = require('./services/payment');
   const { targetProvider, providerRole, estSimulation } = require('./lib/paymentGateway');
   const whatsappMock = String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true';
@@ -480,6 +481,18 @@ app.get(['/health', '/api/health'], (_req, res) => {
     String(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV || '').trim(),
   );
   const metrics = logger.getMetrics();
+  let terrainsStats = { total: 0, actifs: 0 };
+  try {
+    const db = await getDb();
+    terrainsStats = {
+      total: Number(queryOne(db, 'SELECT COUNT(*) AS n FROM terrains')?.n || 0),
+      actifs: Number(
+        queryOne(db, 'SELECT COUNT(*) AS n FROM terrains WHERE COALESCE(is_active, 1) = 1')?.n || 0,
+      ),
+    };
+  } catch {
+    // ignore
+  }
   res.status(200).json({
     status: 'ok',
     service: 'terrainsn-api',
@@ -516,7 +529,11 @@ app.get(['/health', '/api/health'], (_req, res) => {
       }
     })(),
     sqlite_engine: 'sql.js',
+    terrains: terrainsStats,
     warnings: [
+      ...(terrainsStats.actifs === 0
+        ? ['Aucun terrain actif — la liste joueur est vide (seed / is_active)']
+        : []),
       ...(estSimulation() && process.env.NODE_ENV === 'production'
         ? ['PAYMENT_MODE=simulation / PAYTECH_MOCK=true — aucun paiement réel']
         : []),
@@ -4319,11 +4336,45 @@ function programmerRappelsReservations() {
 }
 
 async function ensureSeedData(db) {
-  const count = queryOne(db, 'SELECT COUNT(*) AS total FROM terrains');
-  if (Number(count?.total || 0) > 0) return;
-  logger.info('index.js', 'Base vide — chargement des donnees de demo...');
-  const { seed } = require('./seed');
-  await seed();
+  const totalTerrains = Number(queryOne(db, 'SELECT COUNT(*) AS total FROM terrains')?.total || 0);
+  const actifs = Number(
+    queryOne(db, 'SELECT COUNT(*) AS total FROM terrains WHERE COALESCE(is_active, 1) = 1')?.total || 0,
+  );
+  const totalUsers = Number(queryOne(db, 'SELECT COUNT(*) AS total FROM users')?.total || 0);
+  const totalProprios = Number(queryOne(db, 'SELECT COUNT(*) AS total FROM proprietaires')?.total || 0);
+
+  // Terrains tous inactifs → réactiver (sans toucher aux comptes)
+  if (actifs === 0 && totalTerrains > 0) {
+    logger.warn('index.js', `${totalTerrains} terrain(s) en base, 0 actif — réactivation`);
+    runSql(db, 'UPDATE terrains SET is_active = 1 WHERE COALESCE(is_active, 0) = 0');
+  }
+
+  const actifsApres = Number(
+    queryOne(db, 'SELECT COUNT(*) AS total FROM terrains WHERE COALESCE(is_active, 1) = 1')?.total || 0,
+  );
+
+  // Seed destructif (DELETE users) UNIQUEMENT si la base est vraiment vierge.
+  // Sinon un compte créé serait effacé au prochain redémarrage.
+  const baseVierge = totalUsers === 0 && totalProprios === 0 && totalTerrains === 0;
+  if (baseVierge) {
+    logger.info('index.js', 'Base vierge — chargement des donnees de demo...');
+    const { seed } = require('./seed');
+    await seed();
+  } else if (actifsApres === 0) {
+    logger.warn(
+      'index.js',
+      'Aucun terrain actif mais des comptes existent — seed complet REFUSÉ (préserve les users). ' +
+        'Crée un terrain en backoffice ou FORCE_SEED=true une seule fois.',
+    );
+  }
+
+  // Carte joueur : backfill GPS manquants (seed historique sans lat/lng)
+  try {
+    const { backfillTerrainCoords } = require('./seed');
+    if (typeof backfillTerrainCoords === 'function') backfillTerrainCoords(db);
+  } catch {
+    // optionnel
+  }
 }
 
 async function start() {
@@ -4358,6 +4409,11 @@ async function start() {
     }
     const wa = require('./whatsappClient');
     if (typeof wa.reloadConfig === 'function') wa.reloadConfig();
+    // Multi-clients OpenWA : platform (OTP/admin) + restauration sessions gérants
+    whatsappManager.initialiserSuperadmin();
+    whatsappManager.restaurerSessionsGerants().catch((err) => {
+      logger.warn('index.js', `WhatsApp restauration gérants: ${err.message}`);
+    });
     if (applied > 0 || seeded > 0) {
       logger.info(
         'index.js',

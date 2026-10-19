@@ -128,19 +128,20 @@ function upsertTerrainMohamed(db, proprioId) {
       db,
       `UPDATE terrains SET proprietaire_id = ?, nom = ?, adresse = ?, ville = ?, sport = ?, type = ?,
         prix_heure = ?, prix_entier = ?, prix_moitie = ?, description = ?, telephone = ?,
-        is_active = 1, commodites = ?
+        is_active = 1, commodites = ?, latitude = COALESCE(latitude, ?), longitude = COALESCE(longitude, ?)
        WHERE id = ?`,
       [proprioId, TERRAIN_NOM, 'Parcelles Assainies, Dakar', 'Dakar', 'foot', '7v7',
-        prix, prix, Math.round(prix * 0.6), description, PHONE_STORE, commodites, existing.id],
+        prix, prix, Math.round(prix * 0.6), description, PHONE_STORE, commodites,
+        14.7640, -17.4370, existing.id],
     );
     assurerHorairesEtCreneaux(db, existing.id);
     return existing.id;
   }
   const terrainId = Number(runSql(
     db,
-    `INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-    [proprioId, TERRAIN_NOM, 'Parcelles Assainies, Dakar', 'Dakar', 'foot', '7v7', prix, description, PHONE_STORE, '[]', commodites],
+    `INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites, latitude, longitude)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    [proprioId, TERRAIN_NOM, 'Parcelles Assainies, Dakar', 'Dakar', 'foot', '7v7', prix, description, PHONE_STORE, '[]', commodites, 14.7640, -17.4370],
   ).lastInsertRowid);
   runSql(db, 'UPDATE terrains SET prix_entier = ?, prix_moitie = ? WHERE id = ?', [prix, Math.round(prix * 0.6), terrainId]);
   assurerHorairesEtCreneaux(db, terrainId);

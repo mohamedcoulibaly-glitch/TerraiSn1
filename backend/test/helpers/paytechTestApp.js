@@ -72,14 +72,14 @@ async function demarrerPaytechTestApp() {
   app.post('/api/payments/webhook', async (req, res) => {
     try {
       const result = await handlePaytechIpn(req.body || {}, req.headers);
-      return res.status(200).json(result);
+      return res.status(200).json({ received: true, ...result });
     } catch (error) {
-      if (error.statusCode === 400) {
-        logger.error('paytechTestApp', 'ALERTE SECURITE IPN PayTech — signature invalide', error);
-        return res.status(400).json({ error: error.message });
-      }
-      logger.error('paytechTestApp', 'Webhook PayTech', error);
-      return res.status(200).json({ received: true, processing_error: true });
+      logger.error('paytechTestApp', 'ALERTE SECURITE IPN PayTech', error);
+      return res.status(200).json({
+        received: true,
+        processing_error: true,
+        error: error.message || 'processing_error',
+      });
     }
   });
 

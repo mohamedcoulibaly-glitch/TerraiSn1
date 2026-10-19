@@ -2,11 +2,15 @@ const fs = require('fs');
 const path = require('path');
 const QRCode = require('qrcode');
 const client = require('./whatsappClient');
+const whatsappManager = require('./services/whatsappManager');
 const { getDb, queryOne, runSql } = require('./database');
 const { masquerNumero } = require('./services/calculsPaiement');
 const { UPLOAD_ROOT } = require('./terrainPhotoService');
 const { serializeQrPayload } = require('./services/qrPayload');
 const { calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
+
+/** Session plateforme (OTP, admin, notifs → gérants/proprios) */
+const SESSION_PLATFORM = 'platform';
 
 function digitsPhone(telephone) {
   // Aligne sur toWaIntlDigits (OpenWA) — uniquement SN mobile 7X
@@ -53,8 +57,13 @@ function formaterMontant(montant) {
   return Number(montant || 0).toLocaleString('fr-SN') + ' FCFA';
 }
 
-async function envoyerMessage(telephone, message, sessionKey = 'platform', meta = {}) {
-  const key = sessionKey || 'platform';
+async function envoyerMessage(telephone, message, sessionKey = SESSION_PLATFORM, meta = {}) {
+  // null explicite = gérant déconnecté → ne pas envoyer (pas de fallback platform)
+  if (sessionKey === null) {
+    console.warn(`[Notif] Envoi annulé (${meta.type || 'message'}) — session WhatsApp indisponible`);
+    return { ok: false, skipped: true, reason: 'session_indisponible' };
+  }
+  const key = sessionKey || SESSION_PLATFORM;
   try {
     const db = await getDb();
     runSql(
@@ -132,12 +141,18 @@ async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = '
   }
 }
 
-function sessionKeyFromReservation(reservation = {}) {
-  // Une session OpenWA partagée (prod Render) → tout passe par platform.
-  if (String(process.env.OPENWA_SHARED_SESSION_ID || '').trim()) {
-    return 'platform';
-  }
-  return client.gerantSessionKey(reservation.gerant_id) || 'platform';
+/**
+ * Session OpenWA pour messages JOUEUR liés à une résa.
+ * Plus de fallback silencieux vers platform (évite confusion numéro gérant).
+ * Retourne null si gérant absent / déconnecté (sauf mock).
+ */
+async function sessionKeyFromReservation(reservation = {}) {
+  const clientId = await whatsappManager.getClientPourTerrain(
+    reservation.terrain_id,
+    reservation.gerant_id,
+  );
+  if (!clientId) return null;
+  return whatsappManager.toSessionKey(clientId);
 }
 
 async function details(reservationId) {
@@ -225,13 +240,13 @@ async function assurerQrCodeUrl(reservationId) {
   return publicUrl;
 }
 
-/** Template 1 — OTP inscription */
+/** Template 1 — OTP inscription (toujours superadmin / platform) */
 async function envoyerOTP({ telephone, prenom, code }) {
   await envoyerWhatsApp(
     telephone,
-    `👋 Salut ${prenom || ''} ! Bienvenue sur TerrainSN.\n\n` +
-      `Ton code de confirmation : *${code}*\n` +
-      `Il est valable 10 minutes. Ne le partage avec personne 🔒`
+    `TerrainSN — code : *${code}*\nValable 10 min.`,
+    SESSION_PLATFORM,
+    { type: 'otp', destinataire_type: 'joueur' },
   );
 }
 
@@ -244,25 +259,17 @@ async function envoyerLienPaiement(reservationId, options = {}) {
   if (!tel) return { ok: false, skipped: true, error: new Error('Téléphone joueur manquant') };
   const lien = data.lien_paiement || data.lien_paytech;
   if (!lien) return { ok: false, error: new Error('Lien de paiement manquant') };
-  const waKey = sessionKeyFromReservation(data);
+  const waKey = await sessionKeyFromReservation(data);
   const minutes = Math.max(1, Number(data.delai_verrou_paiement_min) || 15);
   const intro = options.origine === 'joueur'
-    ? `Ta réservation sur *${data.terrain_nom}* est enregistrée ` +
-      `pour le ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}.\n\n` +
-      `Elle n'est pas encore payée.`
-    : `Le gérant de *${data.terrain_nom}* a enregistré ta résa ` +
-      `pour le ${formaterDate(data.date)} ` +
-      `à ${formaterHeure(data.heure_debut)}.`;
+    ? `*${data.terrain_nom}* — ${formaterDate(data.date)} ${formaterHeure(data.heure_debut)}`
+    : `Résa *${data.terrain_nom}* — ${formaterDate(data.date)} ${formaterHeure(data.heure_debut)}`;
   return envoyerWhatsApp(
     tel,
-    `👋 Salut ${prenom} !\n\n` +
-      `${intro}\n\n` +
-      `Pour confirmer ta place, paie ton avance de ` +
-      `*${formaterMontant(data.montant_avance || data.acompte)}* ici :\n` +
-      `👉 ${lien}\n\n` +
-      `Le reste (*${formaterMontant(data.montant_restant || data.reste_a_payer)}*) ` +
-      `tu l'amènes le jour du match, pas de stress 😊\n\n` +
-      `⚠️ Ce lien est valable *${minutes} min*. Après ça, la place repart.`,
+    `${prenom ? `${prenom}, ` : ''}${intro}.\n` +
+      `Avance *${formaterMontant(data.montant_avance || data.acompte)}* : ${lien}\n` +
+      `Reste sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}\n` +
+      `Lien valable ${minutes} min.`,
     waKey,
     {
       type: 'lien_paiement',
@@ -289,19 +296,16 @@ async function envoyerConfirmation(reservationId) {
       : null;
 
   const message =
-    `⚽ C'est confirmé ${prenom} !\n\n` +
-    `Ton terrain t'attend :\n` +
-    `📍 ${data.terrain_nom} — ${quartier}\n` +
-    `🗓️ ${formaterDate(data.date)} à ${formaterHeure(data.heure_debut)}\n` +
-    `🏷️ Code : *${data.code_reservation}*\n\n` +
-    (lienMaps ? `🗺️ Itinéraire : ${lienMaps}\n\n` : '') +
-    `💰 Avance payée : ${formaterMontant(data.montant_avance || data.acompte)} (hors frais opérateur)\n` +
-    `💵 À régler sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}\n\n` +
-    `📌 Viens *30 minutes avant* avec ce QR code, ` +
-    `c'est lui qui ouvre les portes 😄\n` +
-    `⚠️ Ce QR code est à usage unique — ne le partage pas.`;
+    `Confirmé${prenom ? ` ${prenom}` : ''} ✅\n` +
+    `*${data.terrain_nom}*${quartier ? ` — ${quartier}` : ''}\n` +
+    `${formaterDate(data.date)} ${formaterHeure(data.heure_debut)}\n` +
+    `Code : *${data.code_reservation}*\n` +
+    `Avance : ${formaterMontant(data.montant_avance || data.acompte)}\n` +
+    `Reste sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}\n` +
+    (lienMaps ? `Maps : ${lienMaps}\n` : '') +
+    `Présente le QR 30 min avant (usage unique).`;
 
-  const waKey = sessionKeyFromReservation(data);
+  const waKey = await sessionKeyFromReservation(data);
   const texte = await envoyerWhatsApp(tel, message, waKey, {
     type: 'confirmation',
     destinataire_type: 'joueur',
@@ -309,11 +313,11 @@ async function envoyerConfirmation(reservationId) {
     idempotency_key: `confirmation-texte:${reservationId}`,
   });
 
-  if (data.qr_code_url) {
+  if (waKey && data.qr_code_url) {
     const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
     const relative = String(data.qr_code_url).replace(/^\/uploads\//, '');
     const absolutePath = path.join(UPLOAD_ROOT, relative);
-    const caption = `QR Code — ${data.code_reservation}`;
+    const caption = `QR ${data.code_reservation}`;
 
     if (fs.existsSync(absolutePath) && String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
       try {
@@ -345,14 +349,13 @@ async function envoyerConfirmation(reservationId) {
     }
   }
 
+  // Notifications AU gérant → toujours platform (jamais depuis son propre numéro)
   if (data.gerant_whatsapp || data.gerant_telephone) {
     await envoyerWhatsApp(
       data.gerant_whatsapp || data.gerant_telephone,
-      `Avance reçue chez TerrainSN — pas encore un virement vers toi.\n` +
-        `Joueur : ${data.joueur_nom}. ${data.date} à ${formaterHeure(data.heure_debut)}. Code : ${data.code_reservation}.\n` +
-        `Reste sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}.\n` +
-        `Ton dû s'accumule selon le contrat du terrain (auto / retrait).`,
-      waKey,
+      `Avance reçue — ${data.joueur_nom}, ${data.date} ${formaterHeure(data.heure_debut)}, code ${data.code_reservation}.\n` +
+        `Reste joueur : ${formaterMontant(data.montant_restant || data.reste_a_payer)}. Dû selon contrat.`,
+      SESSION_PLATFORM,
       {
         destinataire_type: 'gerant',
         destinataire_id: data.gerant_id,
@@ -374,13 +377,10 @@ async function envoyerRemboursement(reservationId) {
   const lienDispo = `${domain}/terrain/${data.terrain_id}`;
   await envoyerWhatsApp(
     tel,
-    `😕 Oups ${prenom}...\n\n` +
-      `Quelqu'un a grillé la priorité sur ce créneau à la ` +
-      `dernière seconde. Ton paiement sera remboursé sous 24h, promis.\n\n` +
-      `Mais t'inquiète, voilà ce qui est encore dispo :\n` +
-      `👉 ${lienDispo}\n\n` +
-      `On t'en trouve un autre 💪`,
-    sessionKeyFromReservation(data)
+    `Créneau pris${prenom ? ` ${prenom}` : ''} — remboursement sous 24h.\n` +
+      `Autres dispos : ${lienDispo}`,
+    await sessionKeyFromReservation(data),
+    { type: 'remboursement', destinataire_type: 'joueur', destinataire_id: data.joueur_id || 0 },
   );
 }
 
@@ -406,12 +406,12 @@ async function envoyerReversement({
   const avance = montant_avance ?? montant_acompte;
   await envoyerWhatsApp(
     telephone,
-    `Dû gérant mis à jour${nom ? ` ${nom}` : ''}.\n\n` +
-      `Réservation *${code}* confirmée (avance chez TerrainSN, pas encore un virement).\n` +
-      (avance != null ? `Avance joueur : ${formaterMontant(avance)}\n` : '') +
-      `Commission plateforme : ${formaterMontant(commission)}\n` +
-      `*Crédité sur ton compte : ${formaterMontant(reverse)}*\n\n` +
-      `Solde disponible : *${formaterMontant(solde)}*`
+    `Dû mis à jour${nom ? ` ${nom}` : ''} — résa *${code}*.\n` +
+      (avance != null ? `Avance : ${formaterMontant(avance)}\n` : '') +
+      `Commission : ${formaterMontant(commission)}\n` +
+      `Crédit : *${formaterMontant(reverse)}* — solde *${formaterMontant(solde)}*`,
+    SESSION_PLATFORM,
+    { type: 'reversement_gerant', destinataire_type: 'gerant' },
   );
 }
 
@@ -565,7 +565,7 @@ async function envoyerAnnulation(reservationId, { rembourse = false, politique }
   await envoyerWhatsApp(
     tel,
     `Réservation annulée ${prenom}.\n${texte}`,
-    sessionKeyFromReservation(data),
+    await sessionKeyFromReservation(data),
     { destinataire_type: 'joueur', destinataire_id: data.joueur_id, type: 'annulation' },
   );
 }
@@ -576,7 +576,9 @@ async function envoyerAlerteSilencieuse({ telephone, prenom, gerant_prenom, terr
     `Petit point sur ${terrain_nom} ${prenom || ''}.\n\n` +
       `Ces deux derniers mois, quelques indicateurs sont un peu bas pour ${gerant_prenom || 'votre gerant'}. ` +
       `Rien d'alarmant, mais ca vaut peut-etre une petite discussion avec lui.\n\n` +
-      `Tu peux voir le detail dans ton dashboard.`
+      `Tu peux voir le detail dans ton dashboard.`,
+    SESSION_PLATFORM,
+    { type: 'alerte_proprio', destinataire_type: 'proprietaire' },
   );
 }
 
@@ -592,7 +594,7 @@ async function envoyerRappelReservation(reservationId) {
     heure_debut: data.heure_debut,
     code_reservation: data.code_reservation,
   });
-  return envoyerWhatsApp(telephoneJoueur(data), message, sessionKeyFromReservation(data), {
+  return envoyerWhatsApp(telephoneJoueur(data), message, await sessionKeyFromReservation(data), {
     type: 'rappel',
     destinataire_type: 'joueur',
     destinataire_id: data.joueur_id || 0,
@@ -609,11 +611,9 @@ async function envoyerCheckinValide(reservationId) {
   const prenom = prenomJoueur(data);
   return envoyerWhatsApp(
     tel,
-    `✅ Entrée validée ${prenom} !\n\n` +
-      `Bienvenue à *${data.terrain_nom}*.\n` +
-      `Créneau ${formaterHeure(data.heure_debut)} – ${formaterHeure(data.heure_fin)}.\n\n` +
-      `Bon match ⚽`,
-    sessionKeyFromReservation(data),
+    `Entrée OK${prenom ? ` ${prenom}` : ''} — *${data.terrain_nom}*\n` +
+      `${formaterHeure(data.heure_debut)}–${formaterHeure(data.heure_fin)}. Bon match ⚽`,
+    await sessionKeyFromReservation(data),
     {
       type: 'checkin',
       destinataire_type: 'joueur',

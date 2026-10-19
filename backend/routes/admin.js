@@ -1224,7 +1224,35 @@ router.put('/integrations', async (req, res) => {
 
 router.get('/whatsapp/status', async (req, res) => {
   const whatsappClient = require('../whatsappClient');
-  res.json(await whatsappClient.getStatus('platform'));
+  const whatsappManager = require('../services/whatsappManager');
+  const status = await whatsappClient.getStatus('platform');
+  const managed = await whatsappManager.getStatut('superadmin');
+  res.json({ ...status, ...managed, clientId: 'superadmin' });
+});
+
+/** Vue d'ensemble sessions WhatsApp (OpenWA + table métier) */
+router.get('/whatsapp/sessions', async (req, res) => {
+  try {
+    const db = await getDb();
+    const whatsappManager = require('../services/whatsappManager');
+    const rows = queryAll(
+      db,
+      `SELECT ws.*, e.nom AS gerant_nom, t.nom AS terrain_nom
+         FROM whatsapp_sessions ws
+         LEFT JOIN employes e ON e.id = ws.gerant_id
+         LEFT JOIN terrains t ON t.id = e.terrain_id
+        ORDER BY ws.id DESC`,
+    );
+    const enrichies = [];
+    for (const s of rows) {
+      const live = await whatsappManager.getStatut(s.client_id);
+      enrichies.push({ ...s, statut_live: live.statut, pret: live.pret });
+    }
+    const platform = await whatsappManager.getStatut('superadmin');
+    res.json({ platform, sessions: enrichies });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Impossible de lister les sessions' });
+  }
 });
 
 router.get('/whatsapp/qr', async (req, res) => {

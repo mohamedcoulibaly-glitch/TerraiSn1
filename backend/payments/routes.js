@@ -152,9 +152,22 @@ function mountPaymentRoutes(app) {
     return redirectToFrontend(res, `${joueur()}/reservation/annule${terrainId}`);
   });
 
-  app.post('/webhook/paytech', async (req, res) => {
+  /**
+   * IPN PayTech — AUCUNE auth JWT.
+   * Toujours HTTP 200 (même signature invalide) pour éviter les retries PayTech.
+   * Traitement synchrone via flow.handlePaytechIpn (commissions / confirmation inchangées).
+   */
+  async function webhookPaytechHandler(req, res) {
+    const body = req.body || {};
+    logger.info('payments/routes.js', 'Webhook PayTech reçu', {
+      type_event: body.type_event || body.typeEvent || null,
+      ref_command: body.ref_command || body.refCommand || null,
+      has_hmac: Boolean(body.hmac_compute),
+      has_api_key_sha: Boolean(body.api_key_sha256),
+      content_type: req.headers['content-type'] || null,
+    });
     try {
-      const result = await handlePaytechIpn(req.body || {}, req.headers);
+      const result = await handlePaytechIpn(body, req.headers || {});
       try {
         require('../services/paymentEvents').push('ipn_paytech', {
           ok: true,
@@ -163,8 +176,9 @@ function mountPaymentRoutes(app) {
       } catch {
         /* ignore */
       }
-      return res.status(200).json(result);
+      return res.status(200).json({ received: true, ...result });
     } catch (error) {
+      // Toujours 200 : PayTech ne doit pas retenter en boucle
       try {
         require('../services/paymentEvents').push('ipn_invalid', {
           message: error.message,
@@ -173,14 +187,20 @@ function mountPaymentRoutes(app) {
       } catch {
         /* ignore */
       }
-      logger.event('ipn_invalid', { message: error.message });
-      if (error.statusCode === 400) {
-        return res.status(400).json({ error: error.message });
+      if (typeof logger.event === 'function') {
+        logger.event('ipn_invalid', { message: error.message });
       }
-      logger.error('payments/routes.js', 'Webhook PayTech', error);
-      return res.status(200).json({ received: true, processing_error: true });
+      logger.error('payments/routes.js', 'Webhook PayTech traitement', error);
+      return res.status(200).json({
+        received: true,
+        processing_error: true,
+        error: error.message || 'processing_error',
+      });
     }
-  });
+  }
+
+  app.post('/webhook/paytech', webhookPaytechHandler);
+  app.post('/api/webhook/paytech', webhookPaytechHandler);
 
   app.post('/webhook/paydunya', async (req, res) => {
     try {

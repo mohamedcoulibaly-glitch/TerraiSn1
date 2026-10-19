@@ -114,13 +114,27 @@ const Accueil = () => {
   }, [queryClient]);
 
   useEffect(() => {
+    let settled = false;
+    const finish = (next: GeoState) => {
+      if (settled) return;
+      settled = true;
+      setGeo(next);
+    };
+
+    // Filet : ne jamais bloquer la liste terrains si la géoloc reste pendante
+    const failSafe = window.setTimeout(() => {
+      finish({ lat: null, lng: null, denied: true, ready: true });
+    }, 2500);
+
     if (!navigator.geolocation) {
-      setGeo({ lat: null, lng: null, denied: true, ready: true });
-      return;
+      window.clearTimeout(failSafe);
+      finish({ lat: null, lng: null, denied: true, ready: true });
+      return () => window.clearTimeout(failSafe);
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setGeo({
+        window.clearTimeout(failSafe);
+        finish({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           denied: false,
@@ -128,10 +142,12 @@ const Accueil = () => {
         });
       },
       () => {
-        setGeo({ lat: null, lng: null, denied: true, ready: true });
+        window.clearTimeout(failSafe);
+        finish({ lat: null, lng: null, denied: true, ready: true });
       },
-      { timeout: 5000, maximumAge: 300000 }
+      { timeout: 4000, maximumAge: 300000 },
     );
+    return () => window.clearTimeout(failSafe);
   }, []);
 
   useEffect(() => {

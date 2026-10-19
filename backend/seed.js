@@ -37,22 +37,22 @@ async function seed() {
   db.run("INSERT INTO proprietaires (nom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, 'actif')", ['M. Ndiaye', 'ndiaye@terrainsn.sn', hash, '+221 78 300 00 03', 'free']);
   db.run("INSERT INTO proprietaires (nom, prenom, email, password_hash, telephone, plan, statut) VALUES (?, ?, ?, ?, ?, ?, 'actif')", ['Mohamed Coulibaly', 'Mohamed', 'mohamed.proprietaire@gmail.com', hash, MOHAMED_PHONE_STORE, 'premium']);
 
-  // --- TERRAINS ---
+  // --- TERRAINS (lat/lng obligatoires pour la carte joueur) ---
   const terrainsData = [
-    // proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites
-    [1, 'Complexe Sportif Pikine', 'Rue 10, Pikine', 'Dakar', 'foot', '11v11', 5000, 'Terrain en gazon synthétique de dernière génération.', '+221 77 123 45 67', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking', 'buvette'])],
-    [1, 'Terrain Almadies', 'Les Almadies', 'Dakar', 'foot', '7v7', 7500, 'Petit terrain idéal pour les matchs 7v7.', '+221 77 234 56 78', '[]', 1, JSON.stringify(['dossards', 'ballon', 'eau', 'vestiaires'])],
-    [2, 'Stade Municipal Saly', 'Saly Portudal', 'Thiès', 'foot', '11v11', 6000, 'Grand terrain avec vestiaires et parking.', '+221 77 345 67 89', '[]', 1, JSON.stringify(['vestiaires', 'toilettes', 'parking', 'tribune'])],
-    [1, 'Foot Indoor Ouakam', 'Ouakam', 'Dakar', 'foot', '5v5', 4000, 'Terrain indoor couvert.', '+221 77 456 78 90', '[]', 0, JSON.stringify(['dossards', 'eau', 'vestiaires'])],
-    [2, 'Stade Demba Diop', 'Plateau', 'Dakar', 'foot', '11v11', 8000, 'Terrain homologué avec tribunes.', '+221 77 567 89 01', '[]', 1, JSON.stringify(['vestiaires', 'toilettes', 'tribune', 'parking', 'buvette', 'secours'])],
-    [3, 'Terrain Guédiawaye', 'Guédiawaye', 'Dakar', 'foot', '7v7', 3500, 'Terrain de quartier bien entretenu.', '+221 77 678 90 12', '[]', 1, JSON.stringify(['eau', 'parking', 'priere'])],
-    [1, 'Complexe Sportif Thiaroye', 'Thiaroye', 'Dakar', 'foot', '11v11', 4500, 'Deux terrains côte à côte avec buvette.', '+221 77 789 01 23', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'buvette', 'glacons'])],
-    [3, 'Terrain Saint-Louis Centre', 'Centre-ville', 'Saint-Louis', 'foot', '7v7', 3000, 'Terrain en plein cœur de Saint-Louis.', '+221 77 890 12 34', '[]', 1, JSON.stringify(['eau', 'vestiaires', 'parking'])],
-    [1, 'Obélisque', 'Place de l\'Obélisque, Plateau', 'Dakar', 'foot', '5v5', 8000, 'Terrain très demandé près de l\'Obélisque — réservation anticipée conseillée.', '+221 77 900 11 22', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking', 'toilettes', 'buvette'])],
+    // proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites, lat, lng
+    [1, 'Complexe Sportif Pikine', 'Rue 10, Pikine', 'Dakar', 'foot', '11v11', 5000, 'Terrain en gazon synthétique de dernière génération.', '+221 77 123 45 67', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking', 'buvette']), 14.7645, -17.3907],
+    [1, 'Terrain Almadies', 'Les Almadies', 'Dakar', 'foot', '7v7', 7500, 'Petit terrain idéal pour les matchs 7v7.', '+221 77 234 56 78', '[]', 1, JSON.stringify(['dossards', 'ballon', 'eau', 'vestiaires']), 14.7447, -17.5256],
+    [2, 'Stade Municipal Saly', 'Saly Portudal', 'Thiès', 'foot', '11v11', 6000, 'Grand terrain avec vestiaires et parking.', '+221 77 345 67 89', '[]', 1, JSON.stringify(['vestiaires', 'toilettes', 'parking', 'tribune']), 14.4650, -17.0300],
+    [1, 'Foot Indoor Ouakam', 'Ouakam', 'Dakar', 'foot', '5v5', 4000, 'Terrain indoor couvert.', '+221 77 456 78 90', '[]', 0, JSON.stringify(['dossards', 'eau', 'vestiaires']), 14.7208, -17.4902],
+    [2, 'Stade Demba Diop', 'Plateau', 'Dakar', 'foot', '11v11', 8000, 'Terrain homologué avec tribunes.', '+221 77 567 89 01', '[]', 1, JSON.stringify(['vestiaires', 'toilettes', 'tribune', 'parking', 'buvette', 'secours']), 14.6937, -17.4441],
+    [3, 'Terrain Guédiawaye', 'Guédiawaye', 'Dakar', 'foot', '7v7', 3500, 'Terrain de quartier bien entretenu.', '+221 77 678 90 12', '[]', 1, JSON.stringify(['eau', 'parking', 'priere']), 14.7763, -17.3956],
+    [1, 'Complexe Sportif Thiaroye', 'Thiaroye', 'Dakar', 'foot', '11v11', 4500, 'Deux terrains côte à côte avec buvette.', '+221 77 789 01 23', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'buvette', 'glacons']), 14.7510, -17.3550],
+    [3, 'Terrain Saint-Louis Centre', 'Centre-ville', 'Saint-Louis', 'foot', '7v7', 3000, 'Terrain en plein cœur de Saint-Louis.', '+221 77 890 12 34', '[]', 1, JSON.stringify(['eau', 'vestiaires', 'parking']), 16.0170, -16.4897],
+    [1, 'Obélisque', 'Place de l\'Obélisque, Plateau', 'Dakar', 'foot', '5v5', 8000, 'Terrain très demandé près de l\'Obélisque — réservation anticipée conseillée.', '+221 77 900 11 22', '[]', 1, JSON.stringify(['dossards', 'eau', 'vestiaires', 'parking', 'toilettes', 'buvette']), 14.6683, -17.4375],
   ];
   for (const t of terrainsData) {
     db.run(
-      'INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO terrains (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, description, telephone, photos, is_active, commodites, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       t
     );
   }
@@ -158,8 +158,43 @@ async function seed() {
   console.log(`   Comptes Mohamed : email + mdp ${DEMO_PASSWORD} (ne pas se connecter au téléphone partagé ${MOHAMED_PHONE_RAW})`);
 }
 
+/** Complète lat/lng manquants pour que la carte Leaflet s'affiche. */
+function backfillTerrainCoords(db) {
+  const defaults = {
+    Pikine: [14.7645, -17.3907],
+    Almadies: [14.7447, -17.5256],
+    Saly: [14.4650, -17.0300],
+    Ouakam: [14.7208, -17.4902],
+    'Demba Diop': [14.6937, -17.4441],
+    Guédiawaye: [14.7763, -17.3956],
+    Guediawaye: [14.7763, -17.3956],
+    Thiaroye: [14.7510, -17.3550],
+    'Saint-Louis': [16.0170, -16.4897],
+    Obélisque: [14.6683, -17.4375],
+    Obelisque: [14.6683, -17.4375],
+    Parcelles: [14.7640, -17.4370],
+    Dakar: [14.7167, -17.4677],
+  };
+  const { queryAll, runSql } = require('./database');
+  const terrains = queryAll(db, 'SELECT id, nom, ville, latitude, longitude FROM terrains');
+  for (const t of terrains) {
+    if (Number.isFinite(Number(t.latitude)) && Number.isFinite(Number(t.longitude))) continue;
+    const hay = `${t.nom || ''} ${t.ville || ''}`;
+    let pair = null;
+    for (const [key, coords] of Object.entries(defaults)) {
+      if (hay.toLowerCase().includes(key.toLowerCase())) {
+        pair = coords;
+        break;
+      }
+    }
+    if (!pair) pair = defaults.Dakar;
+    runSql(db, 'UPDATE terrains SET latitude = ?, longitude = ? WHERE id = ?', [pair[0], pair[1], t.id]);
+  }
+}
+
 module.exports = {
   seed,
+  backfillTerrainCoords,
   DEMO_PASSWORD,
   MOHAMED_PHONE_RAW,
   MOHAMED_PHONE_STORE,

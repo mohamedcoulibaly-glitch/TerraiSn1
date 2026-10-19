@@ -499,16 +499,24 @@ function gerantWaKey(req) {
 
 router.get('/gerant/whatsapp/status', authMiddleware, requireRole('gerant'), async (req, res) => {
   const key = gerantWaKey(req);
+  const whatsappManager = require('../services/whatsappManager');
+  const managed = await whatsappManager.getStatut(`gerant_${req.user.id}`);
   const status = await whatsappClient.getStatus(key);
   const db = await getDb();
   if (status.connected && status.phone) {
     await persistGerantWhatsapp(db, req.user.id, status.phone);
+    await whatsappManager.upsertSession(`gerant_${req.user.id}`, {
+      statut: 'connecte',
+      telephone: status.phone,
+    });
   }
   const employe = queryOne(db, 'SELECT whatsapp_number, whatsapp_wid, whatsapp_connected_at FROM employes WHERE id = ?', [req.user.id]);
-  const connected = Boolean(status.connected);
+  const connected = Boolean(status.connected || managed.pret);
   res.json({
     ...status,
+    ...managed,
     connected,
+    pret: connected,
     status: connected ? 'CONNECTED' : status.status || 'DISCONNECTED',
     configured_number: employe?.whatsapp_number || null,
     connected_wid: employe?.whatsapp_wid || status.phone || null,
@@ -542,8 +550,11 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
     ]);
   }
 
-  const started = await whatsappClient.ensureStarted(key, { force, phoneNumber });
-  const qr = await whatsappClient.getQrPayload(key);
+  const whatsappManager = require('../services/whatsappManager');
+  const { started, qr } = await whatsappManager.getOuCreerClient(`gerant_${req.user.id}`, {
+    force,
+    phoneNumber,
+  });
   if (started.mock || qr.mock) {
     return res.status(503).json({
       error:
@@ -573,6 +584,7 @@ router.post('/gerant/whatsapp/connect', authMiddleware, requireRole('gerant'), a
     pairingPhone: qr.pairingPhone || started.pairingPhone || phoneNumber || null,
     pairingExpiresAt: qr.pairingExpiresAt || started.pairingExpiresAt || null,
     session: key,
+    clientId: `gerant_${req.user.id}`,
   });
 });
 
@@ -587,9 +599,9 @@ router.get('/gerant/whatsapp/qr', authMiddleware, requireRole('gerant'), async (
 });
 
 router.post('/gerant/whatsapp/disconnect', authMiddleware, requireRole('gerant'), async (req, res) => {
-  const key = gerantWaKey(req);
-  const status = await whatsappClient.logoutSession(key);
-  res.json({ ...status, message: 'Session WhatsApp gérant déconnectée' });
+  const whatsappManager = require('../services/whatsappManager');
+  await whatsappManager.deconnecter(`gerant_${req.user.id}`);
+  res.json({ succes: true, message: 'Session WhatsApp gérant déconnectée' });
 });
 
 module.exports = router;
