@@ -353,7 +353,12 @@ async function envoyerConfirmation(reservationId) {
         `Reste sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}.\n` +
         `Ton dû s'accumule selon le contrat du terrain (auto / retrait).`,
       waKey,
-      { destinataire_type: 'gerant', destinataire_id: data.gerant_id, type: 'avance_payee_gerant' },
+      {
+        destinataire_type: 'gerant',
+        destinataire_id: data.gerant_id,
+        type: 'avance_payee_gerant',
+        idempotency_key: `avance_payee_gerant:${reservationId}`,
+      },
     );
   }
   return texte || { ok: true };

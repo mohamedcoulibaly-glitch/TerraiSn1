@@ -122,21 +122,46 @@ async function creerPaiement({
 
   const refCommand = `TF-${reservationId}-${Date.now()}`;
 
-  const result = await paymentService.createCheckout({
-    reservationId,
-    terrain,
-    montantAvance,
-    montantRestant,
-    prix,
-    refCommand,
-    joueurNom,
-    joueurTelephone,
-    preferredChannel: canal,
-    kind: 'reservation',
-  });
-  result.canal_paiement = canal;
-  result.montantAvance = montantAvance;
-  result.montantRestant = montantRestant;
+  let result;
+  if (estModeMock() || paymentMode() === 'simulation') {
+    const { joueurDomain } = require('./lib/appDomains');
+    const domain = joueurDomain();
+    const params = new URLSearchParams({
+      kind: 'reservation',
+      ref: refCommand,
+      reservation_id: String(reservationId),
+      montant: String(montantAvance),
+      ...(canal ? { canal } : {}),
+    });
+    result = {
+      success: true,
+      redirectUrl: `${domain}/simulation/paiement?${params}`,
+      redirect_url: `${domain}/simulation/paiement?${params}`,
+      reference: refCommand,
+      montantAvance,
+      montantRestant,
+      prix,
+      provider: 'simulation',
+      canal_paiement: canal,
+      kind: 'reservation',
+    };
+  } else {
+    result = await paymentService.createCheckout({
+      reservationId,
+      terrain,
+      montantAvance,
+      montantRestant,
+      prix,
+      refCommand,
+      joueurNom,
+      joueurTelephone,
+      preferredChannel: canal,
+      kind: 'reservation',
+    });
+    result.canal_paiement = canal;
+    result.montantAvance = montantAvance;
+    result.montantRestant = montantRestant;
+  }
 
   enregistrerPaiementPending(db, {
     reservationId,

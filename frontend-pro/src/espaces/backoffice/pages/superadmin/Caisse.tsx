@@ -20,6 +20,7 @@ import {
   upsertIncidentAuto,
   type DemandeRetrait,
 } from "@/lib/saContrat";
+import { whatsAppHref } from "@/lib/openWhatsapp";
 
 type TabId = "fenetre" | "payable" | "retraits" | "dettes";
 
@@ -283,8 +284,8 @@ export default function Caisse() {
                           </td>
                           <td>
                             <p>{d.gerant_nom}</p>
-                            {wa ? (
-                              <a href={`https://wa.me/${wa.startsWith("221") ? wa : "221" + wa}`} target="_blank" rel="noreferrer" className="text-[11px] font-semibold" style={{ color: "var(--sa-success)" }}>
+                            {wa && whatsAppHref(wa) ? (
+                              <a href={whatsAppHref(wa)!} target="_blank" rel="noreferrer" className="text-[11px] font-semibold" style={{ color: "var(--sa-success)" }}>
                                 WhatsApp
                               </a>
                             ) : null}

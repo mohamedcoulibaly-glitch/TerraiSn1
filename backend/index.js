@@ -537,7 +537,8 @@ app.use((req, res, next) => {
   const reqPath = req.path.toLowerCase();
 
   if (reqPath.startsWith('/api/terrains') && req.method === 'GET') {
-    res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=86400');
+    // US-23 : configs/prix doivent se propager en quelques secondes
+    res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=30');
     res.set('Vary', 'Authorization, Accept-Encoding');
   } else if (reqPath.startsWith('/api/reservations/mes') && req.method === 'GET') {
     res.set('Cache-Control', 'private, max-age=60, stale-while-revalidate=3600');
@@ -2249,28 +2250,40 @@ app.post('/api/whatsapp/reconnect', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Accès refusé' });
     }
     const store = require('./services/openwaSessionStore');
+    const whatsappClient = require('./whatsappClient');
     const db = await getDb();
     const sessionKey = role === 'gerant' ? `gerant-${req.user.id}` : 'platform';
     const row = store.sauver(db, {
       sessionKey,
       openwaId: req.body?.openwa_id || null,
-      status: 'down',
+      status: 'reconnecting',
       lastError: 'reconnect demandé',
     });
+    if (typeof whatsappClient.ensureStarted === 'function') {
+      await whatsappClient.ensureStarted(sessionKey).catch((err) => {
+        logger.error('index.js', 'Reconnect WhatsApp ensureStarted', err);
+      });
+    }
+    const status = typeof whatsappClient.getStatus === 'function'
+      ? await whatsappClient.getStatus(sessionKey)
+      : { connected: false };
     require('./realtimeHub').notifyTerrain(req.user.terrain_id || 0, 'whatsapp_status', {
-      connected: false,
+      connected: Boolean(status.connected),
       session_key: sessionKey,
     });
-    res.json({ ok: true, session: row });
+    res.json({ ok: true, session: row, status });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message || 'Reconnect impossible' });
   }
 });
 
-app.get('/api/whatsapp/qr', async (req, res) => {
+app.get('/api/whatsapp/qr', authMiddleware, requireRole('super_admin', 'gerant'), async (req, res) => {
   const whatsappClient = require('./whatsappClient');
+  const sessionKey = String(req.user?.role || '').includes('gerant')
+    ? `gerant-${req.user.id}`
+    : 'platform';
   const payload = typeof whatsappClient.getQrPayload === 'function'
-    ? await whatsappClient.getQrPayload()
+    ? await whatsappClient.getQrPayload(sessionKey)
     : { connected: Boolean(whatsappClient.isReady), mock: false, provider: 'openwa' };
   res.json(payload);
 });
@@ -4336,6 +4349,36 @@ async function start() {
         }
       } catch (error) {
         logger.error('index.js', 'Job fenetres remboursement', error);
+      }
+    });
+    // US-01 : réconciliation IPN — récupère les paiements encaissés sans confirmation
+    cron.schedule('*/2 * * * *', async () => {
+      try {
+        const dbJob = await getDb();
+        const { executerReconciliation } = require('./services/ipnReconciliation');
+        const { statutPaiement } = require('./services/paymentStatusGateway');
+        const { confirmerPaiementEtNotifier } = require('./payments/flow');
+        const bugAlert = require('./services/bugAlertService');
+        const results = await executerReconciliation(dbJob, {
+          gateway: { statutPaiement },
+          confirmer: async (reservationId, refCommand) => {
+            await confirmerPaiementEtNotifier(reservationId, refCommand, { canal: null });
+          },
+          alerter: async (code, meta = {}) => {
+            logger.warn('index.js', `IPN reconciliation ${code}`, meta);
+            await bugAlert.notify({
+              kind: 'ipn',
+              title: code === 'ipn_echec' ? 'Paiement IPN en echec' : 'IPN PayTech muet',
+              error: new Error(`${code} resa=${meta.reservation_id || '?'} ref=${meta.ref || ''}`),
+              meta,
+            }).catch(() => {});
+          },
+        });
+        if (results.length) {
+          logger.info('index.js', `IPN reconciliation: ${results.length} dossier(s)`);
+        }
+      } catch (error) {
+        logger.error('index.js', 'Job reconciliation IPN', error);
       }
     });
   }

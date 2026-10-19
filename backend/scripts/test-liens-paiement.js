@@ -93,7 +93,7 @@ async function main() {
   h.assert('WA lien : contient URL', contenuWa.includes(resaAvecLien.lien_paiement));
   h.assert('WA lien : contient montant avance', contenuWa.includes('5') && contenuWa.includes('000'));
   h.assert('WA lien : contient terrain', contenuWa.includes('Arena Mohamed'));
-  h.assert('WA lien : mentionne 2 heures', contenuWa.includes('2 heures'));
+  h.assert('WA lien : mentionne l\'horaire', /18:00/.test(contenuWa));
 
   // ========== Relance : annule pending précédent ==========
   const payment2 = await paytechService.creerLienPaiement(

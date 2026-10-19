@@ -770,6 +770,7 @@ export default function ReservationExpressModal({
   };
 
   const submitPaiement = async () => {
+    if (busy) return;
     if (!terrainId) {
       toast.error("Terrain introuvable");
       return;
@@ -847,6 +848,7 @@ export default function ReservationExpressModal({
   };
 
   const submitManuel = async () => {
+    if (busy) return;
     if (!terrainId) {
       toast.error("Terrain introuvable");
       return;

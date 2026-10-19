@@ -12,6 +12,7 @@ import { fieldImageForId } from "@/espaces/joueur/components/FieldPhoto";
 import { useTerrainFullDetails } from "@/hooks/useJoueurData";
 import SilentSyncDot from "@/components/SilentSyncDot";
 import { clearDraft, usePersistedState } from "@/hooks/usePersistedState";
+import { useSubmitGuard } from "@/hooks/useSubmitGuard";
 
 import omIcon from "@/assets/images.png";
 import waveIcon from "@/assets/wave-banque-en-ligne-au-senegal-pour-paiement-transfert-argents.jpg";
@@ -37,7 +38,7 @@ const Payment = () => {
     date,
     duree_minutes: Math.round(dureeHours * 60),
   });
-  const payDraftKey = `joueur:paiement:${id || "x"}:${date}:${slot}:${fieldFormat}`;
+  const payDraftKey = `joueur:paiement:${user?.id || "guest"}:${id || "x"}:${date}:${slot}:${fieldFormat}`;
   const [payDraft, setPayDraft, { clear: clearPayDraft }] = usePersistedState<PaymentDraft>(
     payDraftKey,
     { name: "", phone: "" },
@@ -46,7 +47,7 @@ const Payment = () => {
   const phone = payDraft.phone;
   const setName = (v: string) => setPayDraft((d) => ({ ...d, name: v }));
   const setPhone = (v: string) => setPayDraft((d) => ({ ...d, phone: v }));
-  const [processing, setProcessing] = useState(false);
+  const { busy: processing, run: runPay } = useSubmitGuard({ debounceMs: 800 });
   const [canal, setCanal] = useState<"wave" | "orange_money" | "">("");
   const deposit = calculerMontantAvance(montant, terrain?.pourcentage_avance);
   const reste = Math.max(0, montant - deposit);
@@ -79,7 +80,6 @@ const Payment = () => {
     : "";
 
   const handlePay = async () => {
-    if (processing) return;
     if (enLigneIndispo) {
       toast.error(
         terrain?.booking_message ||
@@ -96,7 +96,7 @@ const Payment = () => {
       toast.error("Choisis Wave ou Orange Money pour payer");
       return;
     }
-    setProcessing(true);
+    await runPay(async () => {
     try {
       const reservation = await reservationsApi.create({
         terrain_id: parseInt(id!),
@@ -113,7 +113,7 @@ const Payment = () => {
 
       localStorage.setItem("terrainsn_last_reservation_id", String(reservation.id));
       clearPayDraft();
-      clearDraft(`joueur:fiche:${id || "x"}`);
+      clearDraft(`joueur:fiche:${user?.id || "guest"}:${id || "x"}`);
 
       if (sansAvance || reservation.sans_avance || reservation.mode_paiement === "sans_avance") {
         hapticSuccess();
@@ -142,9 +142,8 @@ const Payment = () => {
       }
       hapticError();
       toast.error(error.message || "Erreur lors du paiement");
-    } finally {
-      setProcessing(false);
     }
+    });
   };
 
   if (isInitialLoading && !terrain) {

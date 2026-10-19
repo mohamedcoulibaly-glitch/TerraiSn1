@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import SkeletonMesReservations from "@/components/skeletons/SkeletonMesReservations";
 import SilentSyncDot from "@/components/SilentSyncDot";
-import PaymentLockGauge from "@/components/PaymentLockGauge";
 import ReservationDatesBlock from "@/components/ReservationDatesBlock";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
 import { useMesReservations, joueurKeys } from "@/hooks/useJoueurData";
@@ -262,18 +261,6 @@ const Reservations = () => {
     setReviewComment("");
   };
 
-  const onLockExpired = useCallback(
-    (id: number) => {
-      patchReservationsCache((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, statut: "expire", _liberating: true } : r)),
-      );
-      window.setTimeout(() => {
-        patchReservationsCache((prev) => prev.filter((r) => r.id !== id));
-      }, 900);
-    },
-    [patchReservationsCache],
-  );
-
   return (
     <div className="page-container">
       <SilentSyncDot active={isRefetching && reservations.length > 0} label="Synchronisation réservations" />
@@ -347,14 +334,13 @@ const Reservations = () => {
               </div>
             ) : (
               filtered.map((r) => {
-                const status = statusConfig[r.statut] || statusConfig.en_attente;
-                const canCancel = ["en_attente", "confirme", "acceptee"].includes(r.statut);
-                const isPendingEphemere = r.statut === "en_attente";
+                const status = statusConfig[r.statut] || statusConfig.confirme;
+                const canCancel = ["confirme", "acceptee"].includes(r.statut);
                 return (
                   <div
                     key={r.id}
                     className={`relative bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--color-border)] border-l-4 ${status.border} shadow-[var(--shadow-sm)] overflow-hidden transition-all duration-700 ${
-                      r._liberating ? "opacity-0 scale-95 -translate-y-1" : isPendingEphemere ? "opacity-95" : ""
+                      r._liberating ? "opacity-0 scale-95 -translate-y-1" : ""
                     }`}
                   >
                     <div className="p-4">
@@ -371,15 +357,6 @@ const Reservations = () => {
                           {status.label}
                         </span>
                       </div>
-                      {isPendingEphemere ? (
-                        <PaymentLockGauge
-                          className="mt-3"
-                          expiresAt={Number(r.verrou_expire_at)}
-                          startedAt={r.created_at}
-                          durationMin={15}
-                          onExpired={() => onLockExpired(r.id)}
-                        />
-                      ) : null}
                       {["annule", "annulee"].includes(r.statut) ? (
                         <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
                           Annulée · créneau libéré

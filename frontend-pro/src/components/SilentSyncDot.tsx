@@ -23,8 +23,8 @@ export default function SilentSyncDot({
       title={label}
     >
       <span className="relative flex h-2.5 w-2.5">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(255,255,255,0.85)]" />
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: "var(--g-primary, #1A3FAA)" }} />
+        <span className="relative inline-flex h-2.5 w-2.5 rounded-full shadow-[0_0_0_2px_rgba(255,255,255,0.85)]" style={{ background: "var(--g-primary, #1A3FAA)" }} />
       </span>
       <span className="sr-only">{label}…</span>
     </div>

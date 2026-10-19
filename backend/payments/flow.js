@@ -104,8 +104,8 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
     const existingByRef = refCommand
       ? queryOne(db, "SELECT id FROM paiements WHERE reference_paytech = ? AND statut = 'paye' LIMIT 1", [refCommand])
       : null;
-    const existingDu = queryOne(db, 'SELECT id FROM dus WHERE reservation_id = ? LIMIT 1', [reservationId]);
-    if (currentReservation.statut === 'confirme' || existingPaidPayment || existingByRef || existingDu) {
+    // Un dû orphelin ne doit PAS bloquer une confirmation manquante (IPN retardé).
+    if (currentReservation.statut === 'confirme' || existingPaidPayment || existingByRef) {
       action = 'already_confirmed';
       return;
     }
@@ -538,6 +538,30 @@ async function handlePaytechIpn(payload, headers) {
       recu: payload.final_item_price ?? payload.item_price,
       refCommand,
     });
+    try {
+      const { enregistrerTentative } = require('../services/ipnReconciliation');
+      const dbAlert = await getDb();
+      enregistrerTentative(dbAlert, {
+        reservationId,
+        refCommand: refCommand || `TF-${reservationId}`,
+        status: 'failed',
+        lastError: 'montant_incoherent',
+      });
+      const bugAlert = require('../services/bugAlertService');
+      await bugAlert.notify({
+        kind: 'ipn',
+        title: 'IPN PayTech montant incoherent',
+        error: new Error(`resa ${reservationId} ref ${refCommand}`),
+        meta: {
+          reservation_id: reservationId,
+          ref: refCommand,
+          attendu: reservation.montant_avance || reservation.acompte,
+          recu: payload.final_item_price ?? payload.item_price,
+        },
+      });
+    } catch (alertErr) {
+      logger.warn('payments/flow.js', 'Alerte montant incoherent echouee', alertErr);
+    }
     return { received: true, ignored: true, reason: 'montant_incoherent' };
   }
 

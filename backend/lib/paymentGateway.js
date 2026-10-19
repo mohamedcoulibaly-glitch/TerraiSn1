@@ -46,8 +46,7 @@ function providerExplicite() {
 /**
  * Prestataire actif pour les appels API (checkout, payout, refund, IPN routing).
  * Défaut : paytech.
- * Note : le checkout réservation joueur ignore la page /simulation/paiement
- * (toujours createCheckout réel via paytechService.creerPaiement).
+ * En simulation, paytechService.creerPaiement sert la page locale /simulation/paiement.
  */
 function activeGateway() {
   if (estSimulation()) return PROVIDERS.SIMULATION;

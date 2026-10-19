@@ -93,7 +93,7 @@ export function useTerrainFullDetails(
     initialDataUpdatedAt: cached?.at,
     staleTime: DETAIL_STALE_MS,
     gcTime: GC_MS,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     placeholderData: (prev) => {
       // Ne pas recycler un planning d'une autre date/durée (évite flash créneaux obsolètes)

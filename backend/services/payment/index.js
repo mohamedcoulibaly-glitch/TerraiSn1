@@ -130,6 +130,12 @@ function verifyWebhook(payload, headers, options = {}) {
   return adapter.verifyWebhook(payload, headers);
 }
 
+async function getPaymentStatus(refCommand, options = {}) {
+  const adapter = options.provider ? getAdapter(options.provider) : getLiveAdapter();
+  if (!adapter || typeof adapter.getPaymentStatus !== 'function') return 'pending';
+  return adapter.getPaymentStatus(refCommand);
+}
+
 module.exports = {
   PROVIDERS,
   ADAPTERS,
@@ -141,6 +147,7 @@ module.exports = {
   payout,
   isPayoutEnabled,
   verifyWebhook,
+  getPaymentStatus,
   paydunyaAdapter,
   paytechAdapter,
 };

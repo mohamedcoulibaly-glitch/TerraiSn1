@@ -16,6 +16,7 @@ function getMeta() {
 }
 
 function assertConfigured() {
+  if (estModeMock()) return;
   if (!process.env.PAYTECH_API_KEY || !process.env.PAYTECH_API_SECRET) {
     const error = new Error("Paiement en ligne non configuré");
     error.statusCode = 503;
@@ -436,6 +437,45 @@ function buildIpnHmac({ amount, refCommand, apiKey, apiSecret }) {
   return crypto.createHmac('sha256', secret).update(`${amount}|${refCommand}|${key}`).digest('hex');
 }
 
+/**
+ * Lecture best-effort du statut distant (réconciliation IPN).
+ * PayTech : vérité = IPN ; cet endpoint est optionnel et tolère l'absence.
+ * @returns {Promise<'paid'|'failed'|'pending'>}
+ */
+async function getPaymentStatus(refCommand) {
+  if (estModeMock()) return 'pending';
+  assertConfigured();
+  const ref = String(refCommand || '').trim();
+  if (!ref) return 'pending';
+  const url = process.env.PAYTECH_STATUS_URL
+    || `${apiBase()}/payment/payment-status/${encodeURIComponent(ref)}`;
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        API_KEY: process.env.PAYTECH_API_KEY,
+        API_SECRET: process.env.PAYTECH_API_SECRET,
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) return 'pending';
+    const payload = await response.json().catch(() => ({}));
+    const raw = String(
+      payload.status
+        || payload.payment_status
+        || payload.state
+        || payload.data?.status
+        || '',
+    ).toLowerCase();
+    if (/paid|success|complete|sale_complete|captured/.test(raw)) return 'paid';
+    if (/fail|cancel|refus|refund|expire/.test(raw)) return 'failed';
+    return 'pending';
+  } catch {
+    return 'pending';
+  }
+}
+
 module.exports = {
   name,
   getMeta,
@@ -449,6 +489,7 @@ module.exports = {
   payout,
   isPayoutEnabled,
   getAccountInfo,
+  getPaymentStatus,
   serviceTransferPaytech,
   numeroTransferPaytech,
   buildIpnHmac,

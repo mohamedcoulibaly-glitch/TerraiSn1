@@ -5,6 +5,7 @@ import CommoditesSection from "@/components/CommoditesSection";
 import { ArrowLeft, MapPin, Star, Clock, Heart, Info, X, ChevronDown, Navigation, Phone, Calendar } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useState, useEffect, useRef, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { terrainsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
@@ -118,8 +119,9 @@ type DureeOption = { label: string; hours: number; minutes: number };
 const FieldDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth();
-  const draftKey = `joueur:fiche:${id || "x"}`;
+  const { isAuthenticated, user } = useAuth();
+  const queryClient = useQueryClient();
+  const draftKey = `joueur:fiche:${user?.id || "guest"}:${id || "x"}`;
   const [draft, setDraft, { clear: clearFicheDraft }] = usePersistedState<FicheDraft>(
     draftKey,
     {
@@ -408,6 +410,9 @@ const FieldDetails = () => {
       ev.type === "photos"
     ) {
       void refetch();
+      if (ev.type === "tarifs" || ev.type === "config_updated" || ev.type === "photos") {
+        void queryClient.invalidateQueries({ queryKey: ["joueur", "terrains"] });
+      }
     }
   });
 

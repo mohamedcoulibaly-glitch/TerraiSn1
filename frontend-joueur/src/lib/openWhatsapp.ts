@@ -23,3 +23,12 @@ export function openWhatsAppChat(rawPhone: string, text = ""): boolean {
   window.open(`https://wa.me/${numero}?text=${encoded}`, "_blank", "noopener,noreferrer");
   return true;
 }
+
+/** Href prêt pour <a> — app native sur mobile, wa.me sur desktop. */
+export function whatsAppHref(rawPhone: string, text = ""): string | null {
+  const numero = digits(rawPhone);
+  if (!numero || numero.length < 11) return null;
+  const encoded = encodeURIComponent(text);
+  if (isMobileWhatsApp()) return `whatsapp://send?phone=${numero}&text=${encoded}`;
+  return `https://wa.me/${numero}?text=${encoded}`;
+}

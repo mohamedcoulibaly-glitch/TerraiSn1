@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { reservationAfficheQr } from './reservationVisibilite';
 
 /** Réservation mise en cache pour consultation hors-ligne (entrée stade). */
 export interface CachedReservation {
@@ -86,8 +87,6 @@ const DB_NAME = 'terrainsn-offline';
 const DB_VERSION = 2;
 const MAX_RECENT_TERRAINS = 20;
 
-const STATUTS_AVEC_ACCES = new Set(['confirme', 'acceptee']);
-
 let dbPromise: Promise<IDBPDatabase<TerrainSNDB>> | null = null;
 
 function getDb() {
@@ -116,7 +115,8 @@ function getDb() {
 }
 
 export function reservationHasStadiumAccess(statut: string | undefined | null): boolean {
-  return STATUTS_AVEC_ACCES.has(String(statut || ''));
+  // Aligné US-17 : QR / pass uniquement après confirmation serveur
+  return reservationAfficheQr(statut);
 }
 
 /** Normalise une réservation API vers le format cache hors-ligne. */

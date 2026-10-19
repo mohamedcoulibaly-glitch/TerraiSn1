@@ -183,8 +183,6 @@ function mountPaymentRoutes(app) {
     try {
       const refCommand = String(req.body.ref_command || req.body.ref || '');
       const action = req.body.action || 'success';
-      const joueur = joueurDomain();
-      const pro = proDomain();
       const {
         confirmerAbonnementDepuisIpn,
         confirmerAchatDepuisIpn,
@@ -210,10 +208,10 @@ function mountPaymentRoutes(app) {
           return res.status(400).json({ error: 'Paiement abonnement simule invalide' });
         }
         if (action !== 'success') {
-          return res.json({ redirect_url: `${pro}/backoffice/superadmin/abonnements?paiement=annule&abonnement_id=${abonnementId}` });
+          return res.json({ redirect_url: `${pro()}/backoffice/superadmin/abonnements?paiement=annule&abonnement_id=${abonnementId}` });
         }
         await confirmerAbonnementDepuisIpn(refCommand, { abonnementId });
-        return res.json({ redirect_url: `${pro}/backoffice/superadmin/abonnements?paiement=ok&abonnement_id=${abonnementId}` });
+        return res.json({ redirect_url: `${pro()}/backoffice/superadmin/abonnements?paiement=ok&abonnement_id=${abonnementId}` });
       }
 
       if (kind === 'achat') {
@@ -222,10 +220,10 @@ function mountPaymentRoutes(app) {
           return res.status(400).json({ error: 'Paiement achat simule invalide' });
         }
         if (action !== 'success') {
-          return res.json({ redirect_url: `${pro}/backoffice/superadmin/abonnements?paiement=annule&kind=achat&terrain_id=${terrainId}` });
+          return res.json({ redirect_url: `${pro()}/backoffice/superadmin/abonnements?paiement=annule&kind=achat&terrain_id=${terrainId}` });
         }
         await confirmerAchatDepuisIpn(refCommand, { terrainId, montant: req.body.montant });
-        return res.json({ redirect_url: `${pro}/backoffice/superadmin/abonnements?paiement=ok&kind=achat&terrain_id=${terrainId}` });
+        return res.json({ redirect_url: `${pro()}/backoffice/superadmin/abonnements?paiement=ok&kind=achat&terrain_id=${terrainId}` });
       }
 
       if (kind === 'dette') {
@@ -235,14 +233,14 @@ function mountPaymentRoutes(app) {
           return res.status(400).json({ error: 'Paiement dette simule invalide' });
         }
         if (action !== 'success') {
-          return res.json({ redirect_url: `${pro}/backoffice/gerant/finances?paiement_dette=annule` });
+          return res.json({ redirect_url: `${pro()}/backoffice/gerant/finances?paiement_dette=annule` });
         }
         await confirmerDetteDepuisIpn(refCommand, {
           gerantId,
           periode,
           montant: req.body.montant,
         });
-        return res.json({ redirect_url: `${pro}/backoffice/gerant/finances?paiement_dette=ok` });
+        return res.json({ redirect_url: `${pro()}/backoffice/gerant/finances?paiement_dette=ok` });
       }
 
       const reservationId = Number(req.body.reservation_id || reservationIdDepuisReference(refCommand));
@@ -263,13 +261,13 @@ function mountPaymentRoutes(app) {
             [reservationId],
           );
         });
-        return res.json({ redirect_url: `${joueur}/reservation/annule?terrain_id=${reservation.terrain_id}` });
+        return res.json({ redirect_url: `${joueur()}/reservation/annule?terrain_id=${reservation.terrain_id}` });
       }
 
       await confirmerPaiementEtNotifier(reservationId, refCommand);
       const confirmed = queryOne(db, 'SELECT statut FROM reservations WHERE id = ?', [reservationId]);
       if (confirmed?.statut !== 'confirme') throw new Error('La confirmation simulee a echoue');
-      return res.json({ redirect_url: `${joueur}/reservation/succes?id=${reservationId}` });
+      return res.json({ redirect_url: `${joueur()}/reservation/succes?id=${reservationId}` });
     } catch (error) {
       logger.error('payments/routes.js', 'Simulation PayTech', error);
       return res.status(500).json({ error: 'Le paiement n a pas pu etre confirme. Veuillez reessayer.' });

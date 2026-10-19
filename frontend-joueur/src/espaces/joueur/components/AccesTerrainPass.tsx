@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/dialog";
 import { useEffect, useState } from "react";
 import { fetchReservationQrDataUrl } from "@/lib/api";
-import { reservationHasStadiumAccess } from "@/lib/offlineStore";
+import { reservationAfficheQr } from "@/lib/reservationVisibilite";
 
 export type AccesTerrainReservation = {
   id: number;
@@ -35,7 +35,7 @@ export default function AccesTerrainPass({ reservation, open, onOpenChange, offl
   const [fetchedQr, setFetchedQr] = useState<string | null>(null);
   const [qrFailed, setQrFailed] = useState(false);
   const reservationId = reservation?.id;
-  const canShow = reservationHasStadiumAccess(reservation?.statut);
+  const canShow = reservationAfficheQr(reservation?.statut);
 
   useEffect(() => {
     let cancelled = false;

@@ -219,6 +219,7 @@ async function demarrerApp() {
       if (!t) return res.status(404).json({ error: 'Terrain introuvable' });
       const devis = calculerDevis(db, t, { date, heure_debut, heure_fin, format_terrain });
       let creneauId;
+      const verrouExpireAt = Date.now() + 15 * 60 * 1000;
       transaction(db, () => {
         creneauId = lockCreneauxAtomique(db, terrain_id, date, heure_debut, heure_fin);
       });
@@ -227,8 +228,8 @@ async function demarrerApp() {
         `INSERT INTO reservations (
           terrain_id, joueur_id, joueur_nom, date, heure_debut, heure_fin,
           montant, prix_total, acompte, montant_avance, reste_a_payer, montant_restant,
-          statut, creneau_id, format_terrain, operational_stage
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, 'reserved')`,
+          statut, creneau_id, format_terrain, operational_stage, verrou_expire_at, expire_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, 'reserved', ?, ?)`,
         [
           terrain_id,
           req.user.id,
@@ -244,6 +245,8 @@ async function demarrerApp() {
           devis.montant_restant,
           creneauId,
           format_terrain || 'entier',
+          verrouExpireAt,
+          new Date(verrouExpireAt).toISOString(),
         ],
       ).lastInsertRowid;
       res.status(201).json({ id, ...devis, creneau_id: creneauId, statut: 'en_attente' });

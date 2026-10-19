@@ -67,7 +67,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const draftKeys: string[] = [];
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i);
-      if (key && key.includes("profil-edit")) draftKeys.push(key);
+      // Brouillons joueur (tsn:draft:joueur:…) + anciennes clés profil
+      if (
+        key &&
+        (key.startsWith("tsn:draft:joueur:") ||
+          key.includes("profil-edit") ||
+          key.startsWith("joueur:"))
+      ) {
+        draftKeys.push(key);
+      }
     }
     draftKeys.forEach((key) => localStorage.removeItem(key));
     setUser(null);
@@ -296,14 +304,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const data = await authApi.me();
       if (isNonJoueur(data)) {
-        await deconnecter(false);
+        // Ne pas appeler /auth/logout : la session pro peut partager le cookie refresh
+        clearLocalSession();
         return;
       }
       setUser(data);
       return data;
     } catch {
-      setUser(null);
-      await deconnecter(false);
+      clearLocalSession();
     }
   };
 

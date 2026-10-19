@@ -72,7 +72,13 @@ function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
       WHERE terrain_id = ? AND date = ?
         AND (
           statut IN ('confirme', 'acceptee')
-          OR (statut IN ('en_attente', 'en_attente_paiement') AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?)
+          OR (
+            statut IN ('en_attente', 'en_attente_paiement')
+            AND (
+              verrou_expire_at IS NULL
+              OR verrou_expire_at > ?
+            )
+          )
         )
         AND heure_debut < ? AND heure_fin > ?`,
     [terrainId, date, now, heureFin, heureDebut],
@@ -94,7 +100,10 @@ function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
       `SELECT id FROM reservations
         WHERE terrain_id = ? AND date = ?
           AND statut IN ('en_attente', 'en_attente_paiement')
-          AND verrou_expire_at IS NOT NULL AND verrou_expire_at > ?
+          AND (
+            verrou_expire_at IS NULL
+            OR verrou_expire_at > ?
+          )
           AND heure_debut < ? AND heure_fin > ?`,
       [terrainId, date, now, slotOrphelin.heure_fin, slotOrphelin.heure_debut],
     );

@@ -1,7 +1,9 @@
 import { MapPin } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
 import { useTerrainsList } from "@/hooks/useJoueurData";
+import { useAuth } from "@/hooks/use-auth";
 import SilentSyncDot from "@/components/SilentSyncDot";
 import { isTerrainFavorite, PitchCard } from "@/espaces/joueur/components/PitchCard";
 import { loadFavoriteIds } from "@/lib/favoris";
@@ -70,7 +72,10 @@ function dateContextLabel(_quick: QuickFiltre, advancedDate?: string): string | 
 }
 
 const Accueil = () => {
-  const [accueilDraft, setAccueilDraft] = usePersistedState<AccueilDraft>("joueur:accueil", {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const accueilKey = `joueur:accueil:${user?.id || "guest"}`;
+  const [accueilDraft, setAccueilDraft] = usePersistedState<AccueilDraft>(accueilKey, {
     searchQuery: "",
     quickFiltre: "tous",
     appliedFiltres: FILTRES_TERRAIN_DEFAUT,
@@ -97,6 +102,17 @@ const Accueil = () => {
   useEffect(() => {
     setDraftFiltres(appliedFiltres);
   }, [appliedFiltres]);
+
+  // US-24 : invalider la liste terrains dès que l'onglet redevient visible
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void queryClient.invalidateQueries({ queryKey: ["joueur", "terrains"] });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [queryClient]);
+
   useEffect(() => {
     if (!navigator.geolocation) {
       setGeo({ lat: null, lng: null, denied: true, ready: true });

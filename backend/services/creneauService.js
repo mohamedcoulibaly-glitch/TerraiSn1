@@ -113,7 +113,10 @@ function getConflits(database, terrainId, date, heureDebut, heureFin, exclureRes
        LEFT JOIN reservations r ON r.creneau_id = c.id
          AND (
            r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
-           OR (r.statut = 'en_attente' AND r.verrou_expire_at IS NOT NULL AND r.verrou_expire_at > ?)
+           OR (
+             r.statut IN ('en_attente', 'en_attente_paiement')
+             AND (r.verrou_expire_at IS NULL OR r.verrou_expire_at > ?)
+           )
          )
        LEFT JOIN users u ON u.id = r.joueur_id
       WHERE c.terrain_id = ?
@@ -145,7 +148,10 @@ function getConflits(database, terrainId, date, heureDebut, heureFin, exclureRes
         AND r.date = ?
         AND (
           r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
-          OR (r.statut = 'en_attente' AND r.verrou_expire_at IS NOT NULL AND r.verrou_expire_at > ?)
+          OR (
+            r.statut IN ('en_attente', 'en_attente_paiement')
+            AND (r.verrou_expire_at IS NULL OR r.verrou_expire_at > ?)
+          )
         )
         AND substr(r.heure_debut, 1, 5) < ?
         AND (CASE WHEN substr(r.heure_fin, 1, 5) = '00:00' THEN '24:00' ELSE substr(r.heure_fin, 1, 5) END) > ?

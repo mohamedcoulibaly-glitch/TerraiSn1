@@ -68,12 +68,23 @@ function parseImageDataUrl(dataUrl) {
     try {
       const jpeg = heicConverter(buffer);
       const out = Buffer.isBuffer(jpeg) ? jpeg : Buffer.from(jpeg);
-      if (out.length && out.length <= MAX_IMAGE_BYTES) {
-        buffer = out;
-        ext = 'jpg';
+      if (!out.length) {
+        const error = new Error('Conversion HEIC impossible. Envoyez un JPEG, PNG ou WebP.');
+        error.statusCode = 400;
+        throw error;
       }
-    } catch {
-      ext = 'heic';
+      if (out.length > MAX_IMAGE_BYTES) {
+        const error = new Error('Image trop lourde après conversion. Taille maximale : 5 Mo.');
+        error.statusCode = 400;
+        throw error;
+      }
+      buffer = out;
+      ext = 'jpg';
+    } catch (err) {
+      if (err && err.statusCode === 400) throw err;
+      const error = new Error('Conversion HEIC indisponible sur ce serveur. Envoyez un JPEG, PNG ou WebP.');
+      error.statusCode = 400;
+      throw error;
     }
   }
   return { buffer, ext };
