@@ -1906,9 +1906,19 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     if (!['moitie', 'entier'].includes(format_terrain)) return res.status(400).json({ error: 'Format de terrain invalide' });
     const montant = calculerPrixReservation(db, terrain, date, heureDebutNorm, heureFinNorm, format_terrain);
     // Sans avance (contrat) : pas de PayTech joueur — confirmation directe + dette commission.
-    const sansAvance = estSansAvance(terrain);
-    if (sansAvance) {
+    const sansAvancePolitique = estSansAvance(terrain);
+    if (sansAvancePolitique) {
       mode = 'bloquer';
+    }
+    // Bloquer / sans_avance : avance joueur 0. Paiement lien : avance calculée.
+    let montantAvance = mode === 'bloquer' ? 0 : calculerMontantAvance(terrain, montant);
+    // Avance calculée à 0 FCFA (pourcentage/grille du terrain) : un checkout à 0
+    // est impossible et annulait la résa en silence — vrai parcours sans avance
+    // (confirmation directe), jamais de « payer 0 FCFA ».
+    const sansAvance = sansAvancePolitique || (montant > 0 && montantAvance <= 0);
+    if (sansAvance && mode !== 'bloquer') {
+      mode = 'bloquer';
+      montantAvance = 0;
     }
     // Joueur en ligne : canal Wave / OM obligatoire (évite le checkout PayTech multi-méthodes)
     if (creePar === 'joueur' && mode === 'paiement') {
@@ -1920,8 +1930,6 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
         });
       }
     }
-    // Bloquer / sans_avance : avance joueur 0. Paiement lien : avance calculée.
-    const montantAvance = mode === 'bloquer' ? 0 : calculerMontantAvance(terrain, montant);
     const montantRestant = Math.max(0, montant - montantAvance);
     const avanceReference = calculerAvanceReference(terrain, montant);
     // Verrou paiement = contrat terrain (delai_verrou_paiement_min), joueur et gérant
@@ -2403,7 +2411,7 @@ app.post('/api/whatsapp/reconnect', authMiddleware, async (req, res) => {
     const status = typeof whatsappClient.getStatus === 'function'
       ? await whatsappClient.getStatus(sessionKey)
       : { connected: false };
-    require('./realtimeHub').notifyTerrain(req.user.terrain_id || 0, 'whatsapp_status', {
+    require('./services/sseManager').emettrePourTerrain(req.user.terrain_id || 0, 'whatsapp_status', {
       connected: Boolean(status.connected),
       session_key: sessionKey,
     });
@@ -3788,7 +3796,7 @@ app.post('/api/gerant/blocages/debloquer', authMiddleware, requireRole('gerant')
 
     if (!count) return res.status(404).json({ error: 'Aucun créneau à débloquer' });
     try {
-      require('./realtimeHub').notifyTerrain(terrainId, 'blocage', { action: 'deleted', count });
+      require('./services/sseManager').emettrePourTerrain(terrainId, 'blocage', { action: 'deleted', count });
     } catch {
       /* SSE optionnel */
     }

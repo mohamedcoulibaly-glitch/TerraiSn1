@@ -6,7 +6,7 @@ const whatsappManager = require('./services/whatsappManager');
 const { getDb, queryOne, runSql } = require('./database');
 const { masquerNumero } = require('./services/calculsPaiement');
 const { UPLOAD_ROOT } = require('./terrainPhotoService');
-const { serializeQrPayload } = require('./services/qrPayload');
+const { signQrPayload } = require('./domain/qrSignature');
 const { calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
 
 /** Session plateforme (OTP, admin, notifs → gérants/proprios) */
@@ -231,13 +231,18 @@ async function assurerQrCodeUrl(reservationId) {
     heure_fin: row.heure_fin,
     fenetre_retard: row.fenetre_retard,
   });
-  const payload = row.qr_code_payload || serializeQrPayload({
-    reservation_id: row.id,
-    code: row.code_reservation,
-    creneau_id: row.creneau_id,
-    terrain_id: row.terrain_id,
-    expire_at: Math.floor(fenetre.finFenetre / 1000),
-  });
+  // Le QR doit TOUJOURS être signé (HMAC) : le scan gérant rejette tout
+  // payload non signé. Un payload stocké legacy non signé est régénéré signé.
+  const payloadStocke = String(row.qr_code_payload || '');
+  const payload = payloadStocke.includes('"sig"')
+    ? payloadStocke
+    : signQrPayload({
+        reservation_id: row.id,
+        code: row.code_reservation,
+        creneau_id: row.creneau_id,
+        terrain_id: row.terrain_id,
+        expire_at: Math.floor(fenetre.finFenetre / 1000),
+      });
 
   const dir = path.join(UPLOAD_ROOT, 'qr');
   fs.mkdirSync(dir, { recursive: true });
@@ -251,7 +256,8 @@ async function assurerQrCodeUrl(reservationId) {
     errorCorrectionLevel: 'M',
   });
   const publicUrl = `/uploads/qr/${filename}`;
-  runSql(db, 'UPDATE reservations SET qr_code_url = ?, qr_code_payload = COALESCE(qr_code_payload, ?) WHERE id = ?', [
+  // Persiste le payload réellement encodé dans le PNG (régénère les legacy non signés)
+  runSql(db, 'UPDATE reservations SET qr_code_url = ?, qr_code_payload = ? WHERE id = ?', [
     publicUrl,
     payload,
     reservationId,

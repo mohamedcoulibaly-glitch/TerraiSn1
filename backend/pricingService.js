@@ -172,9 +172,13 @@ function calculerDevis(database, terrain, { date, heure_debut, heure_fin, format
     };
   });
   const montant = detail.reduce((sum, row) => sum + Number(row.prix || 0), 0);
-  const sans_avance = estSansAvance(terrain);
+  const sansAvancePolitique = estSansAvance(terrain);
   const avance_reference = calculerAvanceReference(terrain, montant);
-  const montant_avance = sans_avance ? 0 : avance_reference;
+  const montantAvanceBrut = sansAvancePolitique ? 0 : avance_reference;
+  // Avance inexigible (0 FCFA) : le parcours réel est sans avance — le devis
+  // doit l'annoncer pour que l'UI n'affiche jamais « payer 0 FCFA ».
+  const sans_avance = sansAvancePolitique || (montant > 0 && montantAvanceBrut <= 0);
+  const montant_avance = sans_avance ? 0 : montantAvanceBrut;
   const commission_estimee = calculerCommissionPrelevee(terrain, avance_reference);
   const sources = [...new Set(detail.map((d) => d.source))];
   return {

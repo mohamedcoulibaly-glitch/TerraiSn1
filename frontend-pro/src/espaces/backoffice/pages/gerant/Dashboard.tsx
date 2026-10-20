@@ -140,8 +140,10 @@ function resolveLiveStatus(resa: TodayReservation, dayDate: string, nowMs: numbe
   }
 
   if (["confirme", "acceptee"].includes(resa.statut)) {
-    const { heureDebutMs, heureFinMs, retardMin } = calculerFenetreCheckIn(creneau);
-    if (nowMs > heureFinMs + retardMin * 60 * 1000) return "termine";
+    const { heureDebutMs, finFenetre } = calculerFenetreCheckIn(creneau);
+    // « Terminé » seulement quand la fenêtre de scan back est close (fin + retard + 2h) :
+    // avant ça, le match reste scannable (en retard), sinon le bouton disparaît trop tôt.
+    if (nowMs > finFenetre) return "termine";
     // Heure de début atteinte sans scan → en retard (pas en cours)
     if (nowMs >= heureDebutMs) return "en_retard";
     return "reserve";
@@ -679,7 +681,7 @@ function buildQueueBlocks({
     const debut = String(b.heure_debut).slice(0, 5);
     const fin = String(b.heure_fin).slice(0, 5);
     const { heureFinMs } = calculerFenetreCheckIn({
-      date: dayDate,
+      date: b.date || dayDate,
       heure_debut: debut,
       heure_fin: fin,
     });
@@ -692,14 +694,15 @@ function buildQueueBlocks({
     .filter((s) => {
       const h = String(s.heure_debut).slice(0, 5);
       if (reservedHours.has(h) || blockedHours.has(h)) return false;
-      return !isSlotInPast(slotTechDate(dayDate, h), h, nowMs);
+      // Date technique réelle du slot (nuit prolongée = lendemain) — ne jamais la réécrire
+      return !isSlotInPast(slotTechDate(dayDate, h, s.date), h, nowMs);
     })
     .map((s, idx) => ({
       id: -1000 - idx,
       heure_debut: s.heure_debut,
       heure_fin: s.heure_fin,
       statut: "libre",
-      date: dayDate,
+      date: s.date || dayDate,
     }));
   const bloqueAsCards: TodayReservation[] = blocagesActifs.map((b) => ({
     id: -2000 - b.blocage_ids[0],
@@ -712,7 +715,7 @@ function buildQueueBlocks({
     motif: b.motif,
     type_blocage: b.type_blocage,
     libelle: b.libelle,
-    date: dayDate,
+    date: b.date || dayDate,
   }));
   const pendingBySlot = new Map<string, TodayReservation[]>();
   for (const r of pending) {
@@ -802,7 +805,7 @@ function FileAttenteBlocks({
   const prioriteScanId = idPrioriteScannable(
     queueBlocks.imminente.map((r) => ({
       id: r.id,
-      date: dayDate,
+      date: r.date || dayDate,
       heure_debut: r.heure_debut,
       heure_fin: r.heure_fin,
       fenetre_retard: r.fenetre_retard,
@@ -1172,7 +1175,14 @@ const ManagerDashboard = () => {
   }, [dashboard?.blocages]);
 
   const dayBlocages = useMemo(() => {
-    return allBlocages.filter((b) => String(b.date).slice(0, 10) === dayDate);
+    // Jour perçu : un blocage après minuit (date technique = lendemain, heure < 05:00)
+    // appartient à la file de la veille, comme les réservations.
+    return allBlocages.filter((b) => {
+      const dateTech = String(b.date).slice(0, 10);
+      const heure = parseInt(String(b.heure_debut).slice(0, 2), 10);
+      const jourPercu = Number.isFinite(heure) && heure < 5 ? addDaysYmd(dateTech, -1) : dateTech;
+      return jourPercu === dayDate;
+    });
   }, [allBlocages, dayDate]);
 
   /** File d'attente découpée en blocs métier (haut → bas). */
@@ -1220,7 +1230,7 @@ const ManagerDashboard = () => {
   const prioriteScanIdHeader = idPrioriteScannable(
     imminentes.map((r) => ({
       id: r.id,
-      date: dayDate,
+      date: r.date || dayDate,
       heure_debut: r.heure_debut,
       heure_fin: r.heure_fin,
       fenetre_retard: r.fenetre_retard,

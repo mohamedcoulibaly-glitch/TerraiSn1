@@ -536,8 +536,7 @@ router.put('/terrains/:id/grille-tarifs', async (req, res) => {
       prix_moitie_base: Number(terrain.prix_moitie || 0),
     };
     const applied = appliquerGrille(db, terrainId, req.body || {}, base);
-    const { notifyTerrain } = require('../realtimeHub');
-    notifyTerrain(terrainId, 'tarifs');
+    require('../services/sseManager').emettrePourTerrain(terrainId, 'tarifs', {});
     res.json({
       message: 'Grille tarifaire activée',
       ...applied,
@@ -561,8 +560,7 @@ router.post('/propositions-tarifs/:id/valider', async (req, res) => {
     const result = validerProposition(db, Number(req.params.id), req.user.id);
     const terrainId = result?.proposition?.terrain_id || result?.regles?.[0]?.terrain_id;
     if (terrainId) {
-      const { notifyTerrain } = require('../realtimeHub');
-      notifyTerrain(terrainId, 'tarifs');
+      require('../services/sseManager').emettrePourTerrain(terrainId, 'tarifs', {});
     }
     res.json({ message: 'Grille tarifaire activée', ...result });
   } catch (error) {

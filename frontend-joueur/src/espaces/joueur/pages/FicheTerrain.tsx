@@ -524,6 +524,9 @@ const FieldDetails = () => {
   const sansAvanceTerrain = ["sans_avance", "sans_acompte"].includes(
     String(terrain?.politique_paiement || "").trim(),
   );
+  // Avance inexigible (0 FCFA, ex. pourcentage/grille à 0) : le parcours réel
+  // est sans avance (le back confirme directement) — jamais « payer 0 FCFA ».
+  const sansAvanceEffectif = sansAvanceTerrain || (total > 0 && deposit <= 0);
   const stickyRecap = (() => {
     if (!hasSlot || !selectedSlot || !slotEnd) return null;
     const dayLabel = selectedDateMeta.isTomorrow
@@ -536,7 +539,7 @@ const FieldDetails = () => {
     const totalLabel = total.toLocaleString("fr-SN");
     const avanceLabel = deposit.toLocaleString("fr-SN");
     const resteLabel = Math.max(0, total - deposit).toLocaleString("fr-SN");
-    const paiementNote = sansAvanceTerrain
+    const paiementNote = sansAvanceEffectif
       ? `Total ${totalLabel} FCFA — tu paies tout sur place le jour du match.`
       : `${totalLabel} FCFA au total : tu paies l'avance de ${avanceLabel} FCFA maintenant, le reste (${resteLabel} FCFA) tu l'amènes le jour du match.`;
     return {
@@ -1040,7 +1043,7 @@ const FieldDetails = () => {
                   <div id="cta-reserver-inline" className="scroll-mt-24">
                     {/* Aiguillage par politique : composant dédié par mode */}
                     {canBookOnline ? (
-                      sansAvanceTerrain ? (
+                      sansAvanceEffectif ? (
                         <BottomBarSansAvance
                           creneauLabel={stickyRecap.creneau}
                           formatLabel={stickyRecap.format}

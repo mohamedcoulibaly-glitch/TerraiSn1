@@ -56,6 +56,18 @@ function libererVerrousExpires(database, now = Date.now()) {
     if (rowsModified(database) !== 1) continue;
     libererCreneauxReservation(database, reservation, ['en_attente_paiement']);
     ids.push(reservation.id);
+    // Temps réel : le gérant (et la fiche joueur) voient le créneau se libérer
+    // dès l'expiration du verrou, sans attendre un refresh.
+    try {
+      require('./services/sseManager').emettrePourTerrain(reservation.terrain_id, 'creneau_libere', {
+        reservation_id: reservation.id,
+        creneau_id: reservation.creneau_id || null,
+        statut: 'libre',
+        raison: 'verrou_expire',
+      });
+    } catch {
+      // best-effort
+    }
   }
   return ids;
 }

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, Loader2, X, AlertTriangle, Moon } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Loader2, X, AlertTriangle, Moon } from "lucide-react";
 import { WhatsAppIcon } from "@/components/WhatsAppIcon";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { formatPhoneDisplay, phoneError, toLocal9 } from "@/auth/phone";
 import { gerantApi, reservationsApi, terrainsApi } from "@/lib/api";
-import { localYmd } from "@/lib/localDate";
+import { addDaysYmd, localYmd } from "@/lib/localDate";
+import DatePickerSheet from "@/espaces/backoffice/components/DatePickerSheet";
 import { cn, formatFcfa } from "@/lib/utils";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import { WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
@@ -152,6 +153,8 @@ export default function ReservationExpressModal({
 
   const [step, setStep] = useState<Step>(1);
   const [dateSelectionnee, setDateSelectionnee] = useState(todayIso);
+  /** Calendrier pour choisir un créneau éloigné (au-delà des 7 chips). */
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   /** Inclut une date hors des 7 jours (ex. choisie via le calendrier dashboard). */
   const dates = useMemo(() => {
@@ -1072,6 +1075,17 @@ export default function ReservationExpressModal({
                           </button>
                         );
                       })}
+                      {/* Créneau éloigné : ouvre le calendrier (jusqu'à +90 jours) */}
+                      <button
+                        type="button"
+                        disabled={lockedCreneau}
+                        onClick={() => setCalendarOpen(true)}
+                        aria-label="Choisir une date éloignée"
+                        className="flex min-h-[70px] w-[58px] min-w-[58px] snap-start flex-col items-center justify-center rounded-xl py-2 text-[11px] font-medium border border-dashed border-[var(--g-primary)] text-[var(--g-primary)] disabled:opacity-40"
+                      >
+                        <Calendar className="h-5 w-5" />
+                        <span className="mt-0.5">Date</span>
+                      </button>
                     </div>
                     {noFreeToday ? (
                       <p className="mt-2 text-xs text-amber-600">
@@ -1633,6 +1647,22 @@ export default function ReservationExpressModal({
           </div>
         )}
       </div>
+
+      {/* Calendrier créneau éloigné — la date choisie devient une chip hors 7 jours */}
+      <DatePickerSheet
+        open={calendarOpen}
+        onClose={() => setCalendarOpen(false)}
+        value={selectedDate}
+        min={todayIso}
+        max={addDaysYmd(todayIso, 90)}
+        onSelect={(ymd) => {
+          setDateSelectionnee(ymd);
+          if (!lockedCreneau) setSelectedSlot(null);
+          setCalendarOpen(false);
+        }}
+        title="Date de réservation"
+        appClass="gerant-app"
+      />
     </div>
   );
 }

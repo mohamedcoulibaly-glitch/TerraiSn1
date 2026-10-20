@@ -970,10 +970,25 @@ export const gerantApi = {
     id: number | string,
     methode: 'especes' | 'wave' | 'orange_money' = 'especes',
     qr_data?: string,
+    options?: { encaisser_solde?: boolean },
   ) {
     return await request(`/reservations/${id}/scan-qr`, {
       method: 'POST',
-      body: JSON.stringify({ methode, qr_data }),
+      body: JSON.stringify({ methode, qr_data, encaisser_solde: options?.encaisser_solde }),
+    });
+  },
+
+  /**
+   * Validation manuelle (sans QR) : mêmes contrôles back que le scan
+   * (terrain, statut, fenêtre, priorité) sans exiger de QR signé.
+   */
+  async validationManuelle(
+    id: number | string,
+    body: { methode?: 'especes' | 'wave' | 'orange_money'; encaisser_solde?: boolean } = {},
+  ) {
+    return await request(`/gerant/reservations/${id}/validation-manuelle`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     });
   },
 

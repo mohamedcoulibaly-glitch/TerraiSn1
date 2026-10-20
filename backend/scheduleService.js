@@ -153,8 +153,11 @@ function buildSlotsForOpenDay(dateStr, horaire) {
       });
     }
   } else if (sameDayEnd < start) {
-    // Overnight stored on opening day until 24 then early morning on same calendar booking day is unusual;
-    // for wrap we only emit until 24 on this date; morning slots belong to next calendar day generation.
+    // Overnight (ex. 18h → 02h) : slots du soir le jour d'ouverture,
+    // puis queue de nuit 00:00 → heure_fin datée du lendemain technique
+    // mais rattachée au jour d'ouverture (date_affichage = veille perçue).
+    // Sans cette queue, les créneaux 00h-0Xh n'existaient dans aucune
+    // génération (le lendemain ré-émet son propre soir) — régression corrigée.
     for (let h = start; h < 24; h += 1) {
       const heure_debut = formatHour(h);
       const heure_fin = h + 1 >= 24 ? '00:00' : formatHour(h + 1);
@@ -166,6 +169,19 @@ function buildSlotsForOpenDay(dateStr, horaire) {
         label_court: courtLabelHeureSenegal(dateStr, heure_debut),
         est_minuit_culturel: false,
         jour_tarif: jourDepuisDate(dateStr),
+      });
+    }
+    const nextDate = addDaysYmd(dateStr, 1);
+    for (let h = 0; h < sameDayEnd; h += 1) {
+      result.push({
+        date: nextDate,
+        heure_debut: formatHour(h),
+        heure_fin: formatHour(h + 1),
+        label: labelHeureSenegal(nextDate, formatHour(h)),
+        label_court: courtLabelHeureSenegal(nextDate, formatHour(h)),
+        est_minuit_culturel: true,
+        jour_tarif: jourDepuisDate(dateStr),
+        date_affichage: dateStr,
       });
     }
   }

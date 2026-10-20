@@ -365,7 +365,7 @@ export default function ScannerModal({
         if (error.code === "QR_SCAN_PRIORITY") {
           setResult({
             state: "invalid",
-            title: "QR code non reconnu",
+            title: "Un autre match d'abord",
             text: error.message || "Valide d'abord le créneau prioritaire.",
           });
           submittingRef.current = false;
@@ -400,7 +400,7 @@ export default function ScannerModal({
           triggerFlash("red");
           setResult({
             state: "invalid",
-            title: "QR code non reconnu",
+            title: "Réservation non confirmée",
             text: error.message || "Cette réservation n'est pas confirmée.",
           });
           submittingRef.current = false;
@@ -609,10 +609,91 @@ export default function ScannerModal({
     });
   };
 
-  const submitManual = () => {
-    const value = manualCode.trim();
+  /**
+   * Saisie manuelle du code TF : on ne l'envoie JAMAIS comme un QR
+   * (le back exige une signature). Résolution du code → validation manuelle.
+   */
+  const submitManual = async () => {
+    const value = manualCode.trim().toUpperCase();
     if (!value || submittingRef.current) return;
-    void submitScan(value);
+    submittingRef.current = true;
+    setSubmitting(true);
+    stopCamera();
+    try {
+      let targetId: number | string | null | undefined = isModeB ? expectedReservationId : null;
+      if (!targetId) {
+        const found = (await gerantApi.reservationByCode(value)) as { id: number };
+        targetId = found.id;
+      }
+      const payload = (await gerantApi.validationManuelle(targetId)) as {
+        reservation?: ReservationRecap;
+      };
+      triggerFlash("green");
+      setResult({ state: "success", title: "Entrée validée ✅", reservation: payload.reservation });
+      if (payload.reservation) onSuccessRef.current?.(payload.reservation);
+    } catch (err) {
+      const error = err as Error & {
+        code?: string;
+        status?: number;
+        scannable_at?: string;
+        minutes_remaining?: number;
+        match_time?: string;
+        qr_code_scanne_at?: string;
+      };
+      triggerFlash("red");
+      if (error.code === "QR_WRONG_TERRAIN") {
+        setResult({ state: "wrong_terrain", title: "Ce code ne correspond pas à ton terrain", text: error.message });
+      } else if (error.code === "QR_SCAN_TOO_EARLY") {
+        const heure = formatScannableHour(error.scannable_at);
+        setResult({
+          state: "too_early",
+          title: "C'est un peu tôt 😄",
+          text: heure ? `Ouverture du scan à ${heure}.` : error.message,
+          minutesRemaining: error.minutes_remaining,
+          scannableAt: error.scannable_at,
+        });
+      } else if (error.code === "QR_SCAN_EXPIRED") {
+        setResult({ state: "expired", title: "Fenêtre dépassée", text: error.message });
+      } else if (error.code === "QR_SCAN_PRIORITY") {
+        setResult({ state: "invalid", title: "Un autre match d'abord", text: error.message });
+      } else if (error.code === "QR_ALREADY_SCANNED" || error.status === 403) {
+        setResult({
+          state: "already_scanned",
+          title: "Ce joueur est déjà entré",
+          text: error.qr_code_scanne_at
+            ? `Premier scan : ${formatDateTime(error.qr_code_scanne_at)}`
+            : error.message,
+        });
+      } else {
+        setResult({
+          state: "invalid",
+          title: "Code non reconnu",
+          text: error.message || "Vérifie le code saisi (ex. TF-XXXXXX).",
+        });
+      }
+    }
+    submittingRef.current = false;
+    setSubmitting(false);
+  };
+
+  /** Encaissement explicite du reste après entrée validée (jamais automatique). */
+  const handleEncaisser = async (methode: "especes" | "wave" | "orange_money") => {
+    const resaId = result.reservation?.id;
+    if (!resaId || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      const payload = (await gerantApi.encaisserRestant(resaId, methode)) as {
+        reservation?: ReservationRecap;
+      };
+      const maj = { ...result.reservation, ...(payload.reservation || {}), montant_restant: 0 };
+      setResult((prev) => ({ ...prev, reservation: maj }));
+      onSuccessRef.current?.(maj);
+    } catch {
+      // Le solde reste dû — encaissable plus tard depuis la file
+    }
+    submittingRef.current = false;
+    setSubmitting(false);
   };
 
   const closeModal = () => {
@@ -770,15 +851,39 @@ export default function ScannerModal({
                   {result.reservation.heure_fin ? ` – ${formatTime(result.reservation.heure_fin)}` : ""}
                 </p>
                 {reste > 0 ? (
-                  <p
-                    className="mt-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-center"
-                    style={{
-                      background: "color-mix(in srgb, var(--color-warning) 16%, white)",
-                      color: "var(--color-warning)",
-                    }}
-                  >
-                    💵 Encaisse {formatMoney(reste)} FCFA sur place
-                  </p>
+                  <div className="mt-3 space-y-2">
+                    <p
+                      className="rounded-xl px-3 py-2.5 text-sm font-semibold text-center"
+                      style={{
+                        background: "color-mix(in srgb, var(--color-warning) 16%, white)",
+                        color: "var(--color-warning)",
+                      }}
+                    >
+                      💵 Reste à encaisser : {formatMoney(reste)} FCFA
+                    </p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          { id: "especes", label: "Espèces" },
+                          { id: "wave", label: "Wave" },
+                          { id: "orange_money", label: "Orange Money" },
+                        ] as const
+                      ).map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => void handleEncaisser(m.id)}
+                          className="min-h-[44px] rounded-xl text-xs font-semibold border border-[var(--color-primary)] text-[var(--color-primary)] disabled:opacity-50"
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-center text-[var(--color-text-muted)]">
+                      Ou ferme : le reste restera dû, encaissable plus tard.
+                    </p>
+                  </div>
                 ) : (
                   <p className="mt-3 text-sm font-medium text-center text-[var(--color-success)]">
                     ✓ Totalement payé — rien à encaisser

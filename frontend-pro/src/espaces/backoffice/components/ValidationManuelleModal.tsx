@@ -32,6 +32,7 @@ type ScanResult = {
   text?: string;
   minutesRemaining?: number;
   reservation?: {
+    id?: number;
     joueur_nom?: string;
     heure_debut?: string;
     heure_fin?: string;
@@ -96,14 +97,6 @@ function normalizeQuery(value: string) {
     .replace(/[\s.\-()]/g, "");
 }
 
-function buildManualQrPayload(resa: ManualReservation): string {
-  return JSON.stringify({
-    reservation_id: resa.id,
-    code: String(resa.code_reservation || "").toUpperCase(),
-    creneau_id: resa.creneau_id ?? null,
-    terrain_id: resa.terrain_id ?? null,
-  });
-}
 
 export default function ValidationManuelleModal({
   open,
@@ -148,22 +141,13 @@ export default function ValidationManuelleModal({
 
   const handleValidate = async () => {
     if (!selected) return;
-    if (!selected.code_reservation) {
-      setResult({
-        state: "invalid",
-        title: "❌ Impossible de valider",
-        text: "Cette réservation n'a pas de code QR. Demande au joueur de montrer le QR WhatsApp ou régénère le code.",
-      });
-      return;
-    }
 
     setBusy(true);
     try {
-      const payload = (await gerantApi.scanQr(
-        selected.id,
-        "especes",
-        buildManualQrPayload(selected),
-      )) as { reservation?: ScanResult["reservation"] };
+      // Endpoint dédié : mêmes contrôles back que le scan, sans fabriquer de QR
+      const payload = (await gerantApi.validationManuelle(selected.id)) as {
+        reservation?: ScanResult["reservation"];
+      };
 
       setResult({
         state: "success",
@@ -227,6 +211,27 @@ export default function ValidationManuelleModal({
   };
 
   const reste = Number(result.reservation?.montant_restant ?? 0);
+
+  /** Encaissement explicite du reste après entrée validée (jamais automatique). */
+  const handleEncaisser = async (methode: "especes" | "wave" | "orange_money") => {
+    const resaId = result.reservation?.id;
+    if (!resaId || busy) return;
+    setBusy(true);
+    try {
+      const payload = (await gerantApi.encaisserRestant(resaId, methode)) as {
+        reservation?: ScanResult["reservation"];
+      };
+      setResult((prev) => ({
+        ...prev,
+        reservation: { ...prev.reservation, ...(payload.reservation || {}), montant_restant: 0 },
+      }));
+      if (payload.reservation) onSuccess?.(payload.reservation);
+    } catch {
+      // Le solde reste dû — le gérant pourra réessayer depuis la file
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[85] flex flex-col justify-end bg-black/45" role="dialog" aria-modal="true">
@@ -369,15 +374,40 @@ export default function ValidationManuelleModal({
                   Match à {formatTime(result.reservation.heure_debut)}
                 </p>
                 {reste > 0 ? (
-                  <p
-                    className="rounded-xl px-3 py-2.5 text-sm font-semibold"
-                    style={{
-                      background: "color-mix(in srgb, var(--color-warning) 16%, white)",
-                      color: "var(--color-warning)",
-                    }}
-                  >
-                    💵 Encaisse {formatMoney(reste)} FCFA sur place
-                  </p>
+                  <div className="space-y-2">
+                    <p
+                      className="rounded-xl px-3 py-2.5 text-sm font-semibold"
+                      style={{
+                        background: "color-mix(in srgb, var(--color-warning) 16%, white)",
+                        color: "var(--color-warning)",
+                      }}
+                    >
+                      💵 Reste à encaisser : {formatMoney(reste)} FCFA
+                    </p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          { id: "especes", label: "Espèces" },
+                          { id: "wave", label: "Wave" },
+                          { id: "orange_money", label: "Orange Money" },
+                        ] as const
+                      ).map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleEncaisser(m.id)}
+                          className="min-h-[44px] rounded-xl text-xs font-semibold border disabled:opacity-50"
+                          style={{ borderColor: "var(--g-primary)", color: "var(--g-primary)" }}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px]" style={{ color: "var(--g-muted)" }}>
+                      Ou ferme : le reste restera dû et encaissable plus tard.
+                    </p>
+                  </div>
                 ) : (
                   <p className="text-sm font-medium text-[var(--color-success)]">
                     ✓ Totalement payé — rien à encaisser

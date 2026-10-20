@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Check, Loader2 } from "lucide-react";
 import { reservationsApi } from "@/lib/api";
 import { PageConfirmationSansAvance } from "./PageConfirmationSansAvance";
+import { useQueryClient } from "@tanstack/react-query";
+import { joueurKeys } from "@/hooks/useJoueurData";
 
 const STATUTS_CONFIRMES = new Set(["confirme", "match_joue", "joue", "acceptee"]);
 const STATUTS_ATTENTE = new Set(["en_attente", "en_attente_paiement"]);
@@ -13,6 +15,7 @@ const POLL_MAX = 50;
 const ReservationSuccess = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [reservation, setReservation] = useState<any>(null);
   const [error, setError] = useState("");
   const [showAnim, setShowAnim] = useState(true);
@@ -46,6 +49,15 @@ const ReservationSuccess = () => {
     const t = setTimeout(() => setShowAnim(false), 1500);
     return () => clearTimeout(t);
   }, []);
+
+  // Dès que la réservation est confirmée, invalider la liste « Mes réservations »
+  // pour qu'elle s'affiche immédiatement (avant, le cache local pouvait la masquer).
+  const statutReservation = String(reservation?.statut || "");
+  useEffect(() => {
+    if (STATUTS_CONFIRMES.has(statutReservation)) {
+      void queryClient.invalidateQueries({ queryKey: joueurKeys.mesReservations() });
+    }
+  }, [statutReservation, queryClient]);
 
   // Polling borné tant que le webhook PayTech n'a pas confirmé
   useEffect(() => {

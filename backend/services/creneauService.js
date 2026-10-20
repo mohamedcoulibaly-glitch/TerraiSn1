@@ -12,6 +12,8 @@ const {
   jourDepuisDate,
   addDaysYmd,
   parseEndHour,
+  parseHour,
+  formatHour,
   labelHeureSenegal,
   courtLabelHeureSenegal,
 } = require('../scheduleService');
@@ -201,26 +203,37 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
   const horaire = queryOne(database, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [terrainId, jour]);
   let planned = buildSlotsForOpenDay(dateStr, horaire);
 
-  // Minuit culturel de la veille : exposé aussi sur ce jour (même logique que /api/terrains/:id/creneaux)
+  // Nuit de la veille (minuit culturel ou fermeture après minuit) : exposer
+  // aussi sur ce jour technique les slots 00:00 → fermeture de la veille,
+  // rattachés au jour perçu de la veille (date_affichage = prevDate).
   const prevDate = addDaysYmd(dateStr, -1);
   const prevJour = jourDepuisDate(prevDate);
   const prevHoraire = queryOne(database, 'SELECT * FROM horaires WHERE terrain_id = ? AND jour = ?', [terrainId, prevJour]);
-  if (prevHoraire && Number(prevHoraire.est_ouvert) && parseEndHour(prevHoraire.heure_fin) === 24) {
-    const hasMidnight = planned.some((s) => s.date === dateStr && s.heure_debut === '00:00');
-    if (!hasMidnight) {
-      planned = [
-        {
+  if (prevHoraire && Number(prevHoraire.est_ouvert)) {
+    const prevStart = parseHour(prevHoraire.heure_debut);
+    const prevEnd = parseEndHour(prevHoraire.heure_fin);
+    // Fermeture 00:00 (=24) → seul le slot 00:00 ; overnight (ex. 02:00) → 00:00..fin
+    const queueEnd = prevEnd === 24 ? 1 : prevEnd < prevStart ? prevEnd : 0;
+    if (queueEnd > 0) {
+      const dejaLa = new Set(
+        planned.filter((s) => s.date === dateStr).map((s) => hhmm(s.heure_debut)),
+      );
+      const queue = [];
+      for (let h = 0; h < queueEnd; h += 1) {
+        const debut = formatHour(h);
+        if (dejaLa.has(debut)) continue;
+        queue.push({
           date: dateStr,
-          heure_debut: '00:00',
-          heure_fin: '01:00',
-          label: labelHeureSenegal(dateStr, '00:00'),
-          label_court: courtLabelHeureSenegal(dateStr, '00:00'),
+          heure_debut: debut,
+          heure_fin: formatHour(h + 1),
+          label: labelHeureSenegal(dateStr, debut),
+          label_court: courtLabelHeureSenegal(dateStr, debut),
           est_minuit_culturel: true,
           jour_tarif: prevJour,
           date_affichage: prevDate,
-        },
-        ...planned,
-      ];
+        });
+      }
+      if (queue.length) planned = [...queue, ...planned];
     }
   }
 

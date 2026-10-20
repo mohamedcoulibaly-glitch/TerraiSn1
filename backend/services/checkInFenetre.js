@@ -34,7 +34,9 @@ function normaliserFenetreRetard(value) {
 function calculerFenetreCheckIn({ date, heure_debut, heure_fin, fenetre_retard }) {
   const retardMin = normaliserFenetreRetard(fenetre_retard);
   const heureDebutMs = creneauStartMs(date, heure_debut);
-  const heureFinMs = creneauEndMs(date, heure_fin);
+  let heureFinMs = creneauEndMs(date, heure_fin);
+  // Créneau qui traverse minuit (ex. 23h → 00h, 22h → 01h) : la fin est le lendemain
+  if (heureFinMs <= heureDebutMs) heureFinMs += 24 * 60 * 60 * 1000;
   const debutFenetre = heureDebutMs - 60 * 60 * 1000;
   const finFenetre = heureFinMs + retardMin * 60 * 1000 + 2 * 60 * 60 * 1000;
   return { debutFenetre, finFenetre, retardMin, heureDebutMs, heureFinMs };
@@ -64,6 +66,7 @@ function assertFenetreScanQr(creneau, maintenant = Date.now()) {
     const error = new Error('La fenêtre de validation pour ce match est dépassée.');
     error.statusCode = 400;
     error.code = 'QR_SCAN_EXPIRED';
+    error.fin_fenetre = new Date(finFenetre).toISOString();
     error.match_date = creneau.date;
     error.match_time = creneau.heure_debut;
     throw error;

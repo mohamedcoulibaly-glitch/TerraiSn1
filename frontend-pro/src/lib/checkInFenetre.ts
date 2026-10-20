@@ -39,7 +39,9 @@ export function normaliserFenetreRetard(value?: number | null) {
 export function calculerFenetreCheckIn(creneau: CreneauFenetre) {
   const retardMin = normaliserFenetreRetard(creneau.fenetre_retard);
   const heureDebutMs = atDateTime(creneau.date, creneau.heure_debut);
-  const heureFinMs = atDateTime(creneau.date, creneau.heure_fin);
+  let heureFinMs = atDateTime(creneau.date, creneau.heure_fin);
+  // Créneau qui traverse minuit (23h → 00h, 22h → 01h) : fin le lendemain (aligné back)
+  if (heureFinMs <= heureDebutMs) heureFinMs += 24 * 60 * 60 * 1000;
   const debutFenetre = heureDebutMs - 60 * 60 * 1000;
   const finFenetre = heureFinMs + retardMin * 60 * 1000 + 2 * 60 * 60 * 1000;
   return { debutFenetre, finFenetre, retardMin, heureDebutMs, heureFinMs };

@@ -58,10 +58,16 @@ function encaisserSoldeSurPlace(db, reservation, gerantId, methode = 'especes') 
     [reservation.id],
   );
 
+  // Ne créer le paiement QUE si le solde a réellement été soldé par cet appel
+  // (avant, l'INSERT partait même quand l'UPDATE n'avait rien modifié, et la
+  // référence horodatée empêchait toute déduplication).
+  const { rowsModified } = require('../reservationLockService');
+  if (rowsModified(db) !== 1) return 0;
+
   db.run(
     `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe)
      VALUES (?, ?, ?, 'paye', ?)`,
-    [reservation.id, solde, methode, `SOLDE-${reservation.id}-${Date.now()}`],
+    [reservation.id, solde, methode, `SOLDE-${reservation.id}`],
   );
 
   return solde;

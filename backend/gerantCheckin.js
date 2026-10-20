@@ -94,14 +94,15 @@ function mapReservationGerantRow(row) {
   };
 }
 
-async function marquerReservationJouee({ db, reservation, gerantId, methode }) {
+async function marquerReservationJouee({ db, reservation, gerantId, methode, encaisser = true }) {
   const solde = Number(reservation.reste_a_payer ?? reservation.montant_restant ?? 0);
   const avancePayee = Number(reservation.montant_avance ?? reservation.acompte ?? 0);
   transaction(db, () => {
+    // L'entrée est validée dans tous les cas ; le solde n'est soldé que si le
+    // gérant a explicitement confirmé l'encaissement (jamais en silence).
     db.run(`UPDATE reservations
       SET statut = 'match_joue',
-          reste_a_payer = 0,
-          montant_restant = 0,
+          ${encaisser ? 'reste_a_payer = 0, montant_restant = 0,' : ''}
           qr_code_scanne_at = COALESCE(qr_code_scanne_at, CURRENT_TIMESTAMP),
           checked_in_at = COALESCE(checked_in_at, CURRENT_TIMESTAMP),
           operational_stage = CASE
@@ -115,17 +116,63 @@ async function marquerReservationJouee({ db, reservation, gerantId, methode }) {
       throw error;
     }
     db.run(`INSERT INTO matchs (reservation_id, terrain_id, gerant_id, montant_total, acompte_paye, solde_paye, methode_solde)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`, [reservation.id, reservation.terrain_id, gerantId, reservation.prix_total || reservation.montant, avancePayee, solde, methode]);
+      VALUES (?, ?, ?, ?, ?, ?, ?)`, [reservation.id, reservation.terrain_id, gerantId, reservation.prix_total || reservation.montant, avancePayee, encaisser ? solde : 0, methode]);
     if (reservation.creneau_id) {
       db.run(`UPDATE creneaux SET statut = 'joue' WHERE id = ?`, [reservation.creneau_id]);
     }
-    if (solde > 0) {
+    if (encaisser && solde > 0) {
       encaisserSoldeSurPlace(db, reservation, gerantId, methode);
     }
   });
 }
 
-async function traiterScanQrReservation(req, res) {
+/**
+ * Règle « un seul créneau à la fois », tranchée CÔTÉ SERVEUR :
+ * parmi les réservations confirmées non scannées du terrain dont la fenêtre
+ * de scan est ouverte, la prioritaire est celle qui commence le plus tôt.
+ */
+function prioriteScanDuMoment(db, terrainId, maintenant = Date.now()) {
+  const rows = queryAll(db, `
+    SELECT r.id, r.date, r.heure_debut, r.heure_fin,
+           COALESCE(r.joueur_nom, u.nom) AS joueur_nom,
+           COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
+    FROM reservations r
+    LEFT JOIN users u ON u.id = r.joueur_id
+    LEFT JOIN creneaux c ON c.id = r.creneau_id
+    WHERE r.terrain_id = ? AND r.statut = 'confirme' AND r.qr_code_scanne_at IS NULL
+  `, [terrainId]);
+  const ouvertes = rows
+    .map((row) => ({
+      row,
+      fenetre: calculerFenetreCheckIn({
+        date: row.date,
+        heure_debut: row.heure_debut,
+        heure_fin: row.heure_fin,
+        fenetre_retard: row.fenetre_retard,
+      }),
+    }))
+    .filter(({ fenetre }) => maintenant >= fenetre.debutFenetre && maintenant <= fenetre.finFenetre)
+    .sort((a, b) => a.fenetre.heureDebutMs - b.fenetre.heureDebutMs || a.row.id - b.row.id);
+  return ouvertes[0]?.row || null;
+}
+
+/** Pose scannable_now (+ infos priorité) sur des lignes déjà mappées. */
+function annoterPrioriteScan(db, terrainId, mappedRows) {
+  const priorite = prioriteScanDuMoment(db, terrainId);
+  for (const row of mappedRows) {
+    if (!priorite || Number(row.id) === Number(priorite.id) || row.qr_code_scanne_at || row.statut !== 'confirme') {
+      row.scannable_now = true;
+      continue;
+    }
+    row.scannable_now = false;
+    row.priorite_reservation_id = priorite.id;
+    row.priorite_heure = String(priorite.heure_debut || '').slice(0, 5);
+    row.priorite_joueur = priorite.joueur_nom || null;
+  }
+  return mappedRows;
+}
+
+async function traiterScanQrReservation(req, res, { manuelle = false } = {}) {
   try {
     const db = await getDb();
     const reservationId = Number(req.params.id);
@@ -160,27 +207,39 @@ async function traiterScanQrReservation(req, res) {
     }
     if (reservation.statut !== 'confirme') {
       return res.status(400).json({
-        error: "Cette réservation n'est pas dans un état valide.",
+        error: `Cette réservation n'est pas confirmée (statut : ${reservation.statut}). Seule une réservation confirmée peut être validée.`,
         code: 'QR_BAD_STATUS',
+        statut: reservation.statut,
       });
     }
 
-    const rawQr = req.body?.qr_data ?? req.body?.qrData ?? req.body?.raw_qr ?? null;
-    if (!rawQr) {
-      return res.status(400).json({
-        error: 'QR code non reconnu. Demande au joueur de montrer celui reçu par WhatsApp.',
-        code: 'QR_MISSING',
-      });
-    }
-    let parsed;
-    try {
-      parsed = assertScanSignature(rawQr);
-      assertQrMatchesReservation(parsed, reservation);
-    } catch (qrErr) {
-      return res.status(qrErr.statusCode || 400).json({
-        error: qrErr.message,
-        code: qrErr.code,
-      });
+    // En validation manuelle, le gérant authentifié valide depuis la fiche :
+    // pas de QR à vérifier, mais terrain/statut/fenêtre/priorité restent exigés.
+    let parsed = null;
+    if (!manuelle) {
+      const rawQr = req.body?.qr_data ?? req.body?.qrData ?? req.body?.raw_qr ?? null;
+      if (!rawQr) {
+        return res.status(400).json({
+          error: 'QR code non reconnu. Demande au joueur de montrer celui reçu par WhatsApp.',
+          code: 'QR_MISSING',
+        });
+      }
+      try {
+        parsed = assertScanSignature(rawQr);
+        assertQrMatchesReservation(parsed, reservation);
+      } catch (qrErr) {
+        return res.status(qrErr.statusCode || 400).json({
+          error: qrErr.message,
+          code: qrErr.code,
+        });
+      }
+      // Le QR a une durée de vie : après la fin de fenêtre il ne doit plus servir
+      if (parsed.expire_at && Number(parsed.expire_at) * 1000 < Date.now()) {
+        return res.status(400).json({
+          error: 'Ce QR code a expiré. La fenêtre de validation de ce match est terminée.',
+          code: 'QR_PAYLOAD_EXPIRED',
+        });
+      }
     }
 
     assertFenetreScanQr({
@@ -190,11 +249,34 @@ async function traiterScanQrReservation(req, res) {
       fenetre_retard: reservation.fenetre_retard,
     });
 
+    // Un seul créneau à la fois : si un match plus tôt attend son scan, il passe d'abord
+    const priorite = prioriteScanDuMoment(db, terrainId);
+    if (priorite && Number(priorite.id) !== Number(reservation.id)) {
+      return res.status(409).json({
+        error: `Scanne d'abord le match de ${String(priorite.heure_debut || '').slice(0, 5).replace(':', 'h')}${priorite.joueur_nom ? ` (${priorite.joueur_nom})` : ''} — un seul créneau à la fois.`,
+        code: 'QR_SCAN_PRIORITY',
+        priorite_reservation_id: priorite.id,
+        priorite_heure: String(priorite.heure_debut || '').slice(0, 5),
+        priorite_joueur: priorite.joueur_nom || null,
+      });
+    }
+
     const methode = ['especes', 'wave', 'orange_money'].includes(req.body?.methode) ? req.body.methode : 'especes';
     const montantRestantAvant = Number(
       reservation.reste_a_payer ?? reservation.montant_restant ?? 0,
     );
-    await marquerReservationJouee({ db, reservation, gerantId: req.user.id, methode });
+    // Encaissement EXPLICITE uniquement : le scan valide l'entrée, il ne solde
+    // le reste que si le gérant l'a confirmé (encaisser_solde === true, après
+    // choix montant + méthode côté front). Sinon le solde reste dû et
+    // s'encaisse via POST /gerant/reservations/:id/encaisser.
+    const encaisserSolde = req.body?.encaisser_solde === true;
+    await marquerReservationJouee({
+      db,
+      reservation,
+      gerantId: req.user.id,
+      methode,
+      encaisser: encaisserSolde,
+    });
     notifyTerrain(reservation.terrain_id, 'checkin', { reservation_id: reservation.id });
     // Canal SSE gérant typé : le dashboard passe la résa en « en cours » sans refresh
     try {
@@ -208,9 +290,9 @@ async function traiterScanQrReservation(req, res) {
     await logActivite({
       gerant_id: req.user.id,
       terrain_id: reservation.terrain_id,
-      action: 'qr_scanne',
+      action: manuelle ? 'validation_manuelle' : 'qr_scanne',
       reservation_id: reservation.id,
-      details: { methode, qr_format: parsed.format },
+      details: { methode, qr_format: parsed?.format || 'manuel', encaisser_solde: encaisserSolde },
     }).catch((error) => logger.error('gerantCheckin.js', 'Log activite qr_scanne', error));
     await scoreService.recalculerScore(req.user.id, reservation.terrain_id)
       .catch((error) => logger.error('gerantCheckin.js', 'Recalcul score scan QR', error));
@@ -250,8 +332,11 @@ async function traiterScanQrReservation(req, res) {
         code_reservation: updated.code_reservation,
         statut: updated.statut,
         qr_code_scanne_at: updated.qr_code_scanne_at,
-        // Solde dû avant encaissement scan (pour UX « Encaisse X FCFA sur place »)
-        montant_restant: montantRestantAvant,
+        // montant_restant = état APRÈS validation (source de vérité pour l'UI)
+        montant_restant: Number(updated.montant_restant ?? updated.reste_a_payer ?? 0),
+        // Solde dû avant validation (pour UX « Encaisse X FCFA sur place »)
+        montant_restant_avant: montantRestantAvant,
+        solde_encaisse: encaisserSolde && montantRestantAvant > 0,
       },
     });
   } catch (err) {
@@ -278,6 +363,19 @@ function mountGerantCheckinRoutes(app) {
 
   app.post('/api/reservations/:id(\\d+)/scan-qr', authMiddleware, requireRole('gerant'), traiterScanQrReservation);
   app.patch('/api/gerant/reservations/:id/scanner', authMiddleware, requireRole('gerant'), traiterScanQrReservation);
+
+  /**
+   * Validation manuelle (joueur sans batterie / QR illisible / saisie du code) :
+   * mêmes contrôles que le scan (terrain, statut, fenêtre, priorité) mais sans
+   * exiger un QR signé — le gérant authentifié valide depuis la fiche.
+   * Avant, le front fabriquait un QR non signé, rejeté à 100 %.
+   */
+  app.post(
+    '/api/gerant/reservations/:id(\\d+)/validation-manuelle',
+    authMiddleware,
+    requireRole('gerant'),
+    (req, res) => traiterScanQrReservation(req, res, { manuelle: true }),
+  );
 
   /** Mode A : résolution d'un code TF-… vers un id (terrain du gérant). */
   app.get('/api/gerant/reservations/by-code/:code', authMiddleware, requireRole('gerant'), async (req, res) => {
@@ -467,7 +565,24 @@ function mountGerantCheckinRoutes(app) {
       if (!terrainId) return res.status(400).json({ error: 'Aucun terrain associé à ce gérant' });
 
       const dateParam = typeof req.query.date === 'string' ? req.query.date.trim() : '';
-      const date = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : localDateYmd();
+      // Jour PERÇU (culturel) : avant 05:00, on est encore dans la nuit de la veille.
+      // Le jour perçu couvre [jour 05:00 → lendemain 04:59] : une résa stockée
+      // avec la date technique du lendemain à 01:00 appartient à la file de la veille.
+      let date;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+        date = dateParam;
+      } else {
+        const now = new Date();
+        date = localDateYmd(now);
+        if (now.getHours() < 5) {
+          const hier = new Date(now);
+          hier.setDate(hier.getDate() - 1);
+          date = localDateYmd(hier);
+        }
+      }
+      const lendemainDate = new Date(`${date}T12:00:00`);
+      lendemainDate.setDate(lendemainDate.getDate() + 1);
+      const lendemain = localDateYmd(lendemainDate);
 
       const terrain = queryOne(db, 'SELECT id, nom FROM terrains WHERE id = ?', [terrainId]);
       if (!terrain) return res.status(404).json({ error: 'Terrain non trouvé' });
@@ -483,7 +598,10 @@ function mountGerantCheckinRoutes(app) {
         LEFT JOIN users u ON u.id = r.joueur_id
         LEFT JOIN creneaux c ON c.id = r.creneau_id
         WHERE r.terrain_id = ?
-          AND r.date = ?
+          AND (
+            (r.date = ? AND CAST(SUBSTR(r.heure_debut, 1, 2) AS INTEGER) >= 5)
+            OR (r.date = ? AND CAST(SUBSTR(r.heure_debut, 1, 2) AS INTEGER) < 5)
+          )
           AND (
             r.statut IN ('confirme', 'match_joue', 'joue')
             OR (
@@ -492,14 +610,14 @@ function mountGerantCheckinRoutes(app) {
               AND r.verrou_expire_at > ?
             )
           )
-        ORDER BY r.heure_debut ASC, r.heure_fin ASC
-      `, [terrainId, date, Date.now()]);
+        ORDER BY CASE WHEN r.date = ? THEN 0 ELSE 1 END, r.heure_debut ASC, r.heure_fin ASC
+      `, [terrainId, date, lendemain, Date.now(), date]);
 
       res.json({
         date,
         terrain_id: terrain.id,
         terrain_nom: terrain.nom,
-        reservations: rows.map(mapReservationGerantRow),
+        reservations: annoterPrioriteScan(db, terrainId, rows.map(mapReservationGerantRow)),
       });
     } catch (err) {
       console.error(err);
@@ -569,7 +687,7 @@ function mountGerantCheckinRoutes(app) {
       `, [Number(req.params.id), terrainId]);
 
       if (!row) return res.status(404).json({ error: 'Reservation non trouvee' });
-      res.json(mapReservationGerantRow(row));
+      res.json(annoterPrioriteScan(db, terrainId, [mapReservationGerantRow(row)])[0]);
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Erreur serveur' });

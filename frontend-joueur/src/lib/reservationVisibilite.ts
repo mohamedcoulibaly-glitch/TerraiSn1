@@ -1,6 +1,11 @@
-const STATUTS_INVISIBLES = new Set(["expire", "en_attente", "en_attente_paiement"]);
+const STATUTS_INVISIBLES = new Set(["expire"]);
 
-/** Une carte joueur n'existe qu'après paiement confirmé (US-04). */
+/**
+ * La carte existe dès la création (badge « Paiement en cours » tant que
+ * l'IPN n'a pas confirmé) — sinon le joueur qui vient de payer ne retrouve
+ * pas sa réservation. Le QR/code restent masqués avant confirmation (US-17).
+ * Seules les réservations expirées (verrou abandonné) sont invisibles.
+ */
 export function reservationVisibleJoueur(reservation: { statut?: string | null } | null | undefined): boolean {
   return !STATUTS_INVISIBLES.has(String(reservation?.statut || ""));
 }

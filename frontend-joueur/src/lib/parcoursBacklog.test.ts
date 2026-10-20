@@ -5,9 +5,9 @@ import { isMobileWhatsApp, whatsAppHref } from "./openWhatsapp";
 import { reservationHasStadiumAccess } from "./offlineStore";
 
 describe("parcours front backlog", () => {
-  it("US-04 masque la carte tant que le paiement n'est pas confirmé", () => {
-    expect(reservationVisibleJoueur({ statut: "en_attente_paiement" })).toBe(false);
-    expect(reservationVisibleJoueur({ statut: "en_attente" })).toBe(false);
+  it("US-04 montre la carte dès la création (badge paiement en cours), expire reste invisible", () => {
+    expect(reservationVisibleJoueur({ statut: "en_attente_paiement" })).toBe(true);
+    expect(reservationVisibleJoueur({ statut: "en_attente" })).toBe(true);
     expect(reservationVisibleJoueur({ statut: "expire" })).toBe(false);
     expect(reservationVisibleJoueur({ statut: "confirme" })).toBe(true);
   });

@@ -53,9 +53,11 @@ const Payment = () => {
   const [canal, setCanal] = useState<"wave" | "orange_money" | "">("");
   const deposit = calculerMontantAvance(montant, terrain?.pourcentage_avance);
   const reste = Math.max(0, montant - deposit);
-  const sansAvance = ["sans_avance", "sans_acompte"].includes(
-    String(terrain?.politique_paiement || "").trim(),
-  );
+  // Politique sans avance OU avance inexigible (0 FCFA) : confirmation directe,
+  // jamais de « Payer 0 FCFA » (le back requalifie de son côté aussi).
+  const sansAvance =
+    ["sans_avance", "sans_acompte"].includes(String(terrain?.politique_paiement || "").trim()) ||
+    deposit <= 0;
   const enLigneIndispo = Boolean(terrain?.en_ligne_indisponible);
   const gerantTelHref =
     terrain?.gerant_tel_href ||

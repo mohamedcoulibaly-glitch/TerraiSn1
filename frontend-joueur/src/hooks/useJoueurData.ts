@@ -136,7 +136,9 @@ export function useMesReservations(enabled = true) {
     initialDataUpdatedAt: cached?.at,
     staleTime: RESA_STALE_MS,
     gcTime: GC_MS,
-    refetchOnWindowFocus: false,
+    // Retour depuis PayTech (app externe) = focus fenêtre → refetch immédiat,
+    // sinon la résa fraîchement confirmée peut manquer à l'écran (cache local).
+    refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     placeholderData: (prev) => prev,
   });
