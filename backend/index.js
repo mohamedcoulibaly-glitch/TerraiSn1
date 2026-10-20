@@ -4463,6 +4463,14 @@ async function start() {
   } catch (error) {
     logger.warn('index.js', `ensure Mohamed: ${error.message}`);
   }
+  // Seed persistant joueur Babacar Sene (75 014 71 38) : recréé à chaque boot,
+  // même avec SKIP_SEED=true, pour survivre à la DB éphémère Render free.
+  try {
+    const { ensureBabacarJoueur } = require('./scripts/ensure-babacar-joueur');
+    await ensureBabacarJoueur({ db, silent: true });
+  } catch (error) {
+    logger.warn('index.js', `Seed joueur Babacar: ${error.message}`);
+  }
   programmerResumeHebdomadaire();
   programmerSurveillanceConfiance();
   programmerRappelsReservations();

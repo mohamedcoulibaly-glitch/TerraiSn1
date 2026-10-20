@@ -10,6 +10,7 @@
     "seed": "node seed.js",
     "seed:demo": "node scripts/seed_commodites_demo.js",
     "seed:mohamed": "node scripts/seed-mohamed.js",
+    "seed:babacar-joueur": "node scripts/ensure-babacar-joueur.js",
     "migrate": "node scripts/migrate.js",
     "setup": "node scripts/migrate.js && node seed.js",
     "whatsapp:test": "node scripts/test-whatsapp.js",

@@ -154,6 +154,10 @@ async function seed() {
   // Arena Mohamed + contrat + résas TF-MOH-* (upsert sur les comptes déjà insérés)
   await ensureMohamedAccounts({ db, silent: false });
 
+  // Joueur seed persistant Babacar Sene (75 014 71 38)
+  const { ensureBabacarJoueur } = require('./scripts/ensure-babacar-joueur');
+  await ensureBabacarJoueur({ db, silent: false });
+
   console.log('✅ Seeding terminé avec succès !');
   console.log(`   Comptes Mohamed : email + mdp ${DEMO_PASSWORD} (ne pas se connecter au téléphone partagé ${MOHAMED_PHONE_RAW})`);
 }
