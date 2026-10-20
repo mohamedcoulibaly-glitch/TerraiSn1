@@ -6,7 +6,7 @@ const whatsappManager = require('./services/whatsappManager');
 const { getDb, queryOne, runSql } = require('./database');
 const { masquerNumero } = require('./services/calculsPaiement');
 const { UPLOAD_ROOT } = require('./terrainPhotoService');
-const { signQrPayload } = require('./domain/qrSignature');
+const { signQrPayload, verifyQrPayload } = require('./domain/qrSignature');
 const { calculerFenetreCheckIn, DEFAULT_FENETRE_RETARD_MIN } = require('./services/checkInFenetre');
 
 /** Session plateforme (OTP, admin, notifs → gérants/proprios) */
@@ -222,47 +222,124 @@ async function assurerQrCodeUrl(reservationId) {
     [reservationId]
   );
   if (!row) return null;
-  if (row.qr_code_url) return row.qr_code_url;
   if (!row.code_reservation) return null;
 
-  const fenetre = calculerFenetreCheckIn({
-    date: row.date,
-    heure_debut: row.heure_debut,
-    heure_fin: row.heure_fin,
-    fenetre_retard: row.fenetre_retard,
-  });
-  // Le QR doit TOUJOURS être signé (HMAC) : le scan gérant rejette tout
-  // payload non signé. Un payload stocké legacy non signé est régénéré signé.
-  const payloadStocke = String(row.qr_code_payload || '');
-  const payload = payloadStocke.includes('"sig"')
-    ? payloadStocke
-    : signQrPayload({
-        reservation_id: row.id,
-        code: row.code_reservation,
-        creneau_id: row.creneau_id,
-        terrain_id: row.terrain_id,
-        expire_at: Math.floor(fenetre.finFenetre / 1000),
-      });
-
   const dir = path.join(UPLOAD_ROOT, 'qr');
-  fs.mkdirSync(dir, { recursive: true });
   const safeCode = String(row.code_reservation).replace(/[^a-zA-Z0-9_-]/g, '_');
   const filename = `${safeCode}.png`;
   const absolute = path.join(dir, filename);
-  await QRCode.toFile(absolute, payload, {
-    type: 'png',
-    width: 480,
-    margin: 2,
-    errorCorrectionLevel: 'M',
-  });
   const publicUrl = `/uploads/qr/${filename}`;
-  // Persiste le payload réellement encodé dans le PNG (régénère les legacy non signés)
-  runSql(db, 'UPDATE reservations SET qr_code_url = ?, qr_code_payload = ? WHERE id = ?', [
-    publicUrl,
-    payload,
-    reservationId,
-  ]);
+
+  // Le QR doit TOUJOURS être signé (HMAC) et associé à CETTE réservation :
+  // on vérifie la signature ET la correspondance (reservation_id, code,
+  // terrain). Un payload legacy non signé, ou associé à un autre code,
+  // est régénéré — sinon le scan gérant rejette le QR du joueur.
+  const payloadStocke = String(row.qr_code_payload || '');
+  const verif = payloadStocke ? verifyQrPayload(payloadStocke) : { ok: false };
+  const payloadOk = Boolean(
+    verif.ok
+      && verif.reservation_id === Number(row.id)
+      && verif.code === String(row.code_reservation).toUpperCase()
+      && verif.terrain_id === Number(row.terrain_id),
+  );
+  let payload = payloadStocke;
+  if (!payloadOk) {
+    const fenetre = calculerFenetreCheckIn({
+      date: row.date,
+      heure_debut: row.heure_debut,
+      heure_fin: row.heure_fin,
+      fenetre_retard: row.fenetre_retard,
+    });
+    payload = signQrPayload({
+      reservation_id: row.id,
+      code: row.code_reservation,
+      creneau_id: row.creneau_id,
+      terrain_id: row.terrain_id,
+      expire_at: Math.floor(fenetre.finFenetre / 1000),
+    });
+  }
+
+  // Ne jamais faire confiance à la seule URL en base : sur un disque
+  // éphémère (Render), le PNG peut avoir disparu alors que qr_code_url
+  // subsiste → l'URL publique renvoyait 404 et le joueur n'avait aucun QR.
+  const fichierPresent = fs.existsSync(absolute) && fs.statSync(absolute).size > 0;
+  if (!fichierPresent) {
+    fs.mkdirSync(dir, { recursive: true });
+    await QRCode.toFile(absolute, payload, {
+      type: 'png',
+      width: 480,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+    });
+  }
+  if (!payloadOk || row.qr_code_url !== publicUrl) {
+    // Persiste le payload réellement encodé dans le PNG.
+    runSql(db, 'UPDATE reservations SET qr_code_url = ?, qr_code_payload = ? WHERE id = ?', [
+      publicUrl,
+      payload,
+      reservationId,
+    ]);
+  }
   return publicUrl;
+}
+
+/** URL publique absolue d'un QR (lien ouvrable depuis un téléphone). */
+function qrImagePublicUrl(qrUrl) {
+  const raw = String(qrUrl || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const domain = String(process.env.APP_DOMAIN || '').replace(/\/$/, '');
+  const rel = raw.startsWith('/') ? raw : `/${raw}`;
+  return domain ? `${domain}${rel}` : rel;
+}
+
+/**
+ * Envoie le QR d'une réservation par WhatsApp.
+ * 1) Image native (base64 via OpenWA) — mode 'image'.
+ * 2) Si le moteur média OpenWA refuse (ex. 502 SEND_FAILED côté
+ *    whatsapp-web.js hébergé), repli PROPRE : un texte avec le lien
+ *    public de l'image. Jamais de marqueur technique type [IMAGE_QR]
+ *    envoyé tel quel au joueur, et pas de job de rejeu « image »
+ *    rejoué en texte brut.
+ */
+async function envoyerQrCodeWhatsApp({ telephone, sessionKey, codeReservation, qrUrl, reservationId } = {}) {
+  if (!telephone || !qrUrl) return { ok: false, skipped: true, reason: 'qr_ou_telephone_manquant' };
+  if (sessionKey === null) {
+    console.warn('[Notif] QR non envoyé — session WhatsApp gérant indisponible');
+    return { ok: false, skipped: true, reason: 'session_indisponible' };
+  }
+  const key = sessionKey || SESSION_PLATFORM;
+  const caption = `QR ${codeReservation || ''}`.trim();
+  const relative = String(qrUrl).replace(/^\/uploads\//, '');
+  const absolutePath = path.join(UPLOAD_ROOT, relative);
+  const isMock = String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true';
+
+  if (!isMock && fs.existsSync(absolutePath)) {
+    try {
+      const res = await client.sendImageForSession(key, formatNumero(telephone), {
+        filePath: absolutePath,
+        mimetype: 'image/png',
+        caption,
+      });
+      return { ok: true, mode: 'image', messageId: res?.messageId || null };
+    } catch (error) {
+      console.warn(
+        `[Notif] Image QR ${codeReservation || ''} refusée par OpenWA (${error.message}) → repli lien public`,
+      );
+    }
+  }
+
+  const lien = qrImagePublicUrl(qrUrl);
+  const texte =
+    `📷 *${caption}*\n` +
+    `Ouvre ce lien pour afficher ton QR code, puis présente-le à l'entrée (usage unique) :\n${lien}`;
+  const resTexte = await envoyerWhatsApp(telephone, texte, key, {
+    type: 'qr_lien',
+    destinataire_type: 'joueur',
+    destinataire_id: 0,
+    idempotency_key: reservationId ? `qr-lien:${reservationId}` : undefined,
+  });
+  return { ...resTexte, mode: resTexte?.ok ? 'lien' : 'echec' };
 }
 
 /** Template 1 — OTP inscription (toujours superadmin / platform) */
@@ -351,39 +428,19 @@ async function envoyerConfirmation(reservationId) {
   });
 
   if (waKey && data.qr_code_url) {
-    const domain = (process.env.APP_DOMAIN || 'http://localhost:8080').replace(/\/$/, '');
-    const relative = String(data.qr_code_url).replace(/^\/uploads\//, '');
-    const absolutePath = path.join(UPLOAD_ROOT, relative);
-    const caption = `QR ${data.code_reservation}`;
-
-    if (fs.existsSync(absolutePath) && String(process.env.WHATSAPP_MOCK).toLowerCase() !== 'true') {
-      try {
-        await client.sendImageForSession(waKey, formatNumero(tel), {
-          filePath: absolutePath,
-          mimetype: 'image/png',
-          caption,
-        });
-      } catch (error) {
-        try {
-          const retryQueue = require('./services/notificationRetryQueue');
-          await retryQueue.enfiler({
-            telephone: tel,
-            message: `[IMAGE_QR] ${caption} ${data.qr_code_url}`,
-            session_key: waKey,
-            type: 'image_qr',
-            erreur: error.message || String(error),
-            http_status: error.statusCode || error.status || 500,
-          });
-        } catch {
-          // best-effort
-        }
-      }
-    } else {
-      const imageUrl = data.qr_code_url.startsWith('http')
-        ? data.qr_code_url
-        : `${domain}${data.qr_code_url}`;
-      await envoyerImageWhatsApp(tel, imageUrl, caption, waKey);
-    }
+    // Image native d'abord ; repli lien public propre si le moteur média
+    // OpenWA est indisponible. Aucun job « [IMAGE_QR] … » en file : c'est
+    // ce marqueur, rejoué en texte brut, que le joueur recevait avant.
+    await envoyerQrCodeWhatsApp({
+      telephone: tel,
+      sessionKey: waKey,
+      codeReservation: data.code_reservation,
+      qrUrl: data.qr_code_url,
+      reservationId,
+    }).catch((error) => {
+      console.warn(`[Notif] Envoi QR résa #${reservationId} :`, error.message);
+      return { ok: false, mode: 'echec', error };
+    });
   }
 
   // Notifications AU gérant → toujours platform (jamais depuis son propre numéro)
@@ -671,6 +728,8 @@ module.exports = {
   envoyerWhatsApp,
   envoyerImageWhatsApp,
   assurerQrCodeUrl,
+  envoyerQrCodeWhatsApp,
+  qrImagePublicUrl,
   envoyerOTP,
   envoyerLienPaiement,
   envoyerConfirmation,

@@ -389,7 +389,15 @@ function initDb(database) {
      ORDER BY p.id DESC LIMIT 1
   ) WHERE confirme_at IS NULL AND statut IN ('confirme', 'acceptee', 'match_joue', 'joue')`);
   database.run('UPDATE reservations SET montant_restant = reste_a_payer WHERE montant_restant IS NULL AND reste_a_payer IS NOT NULL');
-  database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_code ON reservations(code_reservation)');
+  // Unicité du code de réservation (= nom du fichier QR TF-xxxxxx.png) :
+  // deux réservations ne peuvent jamais partager le même QR. En try/catch
+  // pour ne pas bloquer le démarrage sur une base historique avec doublons
+  // (dans ce cas, genererCodeReservation continue de garantir l'unicité).
+  try {
+    database.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_code ON reservations(code_reservation)');
+  } catch (err) {
+    console.warn('Index unique code_reservation non créé (doublons historiques ?):', err.message);
+  }
   database.run('CREATE INDEX IF NOT EXISTS idx_users_telephone ON users(telephone)');
   database.run('CREATE INDEX IF NOT EXISTS idx_reservations_creneau ON reservations(creneau_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_reservations_statut ON reservations(statut)');

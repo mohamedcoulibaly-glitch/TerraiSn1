@@ -4667,6 +4667,32 @@ async function start() {
             }
             return;
           }
+          // Jobs image (dont les anciens « [IMAGE_QR] QR TF-… /uploads/… ») :
+          // ne JAMAIS les rejouer en texte brut — c'est ce que recevait le
+          // joueur. On résout la réservation (idempotency_key ou code TF-…)
+          // et on repasse par envoyerConfirmation, qui tente l'image native
+          // puis le repli lien propre.
+          const messageJob = String(job.message || '');
+          if (job.type === 'image_qr' || job.type === 'image' || /^\[IMAGE(_QR)?\]/.test(messageJob)) {
+            const cleId = /^image_qr:(\d+)$/.exec(String(job.idempotency_key || ''));
+            const codeMatch = /\b(TF-\d+)\b/.exec(messageJob);
+            let reservationId = cleId ? Number(cleId[1]) : 0;
+            if (!reservationId && codeMatch) {
+              const dbRetry = await getDb();
+              const row = queryOne(dbRetry, 'SELECT id FROM reservations WHERE code_reservation = ? LIMIT 1', [codeMatch[1]]);
+              reservationId = Number(row?.id || 0);
+            }
+            if (!reservationId) {
+              throw new Error('Job image WhatsApp sans réservation identifiable — abandon sans envoi texte');
+            }
+            const result = await notificationService.envoyerConfirmation(reservationId);
+            if (!result?.ok || result?.mocked) {
+              const err = new Error(result?.error?.message || 'Rejeu QR WhatsApp échoué');
+              err.statusCode = 503;
+              throw err;
+            }
+            return;
+          }
           if (job.type === 'lien_paiement' && job.destinataire_id && !String(job.message || '').includes('http')) {
             const result = await notificationService.envoyerLienPaiement(job.destinataire_id);
             if (!result?.ok || result?.mocked) {

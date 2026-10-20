@@ -1163,8 +1163,9 @@ async function sendTextForSessionOnce(key, chatId, text) {
     err.statusCode = 503;
     throw err;
   }
+  let result = null;
   try {
-    await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-text`, {
+    result = await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-text`, {
       chatId,
       text: String(text || ''),
     });
@@ -1174,7 +1175,7 @@ async function sendTextForSessionOnce(key, chatId, text) {
       state.ready = false;
       await ensureReadyForSend(state);
       if (!state.ready || !state.openwaId) throw err;
-      await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-text`, {
+      result = await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-text`, {
         chatId,
         text: String(text || ''),
       });
@@ -1182,7 +1183,14 @@ async function sendTextForSessionOnce(key, chatId, text) {
       throw err;
     }
   }
-  return { mock: false, phone: state.connectedPhone, session: state.key, provider: 'openwa' };
+  return {
+    mock: false,
+    phone: state.connectedPhone,
+    session: state.key,
+    provider: 'openwa',
+    messageId: result?.messageId || null,
+    timestamp: result?.timestamp || null,
+  };
 }
 
 /**
@@ -1239,19 +1247,48 @@ async function sendImageForSessionOnce(key, chatId, media = {}) {
     throw new Error('Image WhatsApp: url, base64 ou filePath requis');
   }
 
+  let result = null;
   try {
-    await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-image`, body);
+    result = await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-image`, body);
   } catch (err) {
     if ([400, 404, 409, 500, 502, 503].includes(Number(err.statusCode))) {
       state.ready = false;
       await ensureReadyForSend(state);
-      if (!state.ready || !state.openwaId) throw err;
-      await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-image`, body);
+      if (!state.ready || !state.openwaId) throw marquerEchecMedia(err);
+      try {
+        result = await openwaRequest('POST', `/sessions/${state.openwaId}/messages/send-image`, body);
+      } catch (retryErr) {
+        throw marquerEchecMedia(retryErr);
+      }
     } else {
-      throw err;
+      throw marquerEchecMedia(err);
     }
   }
-  return { mock: false, phone: state.connectedPhone, session: state.key, provider: 'openwa' };
+  return {
+    mock: false,
+    phone: state.connectedPhone,
+    session: state.key,
+    provider: 'openwa',
+    messageId: result?.messageId || null,
+    timestamp: result?.timestamp || null,
+  };
+}
+
+/**
+ * Le moteur whatsapp-web.js hébergé peut refuser TOUT envoi média
+ * (502 SEND_FAILED, ex. « Data passed to getter must include an id… »)
+ * alors que le texte passe. On marque ces erreurs pour que l'appelant
+ * bascule sur un repli (lien public) au lieu de réessayer en boucle.
+ */
+function marquerEchecMedia(err) {
+  if (err && typeof err === 'object') {
+    const code = String(err.payload?.error || err.payload?.code || '');
+    if (code === 'SEND_FAILED' || Number(err.statusCode) === 502) {
+      err.mediaEngineFailed = true;
+      err.code = 'OPENWA_MEDIA_SEND_FAILED';
+    }
+  }
+  return err;
 }
 
 /**
