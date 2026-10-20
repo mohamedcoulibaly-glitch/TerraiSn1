@@ -21,8 +21,6 @@ function assert(name, cond) {
 
 assert('gerantSessionKey(7)', whatsappClient.gerantSessionKey(7) === 'gerant:7');
 assert('gerantSessionKey invalid', whatsappClient.gerantSessionKey(0) == null);
-assert('sessionKeyFromReservation', sessionKeyFromReservation({ gerant_id: 3 }) === 'gerant:3');
-assert('sessionKey fallback platform', sessionKeyFromReservation({}) === 'platform');
 assert('reservationIdDepuisReference', reservationIdDepuisReference('TF-88-171000') === 88);
 assert('montant IPN coherent', montantIpnCoherent({ montant_avance: 5000 }, { final_item_price: 5000 }));
 assert('montant IPN incoherent', !montantIpnCoherent({ montant_avance: 5000 }, { final_item_price: 1 }));
@@ -54,8 +52,24 @@ assert('map stage default', mapped.operational_stage === 'reserved');
 assert('map crm gate', mapped.crm && mapped.crm.bloqueReservation === false);
 assert('localDateYmd format', /^\d{4}-\d{2}-\d{2}$/.test(localDateYmd()));
 
-if (failed) {
-  console.error(`\n${failed} test(s) en échec`);
+// Correction WhatsApp : seul le WhatsApp du gérant envoie les messages terrain.
+// Plus aucun fallback vers le superadmin (platform).
+(async () => {
+  assert(
+    'sessionKeyFromReservation gérant',
+    (await sessionKeyFromReservation({ gerant_id: 3 })) === 'gerant:3',
+  );
+  assert(
+    'sessionKey sans gérant = null (aucun fallback platform)',
+    (await sessionKeyFromReservation({})) === null,
+  );
+
+  if (failed) {
+    console.error(`\n${failed} test(s) en échec`);
+    process.exit(1);
+  }
+  console.log('\nTous les tests module gérant OK');
+})().catch((err) => {
+  console.error(err);
   process.exit(1);
-}
-console.log('\nTous les tests module gérant OK');
+});

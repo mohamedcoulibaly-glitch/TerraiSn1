@@ -110,9 +110,14 @@ async function envoyerMessage(telephone, message, sessionKey = SESSION_PLATFORM,
 /** Alias CDC */
 const envoyerWhatsApp = envoyerMessage;
 
-async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = 'platform') {
+async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = SESSION_PLATFORM) {
   if (!telephone || !mediaUrl) return { ok: true, skipped: true };
-  const key = sessionKey || 'platform';
+  // null explicite = gérant déconnecté → NE PAS fallback sur platform (superadmin)
+  if (sessionKey === null) {
+    console.warn('[Notif] Image annulée — session WhatsApp gérant indisponible');
+    return { ok: false, skipped: true, reason: 'session_indisponible' };
+  }
+  const key = sessionKey || SESSION_PLATFORM;
   if (String(process.env.WHATSAPP_MOCK).toLowerCase() === 'true') {
     console.log(`[WHATSAPP MOCK][${key}] Image vers ${telephone} : ${mediaUrl} (${caption || ''})`);
     return { ok: true, mocked: true };
@@ -142,9 +147,13 @@ async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = '
 }
 
 /**
- * Session OpenWA pour messages JOUEUR liés à une résa.
- * Plus de fallback silencieux vers platform (évite confusion numéro gérant).
- * Retourne null si gérant absent / déconnecté (sauf mock).
+ * Session OpenWA pour messages JOUEUR liés à un terrain.
+ *
+ * RÈGLE ABSOLUE : seul le WhatsApp du gérant du terrain envoie
+ * (confirmation, lien paiement manuel, remboursement, rappel, check-in).
+ * Le superadmin (platform) n'envoie JAMAIS un message terrain.
+ * Gérant absent / déconnecté → null (message non envoyé + log),
+ * AUCUN fallback vers platform.
  */
 async function sessionKeyFromReservation(reservation = {}) {
   const clientId = await whatsappManager.getClientPourTerrain(
@@ -152,6 +161,16 @@ async function sessionKeyFromReservation(reservation = {}) {
     reservation.gerant_id,
   );
   if (!clientId) return null;
+
+  // Garde-fou : getClientPourTerrain ne doit jamais renvoyer le superadmin
+  // pour un message terrain (ancien fallback session partagée / WA_FALLBACK_PLATFORM).
+  if (clientId === 'superadmin' || clientId === 'platform') {
+    console.warn(
+      `[Notif] Message terrain bloqué — aucun client gérant prêt (terrain=${reservation.terrain_id || '?'}). ` +
+        'Pas d\'envoi depuis le superadmin.',
+    );
+    return null;
+  }
   return whatsappManager.toSessionKey(clientId);
 }
 
@@ -250,8 +269,22 @@ async function envoyerOTP({ telephone, prenom, code }) {
   );
 }
 
-/** Template 3 — Lien paiement réservation téléphone / gérant */
+/**
+ * Template 3 — Lien paiement par WhatsApp.
+ * UNIQUEMENT pour les réservations manuelles créées par le gérant
+ * (le joueur n'est pas devant l'écran et doit payer plus tard).
+ * En ligne (origine 'joueur'), le joueur est déjà redirigé vers PayTech :
+ * aucun lien WhatsApp (redondance / confusion) → envoi refusé ici,
+ * même si un ancien appelant le demande encore.
+ */
 async function envoyerLienPaiement(reservationId, options = {}) {
+  if (options.origine === 'joueur') {
+    console.warn(
+      `[Notif] Lien paiement WhatsApp refusé pour résa #${reservationId} — ` +
+        'parcours en ligne : redirection PayTech directe, pas de WhatsApp.',
+    );
+    return { ok: false, skipped: true, reason: 'lien_en_ligne_interdit' };
+  }
   const data = await details(reservationId);
   if (!data) return { ok: false, error: new Error('Réservation introuvable') };
   const prenom = prenomJoueur(data);
@@ -261,9 +294,7 @@ async function envoyerLienPaiement(reservationId, options = {}) {
   if (!lien) return { ok: false, error: new Error('Lien de paiement manquant') };
   const waKey = await sessionKeyFromReservation(data);
   const minutes = Math.max(1, Number(data.delai_verrou_paiement_min) || 15);
-  const intro = options.origine === 'joueur'
-    ? `*${data.terrain_nom}* — ${formaterDate(data.date)} ${formaterHeure(data.heure_debut)}`
-    : `Résa *${data.terrain_nom}* — ${formaterDate(data.date)} ${formaterHeure(data.heure_debut)}`;
+  const intro = `Résa *${data.terrain_nom}* — ${formaterDate(data.date)} ${formaterHeure(data.heure_debut)}`;
   return envoyerWhatsApp(
     tel,
     `${prenom ? `${prenom}, ` : ''}${intro}.\n` +
@@ -449,7 +480,7 @@ async function envoyerDuAccumuleGerant({ contrat, du, reservationId }) {
       (du.statut === 'en_fenetre'
         ? `Encore en fenêtre de remboursement — pas de virement pour l'instant.`
         : `Dû payable selon le contrat.`),
-    undefined,
+    SESSION_PLATFORM,
     { destinataire_type: 'gerant', destinataire_id: contrat.gerant_id, type: 'du_accumule' },
   );
 }
@@ -467,7 +498,7 @@ async function envoyerPayoutAutoEnCours({ contrat, du }) {
   await envoyerWhatsApp(
     contrat.gerant_whatsapp,
     `Reversement en cours vers ton Wave/OM (${formaterMontant(du.du_gerant)}).`,
-    undefined,
+    SESSION_PLATFORM,
     { destinataire_type: 'gerant', destinataire_id: contrat.gerant_id, type: 'payout_auto_en_cours' },
   );
 }
@@ -487,7 +518,7 @@ async function envoyerPayoutAutoOk({ contrat, du, dest }) {
   await envoyerWhatsApp(
     contrat.gerant_whatsapp,
     `${formaterMontant(du.du_gerant)} envoyés sur ${suffixe}.`,
-    undefined,
+    SESSION_PLATFORM,
     { destinataire_type: 'gerant', destinataire_id: contrat.gerant_id, type: 'payout_auto_ok' },
   );
 }
@@ -504,7 +535,7 @@ async function envoyerPayoutManuelOk({ contrat, montant, numero }) {
   await envoyerWhatsApp(
     contrat.gerant_whatsapp,
     `${formaterMontant(montant)} envoyés manuellement sur ${masquerNumero(numero)}.`,
-    undefined,
+    SESSION_PLATFORM,
     { destinataire_type: 'gerant', destinataire_id: contrat.gerant_id, type: 'payout_manuel_ok' },
   );
 }
@@ -522,13 +553,13 @@ async function envoyerEchecPayout({ contrat, du, raison }) {
     prefColumn: 'push_reversement',
   });
   if (contrat?.gerant_whatsapp) {
-    await envoyerWhatsApp(contrat.gerant_whatsapp, msg, undefined, {
+    await envoyerWhatsApp(contrat.gerant_whatsapp, msg, SESSION_PLATFORM, {
       destinataire_type: 'gerant',
       destinataire_id: contrat.gerant_id,
       type: 'payout_echec',
     });
   }
-  await envoyerWhatsApp(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV, msg, undefined, {
+  await envoyerWhatsApp(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV, msg, SESSION_PLATFORM, {
     destinataire_type: 'superadmin',
     destinataire_id: 0,
     type: 'payout_echec_admin',
@@ -537,7 +568,7 @@ async function envoyerEchecPayout({ contrat, du, raison }) {
 
 async function envoyerAlerteNumeroManquant(contrat) {
   const msg = `Terrain ${contrat?.terrain_nom || contrat?.terrain_id} : 1er dû sans Wave/OM gérant vérifié. Configurer en superadmin.`;
-  await envoyerWhatsApp(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV, msg, undefined, {
+  await envoyerWhatsApp(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV, msg, SESSION_PLATFORM, {
     destinataire_type: 'superadmin',
     destinataire_id: 0,
     type: 'numero_manquant',
@@ -549,7 +580,7 @@ async function envoyerTest100({ telephone, canal, montant = 100 }) {
   await envoyerWhatsApp(
     telephone,
     `Mini-virement test ${montant} FCFA via ${canal === 'om' ? 'Orange Money' : 'Wave'}. Confirme-nous la réception.`,
-    undefined,
+    SESSION_PLATFORM,
     { destinataire_type: 'gerant', type: 'test_100' },
   );
 }

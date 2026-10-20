@@ -11,6 +11,7 @@ import { estDansLaFenetreCheckIn, calculerFenetreCheckIn } from "@/lib/checkInFe
 import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import { WHATSAPP_INFRA_MESSAGE } from "@/lib/whatsappMessages";
+import { useSwipeBack } from "@/hooks/useSwipeBack";
 
 type PolitiqueRemboursement = {
   eligible?: boolean;
@@ -125,6 +126,7 @@ function DetailSkeleton() {
 export default function DetailReservation() {
   const { id } = useParams();
   const navigate = useNavigate();
+  useSwipeBack(() => navigate(-1));
   const [reservation, setReservation] = useState<GerantReservation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

@@ -179,6 +179,17 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
     }
   }
 
+  // Temps réel gérant : le créneau redevient libre immédiatement (zéro décalage)
+  try {
+    require('./sseManager').emettrePourTerrain(reservation.terrain_id, 'reservation_annulee', {
+      reservation_id: reservation.id,
+      creneau_id: reservation.creneau_id || null,
+      statut: 'libre',
+    });
+  } catch {
+    // best-effort
+  }
+
   await notificationService
     .envoyerAnnulation(reservation.id, { rembourse, politique, remboursementManuel })
     .catch((error) => logger.error('annulationService.js', 'Notification annulation', error));

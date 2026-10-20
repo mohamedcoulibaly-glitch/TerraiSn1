@@ -182,7 +182,6 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
 }
 
 function portsParDefaut(db) {
-  const realtimeHub = require('../realtimeHub');
   return {
     async confirmationJoueur(reservationId) {
       await notificationService.envoyerConfirmation(reservationId);
@@ -204,7 +203,8 @@ function portsParDefaut(db) {
       });
     },
     publish(terrainId, type, payload) {
-      realtimeHub.notifyTerrain(terrainId, type, payload);
+      // Double diffusion : hub terrain historique + canal SSE gérant typé
+      require('../services/sseManager').emettrePourTerrain(terrainId, type, payload);
     },
   };
 }
@@ -255,8 +255,14 @@ async function confirmerPaiementEtNotifier(reservationId, refCommand, options = 
     if (typeof ports.publish === 'function') {
       ports.publish(reservation.terrain_id, 'reservation_confirmee', {
         reservation_id: reservationId,
+        creneau_id: fraiche?.creneau_id || reservation.creneau_id || null,
         code: fraiche?.code_reservation || null,
         statut: 'confirme',
+        joueur_prenom: fraiche?.joueur_nom || reservation.joueur_nom || null,
+        joueur_telephone: fraiche?.joueur_telephone || reservation.joueur_telephone || null,
+        heure_debut: fraiche?.heure_debut || reservation.heure_debut || null,
+        heure_fin: fraiche?.heure_fin || reservation.heure_fin || null,
+        montant_restant: fraiche?.montant_restant ?? reservation.montant_restant ?? null,
       });
     }
     if (typeof ports.pushGerant === 'function') {
@@ -322,6 +328,16 @@ async function confirmerPaiementEtNotifier(reservationId, refCommand, options = 
     await notificationService.envoyerRemboursement(reservationId).catch((error) => {
       logger.error('payments/flow.js', 'Notification remboursement', error);
     });
+    // Temps réel gérant : créneau de nouveau libre après remboursement
+    try {
+      require('../services/sseManager').emettrePourTerrain(reservation.terrain_id, 'creneau_libere', {
+        reservation_id: reservationId,
+        creneau_id: reservation.creneau_id || null,
+        statut: 'libre',
+      });
+    } catch {
+      // best-effort
+    }
   }
   return { action };
 }

@@ -595,6 +595,10 @@ app.use((err, req, res, next) => {
 });
 app.use('/api/admin', adminRoutes);
 app.use('/api', roleRoutes);
+
+// SSE terrain public (joueur + pro via useTerrainEvents) — doit être monté,
+// sinon EventSource tape un 404 et aucun temps réel ne fonctionne.
+require('./realtimeHub').mountTerrainEvents(app);
 mountPaymentRoutes(app);
 mountGerantCheckinRoutes(app);
 mountGerantCrmRoutes(app);
@@ -2081,10 +2085,16 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
       await pushService.envoyerConfirmationPush(reservation.id).catch((error) => {
         logger.error('index.js', 'Push confirmation sans avance', error);
       });
-      require('./realtimeHub').notifyTerrain(terrainId, 'reservation_confirmee', {
+      require('./services/sseManager').emettrePourTerrain(terrainId, 'reservation_confirmee', {
         reservation_id: reservation.id,
+        creneau_id: reservation.creneau_id || null,
         code: reservation.code_reservation || null,
         statut: 'confirme',
+        joueur_prenom: reservation.joueur_nom || null,
+        joueur_telephone: reservation.joueur_telephone || null,
+        heure_debut: heureDebutNorm,
+        heure_fin: heureFinNorm,
+        montant_restant: montantRestant,
       });
     }
 
@@ -2119,9 +2129,17 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
         });
         throw error;
       }
+      // Parcours en ligne : le joueur est déjà redirigé vers PayTech —
+      // AUCUN lien envoyé par WhatsApp (redondance). Le lien WhatsApp est
+      // réservé aux réservations manuelles du gérant (joueur absent).
+      // Temps réel gérant : créneau verrouillé dès maintenant (zéro doublon).
       if (creePar === 'joueur') {
-        await notificationService.envoyerLienPaiement(reservation.id, { origine: 'joueur' }).catch((error) => {
-          logger.error('index.js', 'Lien paiement WhatsApp joueur', error);
+        require('./services/sseManager').emettrePourTerrain(terrainId, 'creneau_verrouille', {
+          reservation_id: reservation.id,
+          creneau_id: reservation.creneau_id || null,
+          statut: 'en_attente_paiement',
+          heure_debut: heureDebutNorm,
+          heure_fin: heureFinNorm,
         });
       }
     }
@@ -2155,6 +2173,15 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     }
 
     if (creePar === 'gerant') {
+      // Temps réel : les autres gérants du terrain voient la création manuelle
+      require('./services/sseManager').emettrePourTerrain(terrainId, 'reservation_creee', {
+        reservation_id: reservation.id,
+        creneau_id: reservation.creneau_id || null,
+        statut: statutInitial,
+        joueur_prenom: reservation.joueur_nom || null,
+        heure_debut: heureDebutNorm,
+        heure_fin: heureFinNorm,
+      });
       await logActivite({
         gerant_id: req.user.id,
         terrain_id: terrainId,
@@ -2260,6 +2287,66 @@ app.post('/api/reservations/gerant', authMiddleware, requireRole('gerant'), asyn
 app.post('/api/gerant/reservations', authMiddleware, requireRole('gerant'), async (req, res) => {
   if (Number(req.body.terrain_id || req.user.terrain_id) !== Number(req.user.terrain_id)) return res.status(403).json({ error: 'Accès refusé' });
   return creerReservationAvecPaiement(req, res, 'gerant', Number(req.user.terrain_id));
+});
+
+// ============================================================
+// SSE gérant — temps réel file d'attente (zéro doublon, zéro décalage)
+// EventSource ne supporte pas le header Authorization natif :
+// le JWT est accepté via ?token= (ou header si présent).
+// ============================================================
+app.get('/api/gerant/stream', async (req, res) => {
+  const token = String(req.query.token || '') || (req.headers.authorization?.split(' ')[1] || '');
+  let user = null;
+  try {
+    user = token ? jwt.verify(token, JWT_SECRET) : null;
+  } catch {
+    user = null;
+  }
+  if (!user || user.role !== 'gerant') {
+    return res.status(401).json({ error: 'Non autorisé' });
+  }
+
+  // Terrains du gérant : terrain principal du JWT + terrains dont il est le gérant attitré
+  const terrainIds = new Set();
+  if (Number(user.terrain_id) > 0) terrainIds.add(Number(user.terrain_id));
+  try {
+    const db = await getDb();
+    queryAll(db, 'SELECT id FROM terrains WHERE gerant_id = ?', [user.id])
+      .forEach((t) => terrainIds.add(Number(t.id)));
+    // Gérants multi-terrains (affectations actives)
+    try {
+      queryAll(db, 'SELECT terrain_id FROM gerants_terrains WHERE gerant_id = ? AND actif = 1', [user.id])
+        .forEach((t) => terrainIds.add(Number(t.terrain_id)));
+    } catch {
+      // table optionnelle selon migrations
+    }
+  } catch {
+    // le terrain du JWT suffit
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // Nginx/Render : pas de buffering
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  res.write(`event: connected\ndata: ${JSON.stringify({ gerant_id: user.id, terrain_ids: [...terrainIds] })}\n\n`);
+
+  const sseManager = require('./services/sseManager');
+  sseManager.ajouterClient(user.id, [...terrainIds], res);
+
+  const heartbeat = setInterval(() => {
+    try {
+      if (!res.writableEnded) res.write('event: heartbeat\ndata: {}\n\n');
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 30000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseManager.retirerClient(user.id, res);
+  });
 });
 
 app.get('/api/whatsapp/status', async (req, res) => {

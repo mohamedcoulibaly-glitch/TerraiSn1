@@ -299,19 +299,8 @@ async function getClientPourTerrain(terrainId, gerantIdHint = null) {
   const statut = await getStatut(clientId);
   if (statut.pret) return clientId;
 
-  // Prod : session OpenWA partagée ou fallback explicite → platform (QR / lien ne doivent pas être silencieux)
-  const allowPlatformFallback =
-    Boolean(String(process.env.OPENWA_SHARED_SESSION_ID || '').trim())
-    || String(process.env.WA_FALLBACK_PLATFORM || 'true').toLowerCase() === 'true';
-
-  if (allowPlatformFallback) {
-    console.warn(
-      `[Notif] Gérant ${gerantId} déconnecté (${statut.statut}) — fallback platform pour le joueur`,
-    );
-    await loggerEnvoi(clientId, '', `terrain=${terrainId}`, 'echec', 'fallback_platform');
-    return 'superadmin';
-  }
-
+  // RÈGLE ABSOLUE : le superadmin (platform) n'envoie JAMAIS un message terrain.
+  // Gérant déconnecté → aucun envoi (loggé), aucun fallback.
   console.warn(
     `[Notif] Gérant ${gerantId} déconnecté (${statut.statut}). ` +
       'Message non envoyé — reconnecter WhatsApp gérant.',

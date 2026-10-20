@@ -21,6 +21,14 @@ import { hapticSelection, hapticSuccess } from "@/lib/haptics";
 import SkeletonCreneaux from "@/components/skeletons/SkeletonCreneaux";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import DatePickerSheet from "@/espaces/joueur/components/DatePickerSheet";
+import { useSwipeBack } from "@/hooks/useSwipeBack";
+import { BottomBarSansAvance } from "@/espaces/joueur/components/BottomBarSansAvance";
+import { BottomBarAvecAvance } from "@/espaces/joueur/components/BottomBarAvecAvance";
+import {
+  SelecteurTypeLocation,
+  LabelTerrainEntier,
+  LabelDemiTerrain,
+} from "@/espaces/joueur/components/SelecteurTypeLocation";
 
 type FicheDraft = {
   selectedDate: number;
@@ -397,6 +405,9 @@ const FieldDetails = () => {
       await refetch();
     },
   });
+
+  // Navigation mobile : swipe depuis le bord gauche = retour
+  useSwipeBack(() => navigate(-1));
 
   useTerrainEvents(terrain?.id || id, (ev) => {
     if (
@@ -861,44 +872,31 @@ const FieldDetails = () => {
 
           {/* Étape B — Format & Durée */}
           <div className={`py-4 border-b border-gray-100 dark:border-[var(--border)] space-y-4 ${!canBrowseSlots ? "opacity-50 pointer-events-none" : ""}`}>
-            {formatsOpts.length > 1 ? (
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
-                2 · Format
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {formatsOpts.map((fmt) => {
-                  const price =
+            {/* Aiguillage par types_location : composant dédié par mode, pas d'adaptation conditionnelle */}
+            {String(terrain.types_location || "les_deux") === "les_deux" && formatsOpts.length > 1 ? (
+              <>
+                <SelecteurTypeLocation
+                  formats={formatsOpts}
+                  valeur={fieldFormat}
+                  onChange={setFieldFormat}
+                  prixPour={(fmt) =>
                     fmt.map_grille === "demi"
                       ? Number(previewSlot?.prix_moitie ?? fmt.prix_heure)
                       : fmt.map_grille === "entier"
                         ? Number(previewSlot?.prix_entier ?? fmt.prix_heure)
-                        : Number(fmt.prix_heure);
-                  return (
-                    <button
-                      key={fmt.cle}
-                      type="button"
-                      onClick={() => setFieldFormat(fmt.cle)}
-                      className={`rounded-xl p-3 text-left min-h-[64px] border transition-colors ${
-                        fieldFormat === fmt.cle
-                          ? "bg-[var(--primary)] text-white border-[var(--primary)]"
-                          : "bg-white dark:bg-[var(--surface)] border-gray-200 dark:border-[var(--border)]"
-                      }`}
-                    >
-                      <span className="block text-sm font-semibold">{fmt.label}</span>
-                      <span className="text-[11px] opacity-80">
-                        {price.toLocaleString("fr-SN")} FCFA/h
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-              {formatMeta && formatMeta.cle !== "moitie" ? (
-                <p className="mt-2 text-[11px] text-amber-800 dark:text-amber-200">
-                  Format sélectionné : {formatMeta.label} — vérifie le prix affiché.
-                </p>
-              ) : null}
-            </div>
+                        : Number(fmt.prix_heure)
+                  }
+                />
+                {formatMeta && formatMeta.cle !== "moitie" ? (
+                  <p className="mt-2 text-[11px] text-amber-800 dark:text-amber-200">
+                    Format sélectionné : {formatMeta.label} — vérifie le prix affiché.
+                  </p>
+                ) : null}
+              </>
+            ) : String(terrain.types_location || "les_deux") === "entier" ? (
+              <LabelTerrainEntier prixHeure={Number(terrain.prix_entier || terrain.prix_heure || 0)} />
+            ) : String(terrain.types_location || "les_deux") === "demi_terrain" ? (
+              <LabelDemiTerrain prixHeure={Number(terrain.prix_moitie || 0)} />
             ) : formatsOpts[0] ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 Format : <span className="font-semibold text-[var(--color-text-primary)]">{formatsOpts[0].label}</span>
@@ -1039,39 +1037,34 @@ const FieldDetails = () => {
                   Bleu = libre · Ambre = paiement en cours · Gris = pris
                 </p>
                 {hasSlot && stickyRecap && canBrowseSlots ? (
-                  <div
-                    id="cta-reserver-inline"
-                    className="mt-4 rounded-2xl border border-[var(--color-border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-sm)] scroll-mt-24 space-y-3"
-                  >
-                    <div>
-                      <p className="text-sm font-semibold text-[var(--color-text-primary)]">
-                        {stickyRecap.creneau}
-                      </p>
-                      <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                        {stickyRecap.format}
-                      </p>
-                    </div>
-                    <p className="text-[13px] leading-snug text-[var(--color-text-secondary)]">
-                      {stickyRecap.paiementNote}
-                    </p>
+                  <div id="cta-reserver-inline" className="scroll-mt-24">
+                    {/* Aiguillage par politique : composant dédié par mode */}
                     {canBookOnline ? (
-                      <button
-                        type="button"
-                        onClick={goToPayment}
-                        className="w-full min-h-[52px] rounded-xl bg-[var(--primary)] text-white text-sm font-semibold"
-                      >
-                        {sansAvanceTerrain
-                          ? "Réserver"
-                          : `Réserver · payer ${stickyRecap.avanceLabel} FCFA`}
-                      </button>
+                      sansAvanceTerrain ? (
+                        <BottomBarSansAvance
+                          creneauLabel={stickyRecap.creneau}
+                          formatLabel={stickyRecap.format}
+                          onReserver={goToPayment}
+                        />
+                      ) : (
+                        <BottomBarAvecAvance
+                          creneauLabel={stickyRecap.creneau}
+                          formatLabel={stickyRecap.format}
+                          paiementNote={stickyRecap.paiementNote}
+                          avanceLabel={stickyRecap.avanceLabel}
+                          onPayer={goToPayment}
+                        />
+                      )
                     ) : gerantCallHref ? (
-                      <a
-                        href={gerantCallHref}
-                        className="w-full min-h-[52px] rounded-xl bg-[var(--primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2"
-                      >
-                        <Phone className="w-4 h-4" />
-                        Appeler le gérant
-                      </a>
+                      <div className="mt-4 rounded-2xl border border-[var(--color-border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-sm)]">
+                        <a
+                          href={gerantCallHref}
+                          className="w-full min-h-[52px] rounded-xl bg-[var(--primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2"
+                        >
+                          <Phone className="w-4 h-4" />
+                          Appeler le gérant
+                        </a>
+                      </div>
                     ) : null}
                   </div>
                 ) : null}

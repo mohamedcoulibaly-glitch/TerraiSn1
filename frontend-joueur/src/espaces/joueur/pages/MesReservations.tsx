@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { BoutonRetour } from "@/components/BoutonRetour";
+import { useSwipeBack } from "@/hooks/useSwipeBack";
 
 const statusConfig: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
@@ -118,6 +120,7 @@ function startOfToday(): Date {
 
 const Reservations = () => {
   const navigate = useNavigate();
+  useSwipeBack(() => navigate("/"));
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<(typeof filterTabs)[number]["id"]>("Toutes");
   const {
@@ -265,14 +268,7 @@ const Reservations = () => {
     <div className="page-container">
       <SilentSyncDot active={isRefetching && reservations.length > 0} label="Synchronisation réservations" />
       <div className="flex items-center gap-3 responsive-padding py-4">
-        <button
-          type="button"
-          onClick={() => navigate("/")}
-          className="w-10 h-10 rounded-full bg-[var(--surface)] border border-[var(--color-border)] flex items-center justify-center"
-          aria-label="Retour"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
+        <BoutonRetour onRetour={() => navigate("/")} />
         <h1
           className="text-lg sm:text-xl font-semibold text-[var(--color-text-primary)]"
           style={{ fontFamily: "var(--font-display)" }}

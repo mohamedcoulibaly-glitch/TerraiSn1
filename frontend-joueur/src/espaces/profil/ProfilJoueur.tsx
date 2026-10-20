@@ -9,6 +9,8 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { ProfileAccount, ProfileError, ProfileShell, StatGrid, readonlyInput } from "./ProfileBlocks";
 import { clearDraft, readDraft, usePersistedState } from "@/hooks/usePersistedState";
 import { useAuth } from "@/hooks/use-auth";
+import { useNavigate } from "react-router-dom";
+import { useSwipeBack } from "@/hooks/useSwipeBack";
 
 type JoueurProfile = {
   account: ProfileAccount & { quartier?: string; date_naissance?: string };
@@ -18,6 +20,8 @@ type JoueurProfile = {
 type ProfilForm = { prenom: string; nom: string; quartier: string; date_naissance: string };
 
 export default function ProfilJoueur() {
+  const navigate = useNavigate();
+  useSwipeBack(() => navigate(-1));
   const { theme } = useTheme();
   const { user } = useAuth();
   const profilDraftKey = `joueur:profil-edit:${user?.id || "session"}`;

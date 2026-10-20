@@ -196,6 +196,15 @@ async function traiterScanQrReservation(req, res) {
     );
     await marquerReservationJouee({ db, reservation, gerantId: req.user.id, methode });
     notifyTerrain(reservation.terrain_id, 'checkin', { reservation_id: reservation.id });
+    // Canal SSE gérant typé : le dashboard passe la résa en « en cours » sans refresh
+    try {
+      require('./services/sseManager').emettrePourTerrain(reservation.terrain_id, 'match_valide', {
+        reservation_id: reservation.id,
+        creneau_id: reservation.creneau_id || null,
+      });
+    } catch {
+      // best-effort
+    }
     await logActivite({
       gerant_id: req.user.id,
       terrain_id: reservation.terrain_id,

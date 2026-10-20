@@ -13,6 +13,7 @@ import { useTerrainFullDetails } from "@/hooks/useJoueurData";
 import SilentSyncDot from "@/components/SilentSyncDot";
 import { clearDraft, usePersistedState } from "@/hooks/usePersistedState";
 import { useSubmitGuard } from "@/hooks/useSubmitGuard";
+import { useSwipeBack } from "@/hooks/useSwipeBack";
 
 import omIcon from "@/assets/images.png";
 import waveIcon from "@/assets/wave-banque-en-ligne-au-senegal-pour-paiement-transfert-argents.jpg";
@@ -24,6 +25,7 @@ type PaymentDraft = {
 
 const Payment = () => {
   const navigate = useNavigate();
+  useSwipeBack(() => navigate(-1));
   const { id } = useParams();
   const { user, isAuthenticated } = useAuth();
   const [searchParams] = useSearchParams();

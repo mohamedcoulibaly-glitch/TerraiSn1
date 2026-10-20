@@ -25,6 +25,7 @@ import {
 } from "@/lib/checkInFenetre";
 import { localYmd, next7Days, addDaysYmd, formatJourCourt } from "@/lib/localDate";
 import { useTerrainEvents } from "@/hooks/useTerrainEvents";
+import { useGerantStream } from "@/hooks/useGerantStream";
 import {
   useGerantDashboard,
   useGerantToday,
@@ -1117,6 +1118,33 @@ const ManagerDashboard = () => {
       const joueur = String(ev.joueur_nom || "").trim();
       toast.success(joueur ? `Réservation confirmée — ${joueur}` : "Nouvelle réservation confirmée");
     }
+  });
+
+  // Canal SSE gérant authentifié (événements typés) — la file React Query
+  // reste la source de vérité : chaque événement déclenche un refresh ciblé,
+  // donc zéro doublon de créneau et zéro décalage d'affichage.
+  useGerantStream(isGerant, {
+    onReservationConfirmee: () => {
+      // Toast déjà émis via useTerrainEvents (même événement, hub terrain)
+      refreshLive();
+    },
+    onCreneauVerrouille: () => {
+      // Un joueur vient de verrouiller le créneau : il quitte les « libres »
+      refreshLive();
+    },
+    onReservationCreee: () => {
+      refreshLive();
+    },
+    onCreneauLibere: () => {
+      refreshLive();
+    },
+    onMatchValide: () => {
+      refreshLive();
+    },
+    onReservationAnnulee: () => {
+      refreshLive();
+      toast.info("Réservation annulée — créneau libéré");
+    },
   });
 
   const dayDate =

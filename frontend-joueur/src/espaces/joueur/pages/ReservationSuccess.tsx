@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Check, Loader2 } from "lucide-react";
 import { reservationsApi } from "@/lib/api";
+import { PageConfirmationSansAvance } from "./PageConfirmationSansAvance";
 
 const STATUTS_CONFIRMES = new Set(["confirme", "match_joue", "joue", "acceptee"]);
 const STATUTS_ATTENTE = new Set(["en_attente", "en_attente_paiement"]);
@@ -112,6 +113,11 @@ const ReservationSuccess = () => {
     params.get("sans_avance") === "1" ||
     reservation.sans_avance === true ||
     reservation.mode_paiement === "sans_avance";
+
+  // Mode sans avance : page dédiée (aucune mention de paiement en ligne)
+  if (sansAvance && confirme) {
+    return <PageConfirmationSansAvance reservation={reservation} />;
+  }
 
   const avance = Number(reservation.montant_avance || reservation.acompte || 0);
   const reste = Number(reservation.montant_restant || reservation.reste_a_payer || 0);
