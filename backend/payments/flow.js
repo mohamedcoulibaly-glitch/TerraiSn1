@@ -32,13 +32,9 @@ const {
   marquerAchatDefinitifPaye,
 } = require('../revenueModelService');
 
-function genererCodeReservation(db) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const code = `TF-${Math.floor(100000 + Math.random() * 900000)}`;
-    if (!queryOne(db, 'SELECT id FROM reservations WHERE code_reservation = ?', [code])) return code;
-  }
-  throw new Error('Impossible de générer un code de réservation unique');
-}
+// Génération du code numérique : déléguée à la source de vérité unique
+// (même normalisation/unicité que la saisie gérant au check-in).
+const { genererCodeReservation } = require('../services/codeReservationService');
 
 function reservationIdDepuisReference(refCommand) {
   const match = String(refCommand || '').match(/^TF-(\d+)-/);

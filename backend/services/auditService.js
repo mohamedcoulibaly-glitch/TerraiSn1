@@ -4,6 +4,8 @@ const ACTIONS = new Set([
   'reservation_creee',
   'reservation_annulee',
   'qr_scanne',
+  'validation_manuelle',
+  'checkin_code',
   'kanban_stage',
   'creneau_cree',
   'creneau_supprime',

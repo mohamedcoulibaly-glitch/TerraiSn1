@@ -997,6 +997,30 @@ export const gerantApi = {
     return await request(`/gerant/reservations/by-code/${safe}`);
   },
 
+  /**
+   * Check-in par code numérique (TF-XXXXXX) : le serveur normalise, résout,
+   * VÉRIFIE la correspondance code ↔ réservation, puis valide l'entrée en
+   * un seul appel (mêmes contrôles que le scan QR).
+   */
+  async checkinByCode(
+    code: string,
+    options: {
+      expectedReservationId?: number | string;
+      methode?: 'especes' | 'wave' | 'orange_money';
+      encaisser_solde?: boolean;
+    } = {},
+  ) {
+    return await request(`/gerant/reservations/checkin-by-code`, {
+      method: 'POST',
+      body: JSON.stringify({
+        code,
+        expected_reservation_id: options.expectedReservationId ?? undefined,
+        methode: options.methode,
+        encaisser_solde: options.encaisser_solde,
+      }),
+    });
+  },
+
   async encaisserRestant(
     id: number | string,
     methode: 'especes' | 'wave' | 'orange_money' = 'especes',

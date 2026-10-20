@@ -7,6 +7,10 @@ const { assertQrMatchesReservation } = require('./services/qrPayload');
 const { assertScanSignature } = require('./domain/qrSignature');
 const { notifyTerrain } = require('./realtimeHub');
 const { assertStageTransition, playerGate, resolveOperationalStage } = require('./services/kanbanRules');
+const {
+  resoudreReservationParCode,
+  assertGerantPeutValider,
+} = require('./services/codeReservationService');
 const { encaisserSoldeSurPlace } = require('./services/portefeuilleService');
 const { rowsModified } = require('./reservationLockService');
 const logger = require('./logger');
@@ -172,11 +176,16 @@ function annoterPrioriteScan(db, terrainId, mappedRows) {
   return mappedRows;
 }
 
-async function traiterScanQrReservation(req, res, { manuelle = false } = {}) {
+async function traiterScanQrReservation(req, res, { manuelle = false, reservationPrechargee = null, via = null } = {}) {
   try {
     const db = await getDb();
     const reservationId = Number(req.params.id);
-    const terrainId = req.user.terrain_id;
+    // Check-in par code : le terrain qui compte est celui de la réservation
+    // résolue par le code (le gérant a pu autoriser plusieurs terrains),
+    // pas forcément le terrain « actif » sélectionné dans l'app.
+    const terrainId = reservationPrechargee
+      ? Number(reservationPrechargee.terrain_id)
+      : req.user.terrain_id;
 
     const reservation = queryOne(db, `
       SELECT r.*, t.nom AS terrain_nom,
@@ -290,9 +299,11 @@ async function traiterScanQrReservation(req, res, { manuelle = false } = {}) {
     await logActivite({
       gerant_id: req.user.id,
       terrain_id: reservation.terrain_id,
-      action: manuelle ? 'validation_manuelle' : 'qr_scanne',
+      // 'qr_scanne' reste l'action auditée (CHECK des bases existantes) ;
+      // le mode d'entrée (code / manuel / qr) est tracé dans les détails.
+      action: 'qr_scanne',
       reservation_id: reservation.id,
-      details: { methode, qr_format: parsed?.format || 'manuel', encaisser_solde: encaisserSolde },
+      details: { methode, qr_format: via || parsed?.format || 'manuel', encaisser_solde: encaisserSolde },
     }).catch((error) => logger.error('gerantCheckin.js', 'Log activite qr_scanne', error));
     await scoreService.recalculerScore(req.user.id, reservation.terrain_id)
       .catch((error) => logger.error('gerantCheckin.js', 'Recalcul score scan QR', error));
@@ -353,6 +364,49 @@ async function traiterScanQrReservation(req, res, { manuelle = false } = {}) {
   }
 }
 
+/**
+ * Check-in par CODE NUMÉRIQUE (TF-XXXXXX) saisi par le gérant — atomique :
+ * normalisation → résolution → correspondance exacte → autorisation terrain
+ * (tous les terrains du gérant) → mêmes contrôles que le scan QR
+ * (statut confirmé, fenêtre, priorité, usage unique).
+ * Avant : résolution code→id puis validation par id en 2 appels, le code
+ * n'était jamais comparé en mode fiche et la résolution était limitée au
+ * terrain actif → codes corrects refusés / codes quelconques acceptés.
+ */
+async function traiterCheckinParCode(req, res) {
+  try {
+    const db = await getDb();
+    const saisie = req.body?.code ?? req.body?.code_reservation ?? '';
+
+    let resolved;
+    try {
+      resolved = resoudreReservationParCode(db, saisie);
+      assertGerantPeutValider(req.user, resolved.reservation);
+    } catch (err) {
+      return res.status(err.statusCode || 400).json({ error: err.message, code: err.code });
+    }
+
+    // Mode fiche : le code saisi doit correspondre à CETTE réservation.
+    const expectedId = Number(req.body?.expected_reservation_id || 0);
+    if (expectedId && expectedId !== Number(resolved.reservation.id)) {
+      return res.status(400).json({
+        error: 'Ce code ne correspond pas à ce match. Demande au joueur de montrer le bon code.',
+        code: 'QR_MISMATCH',
+      });
+    }
+
+    req.params.id = String(resolved.reservation.id);
+    return traiterScanQrReservation(req, res, {
+      manuelle: true,
+      reservationPrechargee: resolved.reservation,
+      via: 'code',
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur', code: err.code });
+  }
+}
+
 function mountGerantCheckinRoutes(app) {
   app.put('/api/reservations/:id/jouer', authMiddleware, requireRole('gerant'), async (_req, res) => {
     return res.status(409).json({
@@ -377,34 +431,37 @@ function mountGerantCheckinRoutes(app) {
     (req, res) => traiterScanQrReservation(req, res, { manuelle: true }),
   );
 
-  /** Mode A : résolution d'un code TF-… vers un id (terrain du gérant). */
+  /**
+   * Check-in par code numérique saisi (TF-XXXXXX) : résolution + correspondance
+   * + validation en UN appel serveur (voir traiterCheckinParCode).
+   */
+  app.post(
+    '/api/gerant/reservations/checkin-by-code',
+    authMiddleware,
+    requireRole('gerant'),
+    traiterCheckinParCode,
+  );
+
+  /**
+   * Mode A : résolution d'un code TF-… vers un id.
+   * Recherche globale + autorisation sur TOUS les terrains du gérant
+   * (avant : seul le terrain actif du JWT → codes corrects refusés).
+   */
   app.get('/api/gerant/reservations/by-code/:code', authMiddleware, requireRole('gerant'), async (req, res) => {
     try {
       const db = await getDb();
-      const code = String(req.params.code || '').trim().toUpperCase();
-      if (!code) return res.status(400).json({ error: 'Code requis', code: 'QR_INVALID' });
-      const row = queryOne(db, `
-        SELECT id, code_reservation, statut, terrain_id
-        FROM reservations
-        WHERE UPPER(code_reservation) = ? AND terrain_id = ?
-      `, [code, req.user.terrain_id]);
-      if (!row) {
-        const elsewhere = queryOne(db, `
-          SELECT id FROM reservations WHERE UPPER(code_reservation) = ?
-        `, [code]);
-        if (elsewhere) {
-          return res.status(403).json({
-            error: 'Ce QR code ne correspond pas à ton terrain',
-            code: 'QR_WRONG_TERRAIN',
-          });
-        }
-        return res.status(404).json({
-          error: 'QR code non reconnu',
-          code: 'QR_INVALID',
-        });
-      }
-      return res.json({ id: row.id, code_reservation: row.code_reservation, statut: row.statut });
+      const { code, reservation } = resoudreReservationParCode(db, req.params.code);
+      assertGerantPeutValider(req.user, reservation);
+      return res.json({
+        id: reservation.id,
+        code_reservation: reservation.code_reservation || code,
+        statut: reservation.statut,
+        terrain_id: reservation.terrain_id,
+      });
     } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ error: err.message, code: err.code });
+      }
       console.error(err);
       return res.status(500).json({ error: err.message || 'Erreur serveur' });
     }
@@ -753,6 +810,7 @@ function mountGerantCheckinRoutes(app) {
 
 module.exports = {
   mountGerantCheckinRoutes,
+  traiterCheckinParCode,
   mapReservationGerantRow,
   marquerReservationJouee,
   localDateYmd,

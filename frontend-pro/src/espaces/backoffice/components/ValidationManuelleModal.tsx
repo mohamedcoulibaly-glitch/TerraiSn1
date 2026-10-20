@@ -270,7 +270,7 @@ export default function ValidationManuelleModal({
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Nom ou téléphone du joueur…"
+                  placeholder="Nom, téléphone ou code TF-… du joueur…"
                   className="flex-1 bg-transparent outline-none text-sm"
                   autoFocus={!preselectedId}
                 />
@@ -305,6 +305,11 @@ export default function ValidationManuelleModal({
                             {r.heure_fin ? ` → ${formatTime(r.heure_fin)}` : ""}
                             {r.joueur_telephone ? ` · ${r.joueur_telephone}` : ""}
                           </p>
+                          {r.code_reservation ? (
+                            <p className="text-xs mt-0.5 font-semibold tracking-wide" style={{ color: "var(--g-text)" }}>
+                              Code : {r.code_reservation}
+                            </p>
+                          ) : null}
                         </div>
                         <span
                           className="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full"

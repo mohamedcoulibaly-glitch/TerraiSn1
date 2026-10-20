@@ -610,8 +610,10 @@ export default function ScannerModal({
   };
 
   /**
-   * Saisie manuelle du code TF : on ne l'envoie JAMAIS comme un QR
-   * (le back exige une signature). Résolution du code → validation manuelle.
+   * Saisie manuelle du code TF : UN appel serveur atomique qui normalise,
+   * résout et VÉRIFIE que le code correspond à la réservation (en mode
+   * fiche, à celle présélectionnée), puis valide l'entrée.
+   * Avant : le code tapé n'était jamais comparé en mode fiche.
    */
   const submitManual = async () => {
     const value = manualCode.trim().toUpperCase();
@@ -620,12 +622,9 @@ export default function ScannerModal({
     setSubmitting(true);
     stopCamera();
     try {
-      let targetId: number | string | null | undefined = isModeB ? expectedReservationId : null;
-      if (!targetId) {
-        const found = (await gerantApi.reservationByCode(value)) as { id: number };
-        targetId = found.id;
-      }
-      const payload = (await gerantApi.validationManuelle(targetId)) as {
+      const payload = (await gerantApi.checkinByCode(value, {
+        expectedReservationId: isModeB ? expectedReservationId ?? undefined : undefined,
+      })) as {
         reservation?: ReservationRecap;
       };
       triggerFlash("green");
@@ -641,8 +640,20 @@ export default function ScannerModal({
         qr_code_scanne_at?: string;
       };
       triggerFlash("red");
-      if (error.code === "QR_WRONG_TERRAIN") {
+      if (error.code === "QR_MISMATCH") {
+        setResult({
+          state: "mismatch",
+          title: "QR code non reconnu",
+          text: "Ce code ne correspond pas à ce match. Demande au joueur de montrer le bon code.",
+        });
+      } else if (error.code === "QR_WRONG_TERRAIN") {
         setResult({ state: "wrong_terrain", title: "Ce code ne correspond pas à ton terrain", text: error.message });
+      } else if (error.code === "QR_CODE_NOT_FOUND" || error.code === "CODE_FORMAT_INVALIDE") {
+        setResult({
+          state: "invalid",
+          title: "Code non reconnu",
+          text: error.message || "Vérifie le code saisi (ex. TF-774886).",
+        });
       } else if (error.code === "QR_SCAN_TOO_EARLY") {
         const heure = formatScannableHour(error.scannable_at);
         setResult({

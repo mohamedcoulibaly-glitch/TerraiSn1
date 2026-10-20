@@ -417,7 +417,8 @@ async function envoyerConfirmation(reservationId) {
     `Avance : ${formaterMontant(data.montant_avance || data.acompte)}\n` +
     `Reste sur place : ${formaterMontant(data.montant_restant || data.reste_a_payer)}\n` +
     (lienMaps ? `Maps : ${lienMaps}\n` : '') +
-    `Présente le QR 30 min avant (usage unique).`;
+    `Présente le QR 30 min avant (usage unique).\n` +
+    `Si le QR ne passe pas, donne ce code au gérant : *${data.code_reservation}* (il le saisira pour valider ton entrée).`;
 
   const waKey = await sessionKeyFromReservation(data);
   const texte = await envoyerWhatsApp(tel, message, waKey, {

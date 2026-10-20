@@ -14,13 +14,8 @@ const { serializeQrPayload } = require('./qrPayload');
 const { dateEcheanceDette } = require('./politiquePaiement');
 const { essaiActif } = require('./essaiService');
 
-function genererCodeReservation(db) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const code = `TF-${Math.floor(100000 + Math.random() * 900000)}`;
-    if (!queryOne(db, 'SELECT id FROM reservations WHERE code_reservation = ?', [code])) return code;
-  }
-  throw new Error('Impossible de générer un code de réservation unique');
-}
+// Génération du code numérique : déléguée à la source de vérité unique.
+const { genererCodeReservation } = require('./codeReservationService');
 
 function periodeCivile(d = new Date()) {
   const y = d.getFullYear();

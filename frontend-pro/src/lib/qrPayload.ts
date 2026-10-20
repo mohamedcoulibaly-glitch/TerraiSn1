@@ -24,3 +24,21 @@ export function parseQrPayload(rawValue: string): { id: string; code: string; ra
   const numberMatch = raw.match(/\b([0-9]{1,12})\b/);
   return { id: numberMatch?.[1] || "", code: "", raw };
 }
+
+/**
+ * Normalisation du code numérique saisi par le gérant — MIROIR du backend
+ * (services/codeReservationService) : 'tf 774 886', 'TF774886', '774886'
+ * → 'TF-774886'. Le serveur reste la source de vérité et re-normalise.
+ */
+export function normaliserCodeReservation(saisie: string): string {
+  const brut = String(saisie || "").trim().toUpperCase().replace(/[\s.]/g, "");
+  if (!brut) return "";
+  if (/^\d{6}$/.test(brut)) return `TF-${brut}`;
+  if (/^TF\d{6}$/.test(brut)) return `TF-${brut.slice(2)}`;
+  if (/^TF-[A-Z0-9-]+$/.test(brut)) return brut.replace(/-{2,}/g, "-");
+  return brut;
+}
+
+export function codeReservationValide(codeNormalise: string): boolean {
+  return /^TF-\d{6}$/.test(codeNormalise) || /^TF-[A-Z0-9][A-Z0-9-]{2,}$/.test(codeNormalise);
+}
