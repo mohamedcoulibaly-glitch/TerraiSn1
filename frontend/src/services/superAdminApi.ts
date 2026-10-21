@@ -131,6 +131,11 @@ export const superAdminApi = {
   ) => adminRequest(`/admin/terrains/${id}/localisation`, { method: "PATCH", body: JSON.stringify(data) }),
   terrainStatus: (id: number, statut: string) =>
     adminRequest(`/admin/terrains/${id}/statut`, { method: "PATCH", body: JSON.stringify({ statut }) }),
+  updateCouleur: (id: number, couleur_primaire: string) =>
+    adminRequest(`/admin/terrains/${id}/couleur`, {
+      method: "PATCH",
+      body: JSON.stringify({ couleur_primaire }),
+    }),
   terrainPhotos: (id: number): Promise<TerrainPhoto[]> => adminRequest(`/admin/terrains/${id}/photos`),
   uploadTerrainPhoto: (id: number, data: { dataUrl: string; est_principale?: boolean; ordre?: number }) =>
     adminRequest(`/admin/terrains/${id}/photos`, { method: "POST", body: JSON.stringify(data) }),

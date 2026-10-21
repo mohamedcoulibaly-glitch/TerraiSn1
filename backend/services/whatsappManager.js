@@ -198,10 +198,33 @@ async function envoyerImage(telephone, urlImage, caption = '', clientId = 'super
   }
   try {
     const { formatNumero } = require('../notificationService');
-    await whatsappClient.sendImageForSession(sessionKey, formatNumero(telephone), {
-      url: urlImage,
-      caption: caption || '',
-    });
+    // Chemin local (/uploads/…, absolu ou relatif) → filePath : whatsappClient
+    // lit le disque et envoie en base64 (méthode qui marchait, ex-fromFilePath).
+    // N'envoyer une URL à OpenWA que pour une vraie URL http(s) externe.
+    const fs = require('fs');
+    const path = require('path');
+    const { UPLOAD_ROOT } = require('../terrainPhotoService');
+    const raw = String(urlImage);
+    let media;
+    if (/^https?:\/\//i.test(raw)) {
+      media = { url: raw, caption: caption || '' };
+    } else {
+      const cheminAbsolu = path.isAbsolute(raw) && !raw.startsWith('/uploads/')
+        ? raw
+        : path.join(UPLOAD_ROOT, raw.replace(/^\/?uploads\//, ''));
+      if (!fs.existsSync(cheminAbsolu)) {
+        console.error('[WhatsApp] Image introuvable:', cheminAbsolu);
+        await loggerEnvoi(publicId, telephone, `[IMAGE] ${caption}`, 'echec', 'image_introuvable');
+        return false;
+      }
+      media = {
+        filePath: cheminAbsolu,
+        mimetype: 'image/png',
+        filename: path.basename(cheminAbsolu),
+        caption: caption || '',
+      };
+    }
+    await whatsappClient.sendImageForSession(sessionKey, formatNumero(telephone), media);
     await loggerEnvoi(publicId, telephone, `[IMAGE] ${caption}`, 'envoye');
     return true;
   } catch (err) {

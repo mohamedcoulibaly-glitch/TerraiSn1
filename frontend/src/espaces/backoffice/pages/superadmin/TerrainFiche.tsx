@@ -67,6 +67,8 @@ export default function TerrainFiche() {
   const [auditPhotos, setAuditPhotos] = useState<AuditPhotoRow[]>([]);
   const [auditCommodites, setAuditCommodites] = useState<AuditCommoditeRow[]>([]);
   const [features, setFeatures] = useState<TerrainFeature[]>([]);
+  const [couleurPrimaire, setCouleurPrimaire] = useState("#059669");
+  const [savingCouleur, setSavingCouleur] = useState(false);
   const [typesLocation, setTypesLocation] = useState<"moitie" | "entier" | "les_deux">("les_deux");
   const [dureeMinMinutes, setDureeMinMinutes] = useState(60);
   const [savingLocationCfg, setSavingLocationCfg] = useState(false);
@@ -106,6 +108,11 @@ export default function TerrainFiche() {
             : tl === "entier" || tl === "les_deux"
               ? tl
               : "les_deux",
+        );
+        setCouleurPrimaire(
+          /^#[0-9a-fA-F]{6}$/.test(String(found.couleur_primaire || ""))
+            ? String(found.couleur_primaire)
+            : "#059669",
         );
         const dm = Number(found.duree_min_minutes);
         setDureeMinMinutes([60, 90, 120, 180].includes(dm) ? dm : 60);
@@ -401,6 +408,62 @@ export default function TerrainFiche() {
             {savingLocationCfg ? <Loader2 size={14} className="animate-spin" /> : null}
             Enregistrer
           </button>
+        </section>
+
+        <section className="rounded-xl p-5 space-y-4" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
+          <div>
+            <h2 className="text-sm font-semibold" style={{ color: "var(--sa-text)" }}>
+              Couleur du terrain
+            </h2>
+            <p className="text-[12px] mt-1" style={{ color: "var(--sa-muted)" }}>
+              Utilisée sur le QR code WhatsApp et les communications du terrain.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="color"
+              value={couleurPrimaire}
+              onChange={(e) => setCouleurPrimaire(e.target.value)}
+              className="w-12 h-10 rounded-lg cursor-pointer"
+              style={{ border: "1px solid var(--sa-border)", background: "transparent" }}
+              aria-label="Couleur du terrain"
+            />
+            <span className="text-sm font-mono" style={{ color: "var(--sa-text-2)" }}>
+              {couleurPrimaire}
+            </span>
+            <span
+              className="rounded-md px-2.5 py-1.5 text-[11px] font-bold text-white"
+              style={{ background: couleurPrimaire }}
+            >
+              Aperçu QR · {terrain.nom}
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={savingCouleur || couleurPrimaire === (terrain.couleur_primaire || "#059669")}
+            onClick={() => {
+              void (async () => {
+                setSavingCouleur(true);
+                try {
+                  const updated = await superAdminApi.updateCouleur(terrainId, couleurPrimaire);
+                  setTerrain((prev: any) => (prev ? { ...prev, ...updated } : prev));
+                  toast.success("Couleur enregistrée — les QR à venir seront régénérés");
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Enregistrement impossible");
+                } finally {
+                  setSavingCouleur(false);
+                }
+              })();
+            }}
+            className="min-h-[44px] px-5 rounded-lg text-[13px] font-semibold text-white inline-flex items-center gap-2"
+            style={{ background: "var(--sa-primary)", opacity: savingCouleur ? 0.6 : 1 }}
+          >
+            {savingCouleur ? <Loader2 size={14} className="animate-spin" /> : null}
+            Enregistrer la couleur
+          </button>
+          <p className="text-[11px]" style={{ color: "var(--sa-muted)" }}>
+            Le QR code se régénère automatiquement si la couleur change (réservations confirmées à venir).
+          </p>
         </section>
         </div>
       ) : null}

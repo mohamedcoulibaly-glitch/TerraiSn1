@@ -331,6 +331,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'terrains', 'adresse_theorique', 'TEXT');
   addColumnIfMissing(database, 'terrains', 'adresse_nominatim', 'TEXT');
   addColumnIfMissing(database, 'terrains', 'commodites', "TEXT DEFAULT '[]'");
+  addColumnIfMissing(database, 'terrains', 'couleur_primaire', "TEXT DEFAULT '#059669'");
   addColumnIfMissing(database, 'terrains', 'delai_remboursement_heures', 'INTEGER DEFAULT 24');
   addColumnIfMissing(database, 'users', 'terrain_id', 'INTEGER');
   addColumnIfMissing(database, 'users', 'must_change_password', 'INTEGER DEFAULT 0');

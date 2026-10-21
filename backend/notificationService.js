@@ -110,7 +110,7 @@ async function envoyerMessage(telephone, message, sessionKey = SESSION_PLATFORM,
 /** Alias CDC */
 const envoyerWhatsApp = envoyerMessage;
 
-async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = SESSION_PLATFORM) {
+async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = SESSION_PLATFORM, options = {}) {
   if (!telephone || !mediaUrl) return { ok: true, skipped: true };
   // null explicite = gérant déconnecté → NE PAS fallback sur platform (superadmin)
   if (sessionKey === null) {
@@ -123,12 +123,30 @@ async function envoyerImageWhatsApp(telephone, mediaUrl, caption, sessionKey = S
     return { ok: true, mocked: true };
   }
   try {
-    await client.sendImageForSession(key, formatNumero(telephone), {
-      url: mediaUrl,
-      caption: caption || '',
-    });
+    // /uploads/… ou chemin local → disque → base64 (jamais dépendre d'un fetch
+    // public par OpenWA, ni d'APP_DOMAIN=localhost injoignable depuis le serveur distant).
+    const raw = String(mediaUrl);
+    let media;
+    if (/^https?:\/\//i.test(raw)) {
+      media = { url: raw, caption: caption || '' };
+    } else {
+      const cheminAbsolu = path.isAbsolute(raw) && !raw.startsWith('/uploads/')
+        ? raw
+        : path.join(UPLOAD_ROOT, raw.replace(/^\/?uploads\//, ''));
+      if (!fs.existsSync(cheminAbsolu)) {
+        throw Object.assign(new Error(`[QR] Fichier introuvable : ${cheminAbsolu}`), { statusCode: 404 });
+      }
+      media = {
+        filePath: cheminAbsolu,
+        mimetype: 'image/png',
+        filename: path.basename(cheminAbsolu),
+        caption: caption || '',
+      };
+    }
+    await client.sendImageForSession(key, formatNumero(telephone), media);
     return { ok: true };
   } catch (error) {
+    if (options.skipRetryQueue) return { ok: false, queued: false, error };
     try {
       const retryQueue = require('./services/notificationRetryQueue');
       await retryQueue.enfiler({
@@ -209,21 +227,24 @@ function prenomJoueur(data) {
  * Génère (si besoin) le QR PNG de la réservation et persiste qr_code_url.
  * Contenu encodé = JSON métier (reservation_id + code) pour le scan gérant.
  */
-async function assurerQrCodeUrl(reservationId) {
+async function assurerQrCodeUrl(reservationId, { force = false } = {}) {
   const db = await getDb();
   const row = queryOne(
     db,
     `SELECT r.id, r.code_reservation, r.qr_code_url, r.qr_code_payload, r.creneau_id, r.terrain_id,
             r.date, r.heure_debut, r.heure_fin,
+            t.nom AS terrain_nom,
             COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
      FROM reservations r
      LEFT JOIN creneaux c ON c.id = r.creneau_id
+     LEFT JOIN terrains t ON t.id = r.terrain_id
      WHERE r.id = ?`,
     [reservationId]
   );
   if (!row) return null;
   if (!row.code_reservation) return null;
-
+  // qr_code_url en DB ≠ PNG sur le disque (redéploiement / disque éphémère) :
+  // ne faire confiance à l'URL que si le fichier existe, sinon régénérer ci-dessous.
   const dir = path.join(UPLOAD_ROOT, 'qr');
   const safeCode = String(row.code_reservation).replace(/[^a-zA-Z0-9_-]/g, '_');
   const filename = `${safeCode}.png`;
@@ -263,14 +284,41 @@ async function assurerQrCodeUrl(reservationId) {
   // éphémère (Render), le PNG peut avoir disparu alors que qr_code_url
   // subsiste → l'URL publique renvoyait 404 et le joueur n'avait aucun QR.
   const fichierPresent = fs.existsSync(absolute) && fs.statSync(absolute).size > 0;
-  if (!fichierPresent) {
+  // Régénérer si PNG absent, payload régénéré (ancien PNG périmé) ou force
+  // (ex. changement de couleur du terrain via regenererQrCodeUrl).
+  if (!fichierPresent || !payloadOk || force) {
     fs.mkdirSync(dir, { recursive: true });
-    await QRCode.toFile(absolute, payload, {
-      type: 'png',
-      width: 480,
-      margin: 2,
-      errorCorrectionLevel: 'M',
-    });
+    // QR stylisé à la charte du terrain (nom + couleur dynamiques).
+    // Fallback QR brut si Sharp échoue : la confirmation ne doit jamais casser.
+    let stylise = false;
+    try {
+      let couleur = null;
+      try {
+        couleur = queryOne(db, 'SELECT couleur_primaire FROM terrains WHERE id = ?', [row.terrain_id])?.couleur_primaire;
+      } catch { /* colonne absente sur anciennes bases de test */ }
+      const { genererQRCodeStylise } = require('./services/qrCodeService');
+      await genererQRCodeStylise({
+        payload,
+        codeReservation: row.code_reservation,
+        terrainNom: row.terrain_nom || 'TerrainSN',
+        terrainCouleur: couleur || undefined,
+        date: row.date,
+        heureDebut: row.heure_debut,
+        heureFin: row.heure_fin,
+        cheminSortie: absolute,
+      });
+      stylise = true;
+    } catch (err) {
+      console.warn(`[QR] Stylisé indisponible (${err.message}) — QR brut pour ${row.code_reservation}`);
+    }
+    if (!stylise) {
+      await QRCode.toFile(absolute, payload, {
+        type: 'png',
+        width: 480,
+        margin: 2,
+        errorCorrectionLevel: 'M',
+      });
+    }
   }
   if (!payloadOk || row.qr_code_url !== publicUrl) {
     // Persiste le payload réellement encodé dans le PNG.
@@ -731,6 +779,7 @@ module.exports = {
   assurerQrCodeUrl,
   envoyerQrCodeWhatsApp,
   qrImagePublicUrl,
+  regenererQrCodeUrl: (reservationId) => assurerQrCodeUrl(reservationId, { force: true }),
   envoyerOTP,
   envoyerLienPaiement,
   envoyerConfirmation,

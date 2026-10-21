@@ -622,11 +622,15 @@ async function ensureReadyForSend(state) {
     const all = await listRemoteSessions();
     const preferredIds = [cfg.sharedSessionId, cfg.platformSessionId].filter(Boolean);
     const readyList = all.filter((s) => s && s.id && String(s.status || '').toLowerCase() === 'ready');
-    const preferredReady = readyList.find((s) => preferredIds.includes(s.id));
-    const prefixReady = readyList.find(
-      (s) => String(s.name || '').startsWith(`${cfg.sessionPrefix}-`),
-    );
-    const fallback = preferredReady || prefixReady || readyList[0] || null;
+    // RÈGLE ABSOLUE : n'adopter QUE sa propre session (même nom) ou, pour la
+    // plateforme uniquement, la session partagée explicitement pinnée en config.
+    // Jamais la première session ready venue : ce serait émettre depuis le
+    // numéro d'un autre (superadmin ↔ gérant, ou gérant ↔ gérant).
+    const ownReady = readyList.find((s) => String(s.name || '') === String(state.openwaName));
+    const preferredReady = state.key === 'platform'
+      ? readyList.find((s) => preferredIds.includes(s.id))
+      : null;
+    const fallback = ownReady || preferredReady || null;
     if (fallback) {
       console.warn(
         `⚠️ OpenWA [${state.key}] session ${state.openwaId || '—'} non ready`
@@ -1137,16 +1141,10 @@ async function getQrPayload(key = 'platform') {
 }
 
 async function sendTextForSession(key, chatId, text) {
-  try {
-    return await sendTextForSessionOnce(key, chatId, text);
-  } catch (err) {
-    // Notifs joueur ciblent souvent gerant:N — si non connecté, basculer sur la session plateforme.
-    if (key && key !== 'platform' && Number(err.statusCode) === 503) {
-      console.warn(`⚠️ WhatsApp [${key}] indisponible → fallback session platform`);
-      return sendTextForSessionOnce('platform', chatId, text);
-    }
-    throw err;
-  }
+  // RÈGLE ABSOLUE : aucun fallback inter-session. Un message gérant (gerant:N)
+  // ne part JAMAIS depuis platform (numéro superadmin) — si la session gérant
+  // est indisponible, l'erreur remonte et l'appelant met en file de rejeu.
+  return sendTextForSessionOnce(key, chatId, text);
 }
 
 async function sendTextForSessionOnce(key, chatId, text) {
@@ -1199,15 +1197,9 @@ async function sendTextForSessionOnce(key, chatId, text) {
  * @param {{ url?: string, base64?: string, mimetype?: string, caption?: string, filePath?: string }} media
  */
 async function sendImageForSession(key, chatId, media = {}) {
-  try {
-    return await sendImageForSessionOnce(key, chatId, media);
-  } catch (err) {
-    if (key && key !== 'platform' && Number(err.statusCode) === 503) {
-      console.warn(`⚠️ WhatsApp image [${key}] indisponible → fallback session platform`);
-      return sendImageForSessionOnce('platform', chatId, media);
-    }
-    throw err;
-  }
+  // RÈGLE ABSOLUE : idem texte — une image gérant (ex. QR réservation) ne part
+  // JAMAIS depuis platform. Échec → file de rejeu, pas d'envoi superadmin.
+  return sendImageForSessionOnce(key, chatId, media);
 }
 
 async function sendImageForSessionOnce(key, chatId, media = {}) {
@@ -1226,11 +1218,23 @@ async function sendImageForSessionOnce(key, chatId, media = {}) {
   }
 
   const body = { chatId, caption: media.caption || '' };
-  if (media.filePath && fs.existsSync(media.filePath)) {
+  if (media.filePath) {
+    // Méthode historique (ex-MessageMedia.fromFilePath) : disque → base64 → OpenWA.
+    // Ne jamais retomber silencieusement sur l'URL : un filePath absent doit être explicite.
+    if (!fs.existsSync(media.filePath)) {
+      const err = new Error(`Image WhatsApp introuvable sur le disque : ${media.filePath}`);
+      err.statusCode = 404;
+      err.code = 'IMAGE_INTROUVABLE';
+      throw err;
+    }
     const buf = fs.readFileSync(media.filePath);
     body.base64 = buf.toString('base64');
     body.mimetype = media.mimetype || 'image/png';
     body.filename = path.basename(media.filePath);
+  } else if (media.buffer) {
+    body.base64 = Buffer.from(media.buffer).toString('base64');
+    body.mimetype = media.mimetype || 'image/png';
+    if (media.filename) body.filename = media.filename;
   } else if (media.base64) {
     body.base64 = media.base64;
     body.mimetype = media.mimetype || 'image/jpeg';

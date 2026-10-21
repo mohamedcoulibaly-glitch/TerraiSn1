@@ -293,6 +293,44 @@ router.patch('/terrains/:id/politique-annulation', async (req, res) => {
   res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
 });
 
+router.patch('/terrains/:id/couleur', async (req, res) => {
+  const db = await getDb();
+  const terrainId = Number(req.params.id);
+  const terrain = queryOne(db, 'SELECT id, nom, couleur_primaire FROM terrains WHERE id = ?', [terrainId]);
+  if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+  const couleur = String(req.body?.couleur_primaire || '').trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(couleur)) {
+    return res.status(400).json({ error: 'Couleur invalide (format #RRGGBB)' });
+  }
+  const ancienne = terrain.couleur_primaire || '#059669';
+  runSql(db, 'UPDATE terrains SET couleur_primaire = ? WHERE id = ?', [couleur, terrainId]);
+  syncApresModificationTerrain(terrainId, 'couleur_terrain', { couleur_primaire: couleur });
+
+  // Couleur changée → régénérer en arrière-plan les QR des réservations
+  // confirmées à venir (le fichier PNG porte l'ancienne charte).
+  if (couleur.toLowerCase() !== String(ancienne).toLowerCase()) {
+    const actives = queryAll(
+      db,
+      `SELECT r.id FROM reservations r
+       WHERE r.terrain_id = ? AND r.statut = 'confirme'
+         AND COALESCE(r.date, '') >= date('now')`,
+      [terrainId],
+    );
+    setImmediate(async () => {
+      try {
+        const notificationService = require('../notificationService');
+        for (const r of actives) {
+          await notificationService.regenererQrCodeUrl(r.id);
+        }
+        console.log(`[QR] ${actives.length} QR régénéré(s) (couleur) pour terrain ${terrainId}`);
+      } catch (err) {
+        console.warn('[QR] Régénération couleur:', err.message);
+      }
+    });
+  }
+  return res.json(queryOne(db, 'SELECT * FROM terrains WHERE id = ?', [terrainId]));
+});
+
 router.get('/terrains/:id/photos', async (req, res) => {
   const db = await getDb();
   const terrainId = Number(req.params.id);
