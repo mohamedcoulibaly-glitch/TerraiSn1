@@ -47,6 +47,40 @@ function formatQrScanneAtFr(value) {
   });
 }
 
+/** Bornes date pour historique : periode (jour|semaine|mois|annee) ou from/to YYYY-MM-DD. */
+function resolvePeriodBounds(query = {}) {
+  const fromQ = String(query.from || '').trim();
+  const toQ = String(query.to || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fromQ)) {
+    return {
+      from: fromQ,
+      to: /^\d{4}-\d{2}-\d{2}$/.test(toQ) ? toQ : localDateYmd(),
+    };
+  }
+  const periode = String(query.periode || '').toLowerCase();
+  const today = localDateYmd();
+  if (periode === 'jour' || periode === 'aujourd_hui' || periode === 'day') {
+    return { from: today, to: today, periode: 'jour' };
+  }
+  if (periode === 'semaine' || periode === 'week') {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return { from: localDateYmd(d), to: today, periode: 'semaine' };
+  }
+  if (periode === 'mois' || periode === 'month') {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return { from: localDateYmd(d), to: today, periode: 'mois' };
+  }
+  if (periode === 'annee' || periode === 'year') {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 1);
+    d.setDate(d.getDate() + 1);
+    return { from: localDateYmd(d), to: today, periode: 'annee' };
+  }
+  return null;
+}
+
 function mapReservationGerantRow(row) {
   const montantTotal = Number(row.prix_total ?? row.montant ?? 0);
   const montantAvance = Number(row.montant_avance ?? row.acompte ?? 0);
@@ -89,7 +123,21 @@ function mapReservationGerantRow(row) {
     type_reservation: row.cree_par === 'gerant' ? 'manuelle' : 'en_ligne',
     terrain_id: row.terrain_id,
     terrain_nom: row.terrain_nom || null,
+    terrain_ville: row.terrain_ville || null,
     creneau_id: row.creneau_id || null,
+    format_terrain: row.format_terrain || 'entier',
+    mode_paiement: row.mode_paiement || null,
+    canal_paiement: row.canal_paiement || null,
+    note_gerant: row.note_gerant || null,
+    created_at: row.created_at || null,
+    confirme_at: row.confirme_at || null,
+    confirme_manuellement_at: row.confirme_manuellement_at || null,
+    confirme_manuellement_par: row.confirme_manuellement_par || null,
+    cree_par: row.cree_par || null,
+    match_joue_at: row.match_joue_at || row.joue_at || null,
+    match_solde_paye: row.match_solde_paye != null ? Number(row.match_solde_paye) : null,
+    match_methode_solde: row.match_methode_solde || null,
+    gerant_nom: row.gerant_nom || null,
     fenetre_retard,
     fenetre_debut: new Date(fenetre.debutFenetre).toISOString(),
     fenetre_fin: new Date(fenetre.finFenetre).toISOString(),
@@ -560,7 +608,7 @@ function mountGerantCheckinRoutes(app) {
     }
   });
 
-  /** Liste filtrable (page Joueurs / Réservations gérant). */
+  /** Liste filtrable (page Joueurs / Historique gérant). */
   app.get('/api/gerant/reservations', authMiddleware, requireRole('gerant'), async (req, res) => {
     try {
       const db = await getDb();
@@ -569,8 +617,14 @@ function mountGerantCheckinRoutes(app) {
 
       const statutFilter = String(req.query.statut || 'all').trim().toLowerCase();
       const q = String(req.query.q || '').trim().toLowerCase();
+      const bounds = resolvePeriodBounds(req.query);
       const params = [terrainId];
       let where = 'r.terrain_id = ?';
+
+      if (bounds) {
+        where += ' AND r.date >= ? AND r.date <= ?';
+        params.push(bounds.from, bounds.to);
+      }
 
       if (statutFilter === 'confirme') {
         where += " AND r.statut IN ('confirme', 'acceptee')";
@@ -590,23 +644,30 @@ function mountGerantCheckinRoutes(app) {
 
       const rows = queryAll(
         db,
-        `SELECT r.*, t.nom AS terrain_nom,
+        `SELECT r.*, t.nom AS terrain_nom, t.ville AS terrain_ville,
                 COALESCE(r.joueur_nom, u.nom) AS joueur_nom,
                 COALESCE(r.joueur_telephone, u.telephone) AS joueur_telephone,
                 COALESCE(u.is_banned, 0) AS is_banned,
-                COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard
+                COALESCE(c.fenetre_retard, ${DEFAULT_FENETRE_RETARD_MIN}) AS fenetre_retard,
+                m.joue_at AS match_joue_at,
+                m.solde_paye AS match_solde_paye,
+                m.methode_solde AS match_methode_solde
          FROM reservations r
          JOIN terrains t ON t.id = r.terrain_id
          LEFT JOIN users u ON u.id = r.joueur_id
          LEFT JOIN creneaux c ON c.id = r.creneau_id
+         LEFT JOIN matchs m ON m.reservation_id = r.id
          WHERE ${where}
          ORDER BY r.date DESC, r.heure_debut DESC
-         LIMIT 300`,
+         LIMIT 2000`,
         params,
       );
 
       res.json({
         terrain_id: terrainId,
+        from: bounds?.from || null,
+        to: bounds?.to || null,
+        periode: bounds?.periode || null,
         reservations: rows.map(mapReservationGerantRow),
       });
     } catch (err) {
@@ -812,6 +873,7 @@ module.exports = {
   mountGerantCheckinRoutes,
   traiterCheckinParCode,
   mapReservationGerantRow,
+  resolvePeriodBounds,
   marquerReservationJouee,
   localDateYmd,
 };

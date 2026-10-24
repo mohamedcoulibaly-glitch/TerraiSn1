@@ -13,7 +13,7 @@
     "accounts": "node dev.js --accounts",
     "start": "node backend/index.js",
     "build:joueur": "npm run build --prefix frontend-joueur",
-    "build:pro": "npm run build --prefix frontend-pro",
+    "build:pro": "node scripts/build-pro.js",
     "build:all": "npm run build:joueur && npm run build:pro",
     "build:render": "node scripts/render-build.js",
     "build": "npm run build:all && npm run build --prefix admin-frontend",

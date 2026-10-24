@@ -43,7 +43,7 @@ const adminRoutes = require('./routes/admin');
 const roleRoutes = require('./routes/roles');
 const { mountPaymentRoutes } = require('./payments/routes');
 const { genererCodeReservation } = require('./payments/flow');
-const { mountGerantCheckinRoutes } = require('./gerantCheckin');
+const { mountGerantCheckinRoutes, mapReservationGerantRow, resolvePeriodBounds } = require('./gerantCheckin');
 const { mountGerantCrmRoutes } = require('./gerantCrm');
 const { mountGerantExtrasRoutes } = require('./gerantExtras');
 const { registerGerantMultiRoutes } = require('./routes/multiGerants');
@@ -57,6 +57,17 @@ const {
   ownerRevenueRowsSql,
   playedStatusSql,
   summarizeOwnerRevenue,
+  resolveOwnerPeriodBounds,
+  buildVariation,
+  computeOccupancyRate,
+  buildPeriodGraphique,
+  buildHeatmap,
+  buildSanteCaInsight,
+  isRevenueStatus,
+  isPlayedStatus,
+  avanceOf,
+  localDateYmd,
+  ACTIVE_STATUSES,
 } = require('./ownerRevenueService');
 const {
   UPLOAD_ROOT,
@@ -2932,66 +2943,224 @@ app.get('/api/proprietaire/stats', authMiddleware, requireRole('proprietaire'), 
   try {
     const db = await getDb();
     const propId = req.user.id;
-    const terrains = queryAll(db, 'SELECT * FROM terrains WHERE proprietaire_id = ?', [propId]);
-    const terrainIds = terrains.map(t => t.id);
-    
-    if (terrainIds.length === 0) {
-      return res.json({ totalRevenue: 0, occupancyRate: 0, totalReservations: 0, pendingReservations: 0, totalTerrains: 0, totalEmployes: 0, terrainStats: [], weeklyRevenue: [] });
+    // Défaut mois pour MesTerrains / profil ; le Dashboard passe toujours une période explicite.
+    const bounds = resolveOwnerPeriodBounds(req.query.periode || 'mois');
+    const { periode, from, to, prevFrom, prevTo, label, variationLabel } = bounds;
+    const terrainFilter = req.query.terrain_id ? Number(req.query.terrain_id) : null;
+
+    const terrains = queryAll(db, 'SELECT * FROM terrains WHERE proprietaire_id = ? ORDER BY nom ASC', [propId]);
+    const allIds = terrains.map((t) => Number(t.id));
+    if (terrainFilter && !allIds.includes(terrainFilter)) {
+      return res.status(403).json({ error: 'Terrain non autorisé' });
+    }
+    const terrainIds = terrainFilter ? [terrainFilter] : allIds;
+    const terrainsScoped = terrains.filter((t) => terrainIds.includes(Number(t.id)));
+
+    if (!terrainIds.length) {
+      return res.json({
+        periode,
+        from,
+        to,
+        label,
+        totalRevenue: 0,
+        occupancyRate: 0,
+        totalReservations: 0,
+        matchsJoues: 0,
+        aVenir: 0,
+        pendingReservations: 0,
+        totalTerrains: 0,
+        totalEmployes: 0,
+        terrainStats: [],
+        weeklyRevenue: [],
+        graphique: [],
+        variation: null,
+        prochains_matchs: [],
+        heatmap: { jours: [], heures: [], cells: [], top_creneaux: [], creneaux_froids: [], has_data: false },
+        sante_ca: null,
+        perf_terrains: [],
+      });
     }
 
     const placeholders = terrainIds.map(() => '?').join(',');
-
-    const revenueRows = queryAll(db, ownerRevenueRowsSql({ ownerWhere: 't.proprietaire_id = ?', dateWhere: '' }), [propId]);
-    const revenueTotals = summarizeOwnerRevenue(revenueRows);
-    const totalRes = queryOne(db, `SELECT COUNT(*) as count FROM reservations WHERE terrain_id IN (${placeholders})`, terrainIds);
-    const pendingRes = queryOne(db, `SELECT COUNT(*) as count FROM reservations WHERE terrain_id IN (${placeholders}) AND statut = 'en_attente'`, terrainIds);
+    const today = localDateYmd();
     const totalEmp = queryOne(db, 'SELECT COUNT(*) as count FROM employes WHERE proprietaire_id = ?', [propId]);
+    const pendingRes = queryOne(
+      db,
+      `SELECT COUNT(*) as count FROM reservations
+       WHERE terrain_id IN (${placeholders}) AND statut = 'en_attente' AND date >= ?`,
+      [...terrainIds, from],
+    );
 
-    const terrainStats = terrains.map(t => {
-      const revenue = revenueRows.find((row) => Number(row.id) === Number(t.id)) || {};
-      const resCount = queryOne(db, 'SELECT COUNT(*) as count FROM reservations WHERE terrain_id = ?', [t.id]);
+    const loadReservations = (dateFrom, dateTo) =>
+      queryAll(
+        db,
+        `SELECT r.id, r.date, r.heure_debut, r.heure_fin, r.joueur_nom, r.statut,
+                r.montant_avance, r.acompte, r.terrain_id, t.nom AS terrain_nom
+         FROM reservations r
+         JOIN terrains t ON t.id = r.terrain_id
+         WHERE r.terrain_id IN (${placeholders})
+           AND r.date >= ? AND r.date <= ?
+           AND r.statut IN ('${ACTIVE_STATUSES.join("','")}')
+         ORDER BY r.date ASC, r.heure_debut ASC`,
+        [...terrainIds, dateFrom, dateTo],
+      );
+
+    const currentRows = loadReservations(from, to);
+    const previousRows = loadReservations(prevFrom, prevTo);
+
+    const sumAvances = (rows) =>
+      rows.filter((r) => isRevenueStatus(r.statut)).reduce((s, r) => s + avanceOf(r), 0);
+    const countPlayed = (rows) => rows.filter((r) => isPlayedStatus(r.statut)).length;
+    const countActive = (rows) => rows.filter((r) => isRevenueStatus(r.statut) || String(r.statut) === 'en_attente').length;
+
+    const totalRevenue = sumAvances(currentRows);
+    const prevRevenue = sumAvances(previousRows);
+    const matchsJoues = countPlayed(currentRows);
+    const totalReservations = countActive(currentRows);
+    const aVenir = currentRows.filter(
+      (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
+    ).length;
+
+    const occupancyRate = computeOccupancyRate(db, queryAll, {
+      terrainIds,
+      from,
+      to,
+      reservations: currentRows,
+    });
+
+    const ledgerRows = queryAll(
+      db,
+      ownerRevenueRowsSql({
+        ownerWhere: `t.proprietaire_id = ? AND t.id IN (${placeholders})`,
+        dateWhere: 'AND r.date >= ? AND r.date <= ?',
+      }),
+      [from, to, propId, ...terrainIds],
+    );
+    const ledgerTotals = summarizeOwnerRevenue(ledgerRows);
+
+    const terrainStats = terrainsScoped.map((t) => {
+      const tid = Number(t.id);
+      const rows = currentRows.filter((r) => Number(r.terrain_id) === tid);
+      const prevRows = previousRows.filter((r) => Number(r.terrain_id) === tid);
+      const revenue = sumAvances(rows);
+      const prev = sumAvances(prevRows);
+      const ledger = ledgerRows.find((row) => Number(row.id) === tid) || {};
+      const occ = computeOccupancyRate(db, queryAll, {
+        terrainIds: [tid],
+        from,
+        to,
+        reservations: rows,
+      });
+      let sante = { score_confiance: 100, taux_scan: 100, matchs_scannes: 0, total_confirmes: 0 };
+      try {
+        sante = scoreService.getSanteTerrain(db, tid) || sante;
+      } catch {
+        /* score optionnel */
+      }
       return {
         nom: t.nom,
-        id: t.id,
-        reservations: resCount.count,
-        revenue: Number(revenue.verse_au_gerant || 0),
-        verse_au_gerant: Number(revenue.verse_au_gerant || 0),
-        encore_du: Number(revenue.encore_du || 0),
-        avances_encaissees: Number(revenue.avances_encaissees || 0),
-        occupancy: Math.min(Math.round((resCount.count / 50) * 100), 100),
+        id: tid,
+        reservations: countActive(rows),
+        matchsJoues: countPlayed(rows),
+        aVenir: rows.filter(
+          (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
+        ).length,
+        revenue,
+        verse_au_gerant: Number(ledger.verse_au_gerant || 0),
+        encore_du: Number(ledger.encore_du || 0),
+        avances_encaissees: revenue,
+        occupancy: occ,
+        score_confiance: Number(sante.score_confiance ?? 100),
+        taux_scan: Number(sante.taux_scan ?? 100),
+        matchs_scannes: Number(sante.matchs_scannes || 0),
+        total_confirmes: Number(sante.total_confirmes || 0),
+        variation: buildVariation(revenue, prev, variationLabel),
         payout_mode: t.payout_mode || 'retrait',
         pourcentage_avance: Number(t.pourcentage_avance || 0),
         commission_pourcentage: Number(t.commission_pourcentage || 0),
       };
     });
 
-    const weeklyRevenue = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
-      const rev = queryOne(db, `SELECT
-        COALESCE(SUM(CASE WHEN d.statut != 'annule_rembourse' THEN d.du_gerant ELSE 0 END), 0) as total
-        FROM dus d
-        JOIN reservations r ON r.id = d.reservation_id
-        WHERE d.terrain_id IN (${placeholders}) AND r.date = ?`, [...terrainIds, dateStr]);
-      weeklyRevenue.push({ day: ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][d.getDay()], revenue: rev.total });
-    }
+    const heatmap = buildHeatmap(
+      currentRows
+        .filter((r) => isRevenueStatus(r.statut))
+        .map((r) => ({
+          date: r.date,
+          heure_debut: r.heure_debut,
+          montant: avanceOf(r),
+          statut: r.statut,
+        })),
+    );
+    const santeCa = buildSanteCaInsight(terrainStats);
+    const perfTerrains = [...terrainStats].sort((a, b) => (b.revenue || 0) - (a.revenue || 0));
+
+    const graphique = buildPeriodGraphique(
+      periode,
+      from,
+      to,
+      currentRows
+        .filter((r) => isRevenueStatus(r.statut))
+        .map((r) => ({
+          date: r.date,
+          heure_debut: r.heure_debut,
+          montant: avanceOf(r),
+          matchs: 1,
+          statut: r.statut,
+          terrain_id: r.terrain_id,
+        })),
+      {
+        stackByTerrain: !terrainFilter && terrainsScoped.length > 1,
+        terrains: terrainsScoped.map((t) => ({ id: t.id, nom: t.nom })),
+      },
+    );
+
+    const weeklyRevenue = graphique.map((p) => ({
+      day: p.label,
+      revenue: Number(p.montant || 0),
+      matchs: Number(p.matchs || 0),
+    }));
+
+    const prochains = currentRows
+      .filter((r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today)
+      .slice(0, 8)
+      .map((r) => ({
+        id: r.id,
+        date: r.date,
+        heure_debut: r.heure_debut,
+        joueur_nom: r.joueur_nom || '—',
+        terrain_id: r.terrain_id,
+        terrain_nom: r.terrain_nom,
+        statut: r.statut,
+        montant_avance: avanceOf(r),
+      }));
 
     res.json({
-      totalRevenue: revenueTotals.verse_au_gerant,
-      verseAuGerant: revenueTotals.verse_au_gerant,
-      encoreDu: revenueTotals.encore_du,
-      totalAvances: revenueTotals.avances_encaissees,
-      totalCommission: revenueTotals.commissions_prelevees,
+      periode,
+      from,
+      to,
+      label,
+      totalRevenue,
+      verseAuGerant: ledgerTotals.verse_au_gerant,
+      encoreDu: ledgerTotals.encore_du,
+      totalAvances: totalRevenue,
+      totalCommission: ledgerTotals.commissions_prelevees,
       beneficiaire: 'gerant',
-      occupancyRate: terrainStats.length > 0 ? Math.round(terrainStats.reduce((s, t) => s + t.occupancy, 0) / terrainStats.length) : 0,
-      totalReservations: totalRes.count,
-      pendingReservations: pendingRes.count,
+      occupancyRate,
+      totalReservations,
+      matchsJoues,
+      aVenir,
+      pendingReservations: Number(pendingRes?.count || 0),
       totalTerrains: terrains.length,
-      totalEmployes: totalEmp.count,
+      totalEmployes: Number(totalEmp?.count || 0),
       terrainStats,
       weeklyRevenue,
+      graphique,
+      series: terrainsScoped.map((t) => ({ key: String(t.id), id: t.id, nom: t.nom })),
+      variation: buildVariation(totalRevenue, prevRevenue, variationLabel),
+      prochains_matchs: prochains,
+      heatmap,
+      sante_ca: santeCa,
+      perf_terrains: perfTerrains,
     });
   } catch (err) {
     console.error(err);
@@ -3084,15 +3253,81 @@ app.get('/api/proprietaire/retraits', authMiddleware, requireRole('proprietaire'
 app.get('/api/proprietaire/reservations', authMiddleware, requireRole('proprietaire'), async (req, res) => {
   try {
     const db = await getDb();
-    const reservations = queryAll(db, `
-      SELECT r.*, t.nom as terrain_nom, t.ville as terrain_ville, u.nom as joueur_nom, u.telephone as joueur_telephone
-      FROM reservations r JOIN terrains t ON t.id = r.terrain_id LEFT JOIN users u ON u.id = r.joueur_id
-      WHERE t.proprietaire_id = ? ORDER BY r.created_at DESC
-    `, [req.user.id]);
-    res.json(reservations);
+    const statutFilter = String(req.query.statut || 'all').trim().toLowerCase();
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const terrainFilter = req.query.terrain_id ? Number(req.query.terrain_id) : null;
+    const bounds = resolvePeriodBounds(req.query);
+
+    const terrains = queryAll(
+      db,
+      'SELECT id, nom FROM terrains WHERE proprietaire_id = ? ORDER BY nom ASC',
+      [req.user.id],
+    );
+    const allowedIds = terrains.map((t) => Number(t.id));
+    if (terrainFilter && !allowedIds.includes(terrainFilter)) {
+      return res.status(403).json({ error: 'Terrain non autorisé', reservations: [] });
+    }
+    const ids = terrainFilter ? [terrainFilter] : allowedIds;
+    if (!ids.length) {
+      return res.json({ reservations: [], from: bounds?.from || null, to: bounds?.to || null, periode: bounds?.periode || null });
+    }
+
+    const placeholders = ids.map(() => '?').join(',');
+    const params = [...ids];
+    let where = `r.terrain_id IN (${placeholders})`;
+
+    if (bounds) {
+      where += ' AND r.date >= ? AND r.date <= ?';
+      params.push(bounds.from, bounds.to);
+    }
+
+    if (statutFilter === 'confirme') {
+      where += " AND r.statut IN ('confirme', 'acceptee')";
+    } else if (statutFilter === 'en_attente') {
+      where += " AND r.statut IN ('en_attente', 'en_attente_paiement')";
+    } else if (statutFilter === 'joue') {
+      where += " AND r.statut IN ('match_joue', 'joue')";
+    } else if (statutFilter === 'annulee') {
+      where += " AND r.statut IN ('annulee', 'refusee', 'expiree')";
+    }
+
+    if (q) {
+      where += ' AND (LOWER(COALESCE(r.joueur_nom, u.nom, \'\')) LIKE ? OR COALESCE(r.joueur_telephone, u.telephone, \'\') LIKE ? OR LOWER(COALESCE(r.code_reservation, \'\')) LIKE ? OR LOWER(COALESCE(t.nom, \'\')) LIKE ?)';
+      const like = `%${q}%`;
+      params.push(like, like, like, like);
+    }
+
+    const rows = queryAll(
+      db,
+      `SELECT r.*, t.nom AS terrain_nom, t.ville AS terrain_ville,
+              COALESCE(r.joueur_nom, u.nom) AS joueur_nom,
+              COALESCE(r.joueur_telephone, u.telephone) AS joueur_telephone,
+              COALESCE(u.is_banned, 0) AS is_banned,
+              m.joue_at AS match_joue_at,
+              m.solde_paye AS match_solde_paye,
+              m.methode_solde AS match_methode_solde,
+              e.nom AS gerant_nom
+       FROM reservations r
+       JOIN terrains t ON t.id = r.terrain_id
+       LEFT JOIN users u ON u.id = r.joueur_id
+       LEFT JOIN matchs m ON m.reservation_id = r.id
+       LEFT JOIN employes e ON e.id = m.gerant_id
+       WHERE ${where}
+       ORDER BY r.date DESC, r.heure_debut DESC
+       LIMIT 2000`,
+      params,
+    );
+
+    res.json({
+      from: bounds?.from || null,
+      to: bounds?.to || null,
+      periode: bounds?.periode || null,
+      terrain_id: terrainFilter || null,
+      reservations: rows.map(mapReservationGerantRow),
+    });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Erreur serveur' });
+    res.status(500).json({ error: 'Erreur serveur', reservations: [] });
   }
 });
 

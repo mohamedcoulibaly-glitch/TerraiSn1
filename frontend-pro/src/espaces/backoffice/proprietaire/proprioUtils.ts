@@ -114,6 +114,26 @@ export function occupancyColor(rate: number) {
   return "var(--p-verifier)";
 }
 
+/** Intensité 0–1 → fond heatmap (bleu marque). */
+export function heatmapCellBg(intensite: number) {
+  const t = Math.max(0, Math.min(1, Number(intensite) || 0));
+  if (t <= 0) return "var(--p-surface-2)";
+  const alpha = 0.12 + t * 0.78;
+  return `rgba(30, 64, 175, ${alpha.toFixed(2)})`;
+}
+
+export function heatmapCellFg(intensite: number) {
+  return Number(intensite) >= 0.55 ? "#fff" : "var(--p-text)";
+}
+
+export function santeCaTone(statut?: string | null) {
+  if (statut === "risque") return { bg: "var(--p-verifier-bg)", color: "var(--p-verifier)", label: "À surveiller" };
+  if (statut === "attention") return { bg: "var(--p-attention-bg)", color: "var(--p-attention)", label: "Attention" };
+  if (statut === "opportunite") return { bg: "var(--p-primary-glow)", color: "var(--p-primary)", label: "Opportunité" };
+  if (statut === "optimal") return { bg: "var(--p-optimal-bg)", color: "var(--p-optimal)", label: "Optimal" };
+  return { bg: "var(--p-surface-2)", color: "var(--p-muted)", label: "Neutre" };
+}
+
 export type VariationFinances = {
   label?: string;
   total_encaisse_precedent?: number;

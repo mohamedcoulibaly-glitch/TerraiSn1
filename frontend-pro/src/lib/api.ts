@@ -748,8 +748,17 @@ export const proprietaireApi = {
     return await request('/proprietaire/profile');
   },
 
-  async stats() {
-    return await request('/proprietaire/stats');
+  async stats(params?: {
+    periode?: 'aujourd_hui' | 'semaine' | 'mois' | 'annee';
+    terrainId?: number | string;
+  }) {
+    const sp = new URLSearchParams();
+    if (params?.periode) sp.set('periode', params.periode);
+    if (params?.terrainId != null && params.terrainId !== '' && params.terrainId !== 'all') {
+      sp.set('terrain_id', String(params.terrainId));
+    }
+    const q = sp.toString();
+    return await request(`/proprietaire/stats${q ? `?${q}` : ''}`);
   },
 
   async terrains() {
@@ -758,6 +767,27 @@ export const proprietaireApi = {
 
   async reservations() {
     return await request('/proprietaire/reservations');
+  },
+
+  async reservationsHistorique(params?: {
+    statut?: string;
+    q?: string;
+    periode?: 'jour' | 'semaine' | 'mois' | 'annee' | 'aujourd_hui';
+    from?: string;
+    to?: string;
+    terrainId?: number | string;
+  }) {
+    const sp = new URLSearchParams();
+    if (params?.statut) sp.set('statut', params.statut);
+    if (params?.q) sp.set('q', params.q);
+    if (params?.periode) sp.set('periode', params.periode);
+    if (params?.from) sp.set('from', params.from);
+    if (params?.to) sp.set('to', params.to);
+    if (params?.terrainId != null && params.terrainId !== '' && params.terrainId !== 'all') {
+      sp.set('terrain_id', String(params.terrainId));
+    }
+    const q = sp.toString();
+    return await request(`/proprietaire/reservations${q ? `?${q}` : ''}`);
   },
 
   async revenus(periode: 'semaine' | 'mois' | 'annee' = 'mois') {
@@ -879,10 +909,19 @@ export const gerantApi = {
     return await request('/gerant/reservations/week');
   },
 
-  async reservationsList(params?: { statut?: string; q?: string }) {
+  async reservationsList(params?: {
+    statut?: string;
+    q?: string;
+    periode?: 'jour' | 'semaine' | 'mois' | 'annee' | 'aujourd_hui';
+    from?: string;
+    to?: string;
+  }) {
     const sp = new URLSearchParams();
     if (params?.statut) sp.set('statut', params.statut);
     if (params?.q) sp.set('q', params.q);
+    if (params?.periode) sp.set('periode', params.periode);
+    if (params?.from) sp.set('from', params.from);
+    if (params?.to) sp.set('to', params.to);
     const q = sp.toString();
     return await request(`/gerant/reservations${q ? `?${q}` : ''}`);
   },

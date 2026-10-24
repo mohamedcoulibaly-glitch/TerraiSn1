@@ -16,10 +16,19 @@ const queryClient = new QueryClient({
   defaultOptions: REACT_QUERY_CONFIG,
 });
 
-/** Support VITE_BASE=/pro/ (mono-host) ou / (domaine pro.terrainsn.com) */
+/**
+ * Support VITE_BASE=/pro/ (mono-host) ou / (domaine dédié).
+ * Fallback runtime : si le build a oublié VITE_BASE mais l’URL est sous /pro,
+ * on évite la page 404 sur toutes les routes.
+ */
 const routerBasename = (() => {
-  const base = String(import.meta.env.BASE_URL || "/").replace(/\/$/, "");
-  return base || undefined;
+  const fromEnv = String(import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+  if (fromEnv) return fromEnv;
+  if (typeof window !== "undefined") {
+    const path = window.location.pathname || "";
+    if (path === "/pro" || path.startsWith("/pro/")) return "/pro";
+  }
+  return undefined;
 })();
 
 const App = () => (

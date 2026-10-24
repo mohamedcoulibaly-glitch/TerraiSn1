@@ -31,7 +31,7 @@ export default function ProfilProprietaire() {
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([profilApi.getProprietaire(), proprietaireApi.stats().catch(() => null)])
+    Promise.all([profilApi.getProprietaire(), proprietaireApi.stats({ periode: "mois" }).catch(() => null)])
       .then(async ([payload, stats]) => {
         if (!mounted) return;
         setAccount(payload?.account || null);

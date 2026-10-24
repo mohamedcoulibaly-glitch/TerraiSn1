@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, MessageCircle, Search } from "lucide-react";
+import { ArrowLeft, History, MessageCircle, Search } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { gerantApi } from "@/lib/api";
 import { formatPhoneDisplay, toLocal9 } from "@/auth/phone";
@@ -545,6 +545,15 @@ export default function JoueursReservationsPage() {
           <Pills<ResaSous> items={resaSousTabs} value={resaSous} onChange={setResaSous} />
           {resaSous === "matchs" ? (
             <>
+              <button
+                type="button"
+                onClick={() => navigate("/backoffice/gerant/historique")}
+                className="w-full min-h-[44px] rounded-xl text-sm font-semibold inline-flex items-center justify-center gap-2"
+                style={{ background: "var(--g-primary-glow)", color: "var(--g-primary)" }}
+              >
+                <History className="w-4 h-4" />
+                Historique complet + export PDF
+              </button>
               <PhoneSearch value={resaQ} onChange={setResaQ} placeholder="7X XXX XX XX" />
               <Pills<(typeof RESA_FILTERS)[number]["id"]> items={RESA_FILTERS} value={resaFilter} onChange={setResaFilter} />
               {resaLoading ? (

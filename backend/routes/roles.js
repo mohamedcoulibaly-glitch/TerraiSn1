@@ -5,6 +5,13 @@ const {
   ownerRevenueRowsSql,
   periodStart,
   summarizeOwnerRevenue,
+  resolveOwnerPeriodBounds,
+  buildVariation,
+  buildPeriodGraphique,
+  isRevenueStatus,
+  isPlayedStatus,
+  avanceOf,
+  localDateYmd,
 } = require('../ownerRevenueService');
 const { logActivite } = require('../services/auditService');
 const { grilleTarifs, sauvegarderGrille, calculerDevis } = require('../pricingService');
@@ -59,10 +66,9 @@ router.get('/proprietaire/revenus', authMiddleware, requireRole('proprietaire'),
 router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire'), async (req, res) => {
   try {
     const db = await getDb();
-    const periode = String(req.query.periode || 'mois');
-    const from = periodStart(periode === 'aujourd_hui' ? 'semaine' : periode);
-    const today = new Date().toISOString().slice(0, 10);
-    const since = periode === 'aujourd_hui' ? today : from;
+    const bounds = resolveOwnerPeriodBounds(req.query.periode || 'mois');
+    const { periode, from, to, prevFrom, prevTo, variationLabel } = bounds;
+    const today = localDateYmd();
     const terrainFilter = req.query.terrain_id ? Number(req.query.terrain_id) : null;
 
     const terrains = queryAll(
@@ -77,73 +83,140 @@ router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire')
     const ids = terrainFilter ? [terrainFilter] : terrainIds;
     if (!ids.length) {
       return res.json({
+        periode,
+        from,
+        to,
         total_encaisse: 0,
         avances_recues: 0,
         matchs_joues: 0,
         a_venir: 0,
         historique: [],
         graphique: [],
+        par_terrain: [],
+        variation: null,
         mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
       });
     }
 
     const placeholders = ids.map(() => '?').join(',');
-    const reservations = queryAll(
-      db,
-      `SELECT r.id, r.date, r.heure_debut, r.joueur_nom, r.joueur_telephone, r.statut,
-              r.montant_avance, r.acompte, r.montant, r.prix_total, t.nom AS terrain_nom, t.id AS terrain_id
-       FROM reservations r
-       JOIN terrains t ON t.id = r.terrain_id
-       WHERE r.terrain_id IN (${placeholders})
-         AND r.date >= ?
-         AND r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'en_attente')
-       ORDER BY r.date DESC, r.heure_debut DESC
-       LIMIT 500`,
-      [...ids, since],
-    );
+    const loadReservations = (dateFrom, dateTo) =>
+      queryAll(
+        db,
+        `SELECT r.id, r.date, r.heure_debut, r.heure_fin, r.joueur_nom, r.joueur_telephone, r.statut,
+                r.montant_avance, r.acompte, r.montant_restant, r.reste_a_payer, r.montant, r.prix_total,
+                r.format_terrain, r.code_reservation, r.mode_paiement, r.canal_paiement,
+                r.confirme_manuellement_par, r.confirme_manuellement_at,
+                t.nom AS terrain_nom, t.id AS terrain_id
+         FROM reservations r
+         JOIN terrains t ON t.id = r.terrain_id
+         WHERE r.terrain_id IN (${placeholders})
+           AND r.date >= ? AND r.date <= ?
+           AND r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'en_attente')
+         ORDER BY r.date DESC, r.heure_debut DESC
+         LIMIT 2000`,
+        [...ids, dateFrom, dateTo],
+      );
+
+    const reservations = loadReservations(from, to);
+    const previousRows = loadReservations(prevFrom, prevTo);
 
     const historique = reservations.map((r) => ({
       id: r.id,
       date: r.date,
       heure_debut: r.heure_debut,
+      heure_fin: r.heure_fin,
       joueur_nom: r.joueur_nom || '—',
       joueur_telephone: r.joueur_telephone || null,
-      montant_avance: Number(r.montant_avance ?? r.acompte ?? 0),
+      montant_avance: avanceOf(r),
+      montant_total: Number(r.prix_total ?? r.montant ?? 0),
+      montant_restant: Number(r.montant_restant ?? r.reste_a_payer ?? 0),
+      format_terrain: r.format_terrain || 'entier',
+      code_reservation: r.code_reservation || null,
+      mode_paiement: r.mode_paiement || null,
+      canal_paiement: r.canal_paiement || null,
+      terrain_id: r.terrain_id,
       terrain_nom: r.terrain_nom,
       statut: r.statut,
       source: r.statut,
     }));
 
-    const avanceConfirmee = (r) =>
-      ['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut))
-        ? Number(r.montant_avance ?? r.acompte ?? 0)
-        : 0;
+    const sumAvances = (rows) =>
+      rows.filter((r) => isRevenueStatus(r.statut)).reduce((s, r) => s + avanceOf(r), 0);
 
-    const totalEncaisse = historique.reduce((s, r) => s + (['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut)) ? Number(r.montant_avance || 0) : 0), 0);
-    const matchsJoues = reservations.filter((r) => ['match_joue', 'joue'].includes(String(r.statut))).length;
+    const totalEncaisse = sumAvances(reservations);
+    const prevEncaisse = sumAvances(previousRows);
+    const matchsJoues = reservations.filter((r) => isPlayedStatus(r.statut)).length;
     const aVenir = reservations.filter(
       (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
     ).length;
 
-    const byDay = new Map();
-    for (const r of reservations) {
-      if (!['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut))) continue;
-      const key = String(r.date).slice(0, 10);
-      const cur = byDay.get(key) || { label: key, montant: 0, matchs: 0 };
-      cur.montant += avanceConfirmee(r);
-      cur.matchs += 1;
-      byDay.set(key, cur);
+    const terrainsScoped = terrains.filter((t) => ids.includes(Number(t.id)));
+    const stackByTerrain = !terrainFilter && terrainsScoped.length > 1;
+    const graphique = buildPeriodGraphique(
+      periode,
+      from,
+      to,
+      reservations
+        .filter((r) => isRevenueStatus(r.statut))
+        .map((r) => ({
+          date: r.date,
+          heure_debut: r.heure_debut,
+          montant: avanceOf(r),
+          matchs: 1,
+          statut: r.statut,
+          terrain_id: r.terrain_id,
+        })),
+      { stackByTerrain, terrains: terrainsScoped },
+    );
+
+    const byTerrain = new Map();
+    for (const t of terrainsScoped) {
+      byTerrain.set(Number(t.id), {
+        id: Number(t.id),
+        nom: t.nom,
+        total_encaisse: 0,
+        avances_recues: 0,
+        matchs_joues: 0,
+        a_venir: 0,
+        nb_reservations: 0,
+      });
     }
-    const graphique = [...byDay.values()].sort((a, b) => String(a.label).localeCompare(String(b.label)));
+    for (const r of reservations) {
+      const tid = Number(r.terrain_id);
+      const bucket = byTerrain.get(tid);
+      if (!bucket) continue;
+      bucket.nb_reservations += 1;
+      const avance = isRevenueStatus(r.statut) ? avanceOf(r) : 0;
+      bucket.total_encaisse += avance;
+      bucket.avances_recues += avance;
+      if (isPlayedStatus(r.statut)) bucket.matchs_joues += 1;
+      if (['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today) {
+        bucket.a_venir += 1;
+      }
+    }
+
+    const manuelles = reservations.filter(
+      (r) => isRevenueStatus(r.statut) && (r.confirme_manuellement_par || r.confirme_manuellement_at),
+    );
+    const confirmations_manuelles = {
+      nb_confirmations_manuelles: manuelles.length,
+      avances_manuelles: manuelles.reduce((s, r) => s + avanceOf(r), 0),
+    };
 
     res.json({
+      periode,
+      from,
+      to,
       total_encaisse: totalEncaisse,
       avances_recues: totalEncaisse,
       matchs_joues: matchsJoues,
       a_venir: aVenir,
       historique,
       graphique,
-      series: terrains.map((t) => ({ key: String(t.id), id: t.id, nom: t.nom })),
+      par_terrain: [...byTerrain.values()],
+      series: terrainsScoped.map((t) => ({ key: String(t.id), id: t.id, nom: t.nom })),
+      variation: buildVariation(totalEncaisse, prevEncaisse, variationLabel),
+      confirmations_manuelles,
       mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
       encaisse_abonnements: 0,
       encaisse_tournois: 0,
@@ -229,15 +302,17 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
 
     const reservations = queryAll(
       db,
-      `SELECT r.id, r.date, r.heure_debut, r.joueur_nom, r.joueur_telephone, r.statut,
-              r.montant_avance, r.acompte, r.montant, r.prix_total, t.nom AS terrain_nom, t.id AS terrain_id
+      `SELECT r.id, r.date, r.heure_debut, r.heure_fin, r.joueur_nom, r.joueur_telephone, r.statut,
+              r.montant_avance, r.acompte, r.montant_restant, r.reste_a_payer, r.montant, r.prix_total,
+              r.format_terrain, r.code_reservation, r.mode_paiement, r.canal_paiement,
+              t.nom AS terrain_nom, t.id AS terrain_id
        FROM reservations r
        JOIN terrains t ON t.id = r.terrain_id
        WHERE r.terrain_id = ?
          AND r.date >= ?
          AND r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'en_attente')
        ORDER BY r.date DESC, r.heure_debut DESC
-       LIMIT 500`,
+       LIMIT 2000`,
       [terrainId, from],
     );
 
@@ -245,9 +320,16 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       id: r.id,
       date: r.date,
       heure_debut: r.heure_debut,
+      heure_fin: r.heure_fin,
       joueur_nom: r.joueur_nom || '—',
       joueur_telephone: r.joueur_telephone || null,
       montant_avance: Number(r.montant_avance ?? r.acompte ?? 0),
+      montant_total: Number(r.prix_total ?? r.montant ?? 0),
+      montant_restant: Number(r.montant_restant ?? r.reste_a_payer ?? 0),
+      format_terrain: r.format_terrain || 'entier',
+      code_reservation: r.code_reservation || null,
+      mode_paiement: r.mode_paiement || null,
+      canal_paiement: r.canal_paiement || null,
       terrain_nom: r.terrain_nom,
       statut: r.statut,
       source: r.statut,
@@ -278,6 +360,7 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
     }
     const graphique = [...byDay.values()].sort((a, b) => String(a.label).localeCompare(String(b.label)));
 
+    const terrainNom = reservations[0]?.terrain_nom || null;
     res.json({
       periode,
       from,
@@ -288,6 +371,15 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       a_venir: aVenir,
       historique,
       graphique,
+      par_terrain: [{
+        id: terrainId,
+        nom: terrainNom || `Terrain #${terrainId}`,
+        total_encaisse: totalEncaisse,
+        avances_recues: totalEncaisse,
+        matchs_joues: matchsJoues,
+        a_venir: aVenir,
+        nb_reservations: reservations.length,
+      }],
       mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
       encaisse_abonnements: 0,
       encaisse_tournois: 0,

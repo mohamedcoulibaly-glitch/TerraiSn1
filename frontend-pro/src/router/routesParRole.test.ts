@@ -35,6 +35,7 @@ describe("ROUTE_MAP — complétude par rôle", () => {
     expect(ROUTE_MAP.gerant.routes).toEqual([
       "/backoffice/gerant",
       "/backoffice/gerant/joueurs",
+      "/backoffice/gerant/historique",
       "/backoffice/gerant/finances",
       "/backoffice/gerant/parametres",
       "/backoffice/gerant/reservations/:id",
@@ -63,6 +64,7 @@ describe("ROUTE_MAP — complétude par rôle", () => {
     expect(ROUTE_MAP.proprietaire.routes).toEqual([
       "/backoffice/proprietaire",
       "/backoffice/proprietaire/revenus",
+      "/backoffice/proprietaire/historique",
       "/backoffice/proprietaire/sante",
       "/backoffice/proprietaire/terrains",
       "/backoffice/proprietaire/terrain/:id",

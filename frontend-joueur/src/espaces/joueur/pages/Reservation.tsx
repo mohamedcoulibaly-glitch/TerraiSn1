@@ -15,8 +15,7 @@ import { clearDraft, usePersistedState } from "@/hooks/usePersistedState";
 import { useSubmitGuard } from "@/hooks/useSubmitGuard";
 import { useSwipeBack } from "@/hooks/useSwipeBack";
 
-import omIcon from "@/assets/images.png";
-import waveIcon from "@/assets/wave-banque-en-ligne-au-senegal-pour-paiement-transfert-argents.jpg";
+import { OrangeMoneyIcon, WaveIcon } from "@/components/PaymentCanalIcons";
 
 type PaymentDraft = {
   name: string;
@@ -341,7 +340,7 @@ const Payment = () => {
                     : "border-[var(--color-border)] bg-[var(--surface)]"
                 }`}
               >
-                <img src={waveIcon} alt="" className="w-5 h-5 rounded-sm object-cover" />
+                <WaveIcon className="w-6 h-6 shrink-0 rounded-md" />
                 Wave
               </button>
               <button
@@ -353,7 +352,7 @@ const Payment = () => {
                     : "border-[var(--color-border)] bg-[var(--surface)]"
                 }`}
               >
-                <img src={omIcon} alt="" className="w-5 h-5 rounded-sm object-cover" />
+                <OrangeMoneyIcon className="w-6 h-6 shrink-0 rounded-md" />
                 Orange Money
               </button>
             </div>
@@ -390,22 +389,8 @@ const Payment = () => {
           </button>
           {!sansAvance ? (
             <p className="flex items-center justify-center gap-2 text-[12px] text-[var(--color-text-muted)] text-center pointer-events-none select-none">
-              <img
-                src={waveIcon}
-                alt=""
-                width={16}
-                height={16}
-                className="w-4 h-4 rounded-sm object-cover grayscale opacity-60"
-                aria-hidden
-              />
-              <img
-                src={omIcon}
-                alt=""
-                width={16}
-                height={16}
-                className="w-4 h-4 rounded-sm object-cover grayscale opacity-60"
-                aria-hidden
-              />
+              <WaveIcon className="w-4 h-4 rounded opacity-70" decorative />
+              <OrangeMoneyIcon className="w-4 h-4 rounded opacity-70" decorative />
               <span>Paiement sécurisé via Wave ou Orange Money</span>
             </p>
           ) : null}

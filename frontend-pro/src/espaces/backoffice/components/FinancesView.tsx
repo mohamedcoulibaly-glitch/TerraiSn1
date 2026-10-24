@@ -28,6 +28,15 @@ export type FinancesData = {
   a_venir: number;
   historique: LigneEncaissement[];
   graphique: Array<{ label: string; montant: number }>;
+  par_terrain?: Array<{
+    id?: number;
+    nom: string;
+    total_encaisse?: number;
+    avances_recues?: number;
+    matchs_joues?: number;
+    a_venir?: number;
+    nb_reservations?: number;
+  }>;
 };
 
 export const PERIODES_FINANCES: Array<{ id: PeriodeFinances; label: string }> = [

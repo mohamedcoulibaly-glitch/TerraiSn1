@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { User } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { History, User } from "lucide-react";
 import { employesApi, proprietaireApi } from "@/lib/api";
 import ProprioEmptyState from "@/espaces/backoffice/components/ProprioEmptyState";
 import { formatFcfa, gerantNomComplet, proprioTerrainPhoto } from "@/espaces/backoffice/proprietaire/proprioUtils";
@@ -17,6 +18,7 @@ type Terrain = {
 };
 
 export default function MesTerrains() {
+  const navigate = useNavigate();
   const [terrains, setTerrains] = useState<Terrain[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [employes, setEmployes] = useState<any[]>([]);
@@ -27,7 +29,7 @@ export default function MesTerrains() {
     try {
       const [t, s, e] = await Promise.all([
         proprietaireApi.terrains(),
-        proprietaireApi.stats().catch(() => null),
+        proprietaireApi.stats({ periode: "mois" }).catch(() => null),
         employesApi.list().catch(() => []),
       ]);
       setTerrains(Array.isArray(t) ? t : []);
@@ -74,10 +76,19 @@ export default function MesTerrains() {
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)", color: "var(--p-text)" }}>
           Mes terrains
         </h1>
+        <button
+          type="button"
+          onClick={() => navigate("/backoffice/proprietaire/historique")}
+          className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-xl text-xs font-semibold"
+          style={{ background: "var(--p-primary-glow)", color: "var(--p-primary)" }}
+        >
+          <History className="w-3.5 h-3.5" />
+          Historique matchs
+        </button>
         <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ background: "var(--p-surface-2)", color: "var(--p-muted)" }}>
           {terrains.length}
         </span>

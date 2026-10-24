@@ -35,6 +35,9 @@ function firstName(user: HeaderUser) {
 }
 
 function tabActive(route: string, end: boolean, pathname: string) {
+  if (pathname.startsWith("/backoffice/proprietaire/historique")) {
+    return route === "/backoffice/proprietaire/revenus";
+  }
   if (end) return pathname === route;
   return pathname.startsWith(route);
 }

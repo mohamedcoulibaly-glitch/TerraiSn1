@@ -72,4 +72,13 @@ if (!fs.existsSync(adminDist)) {
   process.exit(1);
 }
 
+const proHtml = fs.readFileSync(proDist, 'utf8');
+if (!proHtml.includes('/pro/assets')) {
+  console.error(
+    'Build frontend-pro invalide: assets sans préfixe /pro/ (VITE_BASE manquant).\n' +
+      'Les pages /pro/* renverront 404. Relancer avec VITE_BASE=/pro/.',
+  );
+  process.exit(1);
+}
+
 console.log('\nBuild Render OK — joueur (/) + pro (/pro) + admin (/admin).');

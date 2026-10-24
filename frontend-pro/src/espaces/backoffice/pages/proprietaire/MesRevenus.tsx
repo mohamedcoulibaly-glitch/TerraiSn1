@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Banknote, CalendarCheck, CalendarClock, Info, Search, Wallet } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Banknote, CalendarCheck, CalendarClock, Download, History, Info, Search, Wallet } from "lucide-react";
+import { toast } from "sonner";
 import { Bar, BarChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { proprietaireApi } from "@/lib/api";
 import { useOwnerRealtime } from "@/hooks/useOwnerRealtime";
 import ProprioEmptyState from "@/espaces/backoffice/components/ProprioEmptyState";
 import { formatFcfa, variationHint } from "@/espaces/backoffice/proprietaire/proprioUtils";
+import { exportFinancesPdf } from "@/lib/exportFinancesPdf";
 
 type Periode = "aujourd_hui" | "semaine" | "mois" | "annee";
 type Terrain = { id: number; nom: string };
@@ -19,7 +22,20 @@ type Ligne = {
   joueur_telephone?: string;
   statut?: string;
 };
+type ParTerrain = {
+  id?: number;
+  nom: string;
+  total_encaisse?: number;
+  avances_recues?: number;
+  matchs_joues?: number;
+  a_venir?: number;
+  nb_reservations?: number;
+};
+
 type FinancesData = {
+  periode?: Periode;
+  from?: string;
+  to?: string;
   total_encaisse: number;
   encaisse_abonnements?: number;
   encaisse_tournois?: number;
@@ -31,6 +47,7 @@ type FinancesData = {
   historique: Ligne[];
   graphique: Array<{ label: string; montant: number; matchs?: number; [key: string]: string | number | undefined }>;
   series?: Array<{ key: string; id: number; nom: string }>;
+  par_terrain?: ParTerrain[];
   variation?: {
     label?: string;
     total_encaisse_precedent?: number;
@@ -70,6 +87,7 @@ function statutBadge(item: Ligne) {
 }
 
 export default function OwnerReports() {
+  const navigate = useNavigate();
   const [periode, setPeriode] = useState<Periode>("aujourd_hui");
   const [selectedTerrainId, setSelectedTerrainId] = useState<"all" | number>("all");
   const [terrains, setTerrains] = useState<Terrain[]>([]);
@@ -154,8 +172,73 @@ export default function OwnerReports() {
       ]
     : [];
 
+  const periodeLabel = PERIODES.find((p) => p.id === periode)?.label || periode;
+  const terrainLabel =
+    selectedTerrainId === "all"
+      ? "Tous les terrains"
+      : terrains.find((t) => Number(t.id) === Number(selectedTerrainId))?.nom || `Terrain #${selectedTerrainId}`;
+
+  const exporterPdf = () => {
+    if (!data) {
+      toast.message("Aucune donnée à exporter");
+      return;
+    }
+    try {
+      exportFinancesPdf({
+        titre: "Bilan financier propriétaire",
+        roleLabel: "Espace propriétaire — pilotage",
+        terrainLabel,
+        periodeLabel,
+        from: data.from,
+        to: data.to,
+        total_encaisse: data.total_encaisse,
+        avances_recues: data.avances_recues,
+        matchs_joues: data.matchs_joues,
+        a_venir: data.a_venir,
+        historique: data.historique || [],
+        par_terrain: data.par_terrain,
+        filename: `bilan-proprietaire-${periode}-${new Date().toISOString().slice(0, 10)}.pdf`,
+      });
+      toast.success("PDF téléchargé");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export PDF impossible");
+    }
+  };
+
   return (
     <div className="space-y-5 max-w-5xl mx-auto">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-lg font-semibold leading-tight" style={{ fontFamily: "var(--font-display)", color: "var(--p-text)" }}>
+            Mes revenus
+          </h1>
+          <p className="text-xs mt-1" style={{ color: "var(--p-muted)" }}>
+            Bilans détaillés · export PDF
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => navigate("/backoffice/proprietaire/historique")}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-xl text-sm font-semibold"
+            style={{ background: "var(--p-primary-glow)", color: "var(--p-primary)" }}
+          >
+            <History className="w-4 h-4" />
+            Historique
+          </button>
+          <button
+            type="button"
+            onClick={exporterPdf}
+            disabled={!data}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-3.5 rounded-xl text-sm font-semibold text-white disabled:opacity-50"
+            style={{ background: "var(--p-primary)" }}
+          >
+            <Download className="w-4 h-4" />
+            PDF
+          </button>
+        </div>
+      </div>
+
       {terrains.length > 1 && (
         <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
           <button
@@ -262,6 +345,29 @@ export default function OwnerReports() {
               Les abonnements et tournois ne sont pas encore pris en compte
             </p>
           )}
+
+          {data.par_terrain && data.par_terrain.length > 1 ? (
+            <section className="rounded-2xl p-3 space-y-2" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
+              <h2 className="text-sm font-semibold" style={{ color: "var(--p-text)" }}>Répartition par terrain</h2>
+              {data.par_terrain.map((t) => (
+                <div
+                  key={t.id ?? t.nom}
+                  className="flex items-center justify-between gap-3 rounded-xl px-3 py-2.5"
+                  style={{ background: "var(--p-surface-2)" }}
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold truncate" style={{ color: "var(--p-text)" }}>{t.nom}</p>
+                    <p className="text-[11px]" style={{ color: "var(--p-muted)" }}>
+                      {t.matchs_joues || 0} joués · {t.a_venir || 0} à venir · {t.nb_reservations || 0} résas
+                    </p>
+                  </div>
+                  <p className="text-sm font-bold shrink-0" style={{ color: "var(--p-primary)" }}>
+                    {formatFcfa(t.total_encaisse)}
+                  </p>
+                </div>
+              ))}
+            </section>
+          ) : null}
 
           <section className="rounded-2xl p-3" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
             <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--p-text)" }}>Encaissements</h2>

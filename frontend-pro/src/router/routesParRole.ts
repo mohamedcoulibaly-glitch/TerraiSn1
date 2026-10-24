@@ -26,6 +26,7 @@ export const ROUTE_MAP = {
     routes: [
       "/backoffice/gerant",
       "/backoffice/gerant/joueurs",
+      "/backoffice/gerant/historique",
       "/backoffice/gerant/finances",
       "/backoffice/gerant/parametres",
       "/backoffice/gerant/reservations/:id",
@@ -48,6 +49,7 @@ export const ROUTE_MAP = {
     routes: [
       "/backoffice/proprietaire",
       "/backoffice/proprietaire/revenus",
+      "/backoffice/proprietaire/historique",
       "/backoffice/proprietaire/sante",
       "/backoffice/proprietaire/terrains",
       "/backoffice/proprietaire/terrain/:id",

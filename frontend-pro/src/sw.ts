@@ -20,7 +20,7 @@ registerRoute(
     request.destination === 'font' ||
     request.destination === 'image',
   new CacheFirst({
-    cacheName: 'terrainsn-pro-static-v1',
+    cacheName: 'terrainsn-pro-static-v2',
     plugins: [
       new CacheableResponsePlugin({ statuses: [0, 200] }),
       new ExpirationPlugin({
@@ -41,7 +41,7 @@ registerRoute(
     // notifications manquées : toujours fraîches (sinon SWR rejouerait des notifs déjà vues)
     !url.pathname.includes('/push/missed'),
   new StaleWhileRevalidate({
-    cacheName: 'terrainsn-pro-api-v1',
+    cacheName: 'terrainsn-pro-api-v2',
     plugins: [
       new CacheableResponsePlugin({ statuses: [0, 200] }),
       new ExpirationPlugin({
@@ -54,7 +54,7 @@ registerRoute(
 
 /** Navigation SPA — fallback index.html */
 const navigationHandler = new NetworkFirst({
-  cacheName: 'terrainsn-pro-pages-v1',
+  cacheName: 'terrainsn-pro-pages-v2',
   networkTimeoutSeconds: 5,
   plugins: [
     new CacheableResponsePlugin({ statuses: [0, 200] }),

@@ -23,8 +23,9 @@ export default defineConfig(({ mode }) => ({
       host: process.env.NGROK_HOST || undefined,
     },
     proxy: {
+      // Ne jamais réutiliser VITE_API_URL (/api) comme target → sinon 404 /api/api/*
       '/api': {
-        target: process.env.VITE_API_URL || 'http://localhost:3001',
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:3001',
         changeOrigin: true,
         timeout: 0,
         proxyTimeout: 0,
@@ -40,11 +41,11 @@ export default defineConfig(({ mode }) => ({
         },
       },
       '/uploads': {
-        target: process.env.VITE_API_URL || 'http://localhost:3001',
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:3001',
         changeOrigin: true,
       },
       '/webhook': {
-        target: process.env.VITE_API_URL || 'http://localhost:3001',
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:3001',
         changeOrigin: true,
       },
     },

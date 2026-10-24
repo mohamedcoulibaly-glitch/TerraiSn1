@@ -74,7 +74,8 @@ function resolveOnglet(pathname: string): (typeof TABS)[number]["id"] {
   }
   if (
     pathname.startsWith("/backoffice/gerant/joueurs") ||
-    pathname.startsWith("/backoffice/gerant/reservations")
+    pathname.startsWith("/backoffice/gerant/reservations") ||
+    pathname.startsWith("/backoffice/gerant/historique")
   ) {
     return "joueurs";
   }

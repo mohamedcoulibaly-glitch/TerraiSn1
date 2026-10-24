@@ -28,7 +28,7 @@ registerRoute(
     request.destination === 'font' ||
     request.destination === 'image',
   new CacheFirst({
-    cacheName: 'terrainsn-joueur-static-v1',
+    cacheName: 'terrainsn-joueur-static-v2',
     plugins: [
       new CacheableResponsePlugin({ statuses: [0, 200] }),
       new ExpirationPlugin({
@@ -49,7 +49,7 @@ registerRoute(
     // notifications manquées : toujours fraîches (sinon SWR rejouerait des notifs déjà vues)
     !url.pathname.includes('/push/missed'),
   new StaleWhileRevalidate({
-    cacheName: 'terrainsn-joueur-api-v1',
+    cacheName: 'terrainsn-joueur-api-v2',
     plugins: [
       new CacheableResponsePlugin({ statuses: [0, 200] }),
       new ExpirationPlugin({
@@ -66,7 +66,7 @@ registerRoute(
     request.method === 'POST' &&
     (url.pathname === '/api/reservations' || url.pathname.endsWith('/reservations')),
   new NetworkFirst({
-    cacheName: 'terrainsn-joueur-reservation-post-v1',
+    cacheName: 'terrainsn-joueur-reservation-post-v2',
     networkTimeoutSeconds: 8,
     plugins: [
       reservationSync,
@@ -78,7 +78,7 @@ registerRoute(
 
 /** Navigation SPA — fallback index.html */
 const navigationHandler = new NetworkFirst({
-  cacheName: 'terrainsn-joueur-pages-v1',
+  cacheName: 'terrainsn-joueur-pages-v2',
   networkTimeoutSeconds: 5,
   plugins: [
     new CacheableResponsePlugin({ statuses: [0, 200] }),
