@@ -1450,6 +1450,13 @@
   --p-verifier:        #DC2626;
   --p-verifier-bg:     rgba(220,38,38,0.10);
 
+  /* Alias pour KPI Wave / ventilation */
+  --p-success:         var(--p-optimal);
+  --p-success-subtle:  var(--p-optimal-bg);
+  --p-success-text:    var(--p-optimal);
+  --p-info:            var(--p-primary-light);
+  --p-danger:          var(--p-verifier);
+
   --p-alert-bg:        rgba(220,38,38,0.06);
   --p-alert-border:    rgba(220,38,38,0.20);
 

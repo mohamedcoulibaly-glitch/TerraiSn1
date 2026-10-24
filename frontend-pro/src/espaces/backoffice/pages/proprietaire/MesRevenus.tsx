@@ -1,13 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Banknote, CalendarCheck, CalendarClock, Download, History, Info, Search, Wallet } from "lucide-react";
+import {
+  Activity,
+  Banknote,
+  CalendarCheck,
+  CalendarClock,
+  CheckCircle,
+  CreditCard,
+  Download,
+  History,
+  Info,
+  Search,
+  Wallet,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Bar, BarChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { proprietaireApi } from "@/lib/api";
 import { useOwnerRealtime } from "@/hooks/useOwnerRealtime";
 import ProprioEmptyState from "@/espaces/backoffice/components/ProprioEmptyState";
+import { formaterMontant, KpiMontantWave } from "@/espaces/backoffice/components/KpiMontantWave";
 import { formatFcfa, variationHint } from "@/espaces/backoffice/proprietaire/proprioUtils";
 import { exportFinancesPdf } from "@/lib/exportFinancesPdf";
+
+const proprioKpiVars = {
+  surfaceVar: "var(--p-surface)",
+  borderVar: "var(--p-border)",
+  textVar: "var(--p-text)",
+  mutedVar: "var(--p-muted)",
+  shadowVar: "var(--p-shadow)",
+  dangerVar: "var(--p-danger)",
+} as const;
 
 type Periode = "aujourd_hui" | "semaine" | "mois" | "annee";
 type Terrain = { id: number; nom: string };
@@ -57,6 +79,17 @@ type FinancesData = {
     nb_confirmations_manuelles?: number;
     avances_manuelles?: number;
   } | null;
+  total_avances?: number;
+  total_commission?: number;
+  frais_payout_gerant?: number;
+  montant_net?: number;
+  soldes_encaissees?: number;
+  montant_touche?: number;
+  solde_a_retirer?: number;
+  net_recu?: number;
+  valeur_totale_matchs?: number;
+  commission_pct?: number;
+  delta_net_pct?: number | null;
 };
 
 const STACK_COLORS = ["#1E40AF", "#059669", "#D97706", "#7C3AED", "#0E7490", "#BE185D"];
@@ -162,15 +195,21 @@ export default function OwnerReports() {
   const series = data?.series || [];
   const stacked = selectedTerrainId === "all" && series.length > 1;
   const caDelta = variationHint(data?.variation);
-
-  const kpis = data
-    ? [
-        { label: "Montant total encaissé", value: formatFcfa(data.total_encaisse), icon: Wallet },
-        { label: "Avances reçues", value: formatFcfa(data.avances_recues), icon: Banknote },
-        { label: "Matchs joués", value: String(data.matchs_joues ?? 0), icon: CalendarCheck },
-        { label: "À venir", value: String(data.a_venir ?? 0), icon: CalendarClock },
-      ]
-    : [];
+  const totalAvances = Number(data?.total_avances ?? data?.avances_recues ?? data?.total_encaisse ?? 0);
+  const soldesEncaissees = Number(data?.soldes_encaissees || 0);
+  const totalCommission = Number(data?.total_commission || 0);
+  const fraisPayout = Number(data?.frais_payout_gerant || 0);
+  const netGerant = Number(
+    data?.montant_touche
+      ?? Math.max(0, totalAvances + soldesEncaissees - totalCommission - fraisPayout),
+  );
+  const matchsJoues = Number(data?.matchs_joues || 0);
+  const deltaNet =
+    data?.delta_net_pct != null
+      ? Number(data.delta_net_pct)
+      : caDelta
+        ? Number(data?.variation?.delta_pct)
+        : undefined;
 
   const periodeLabel = PERIODES.find((p) => p.id === periode)?.label || periode;
   const terrainLabel =
@@ -294,9 +333,10 @@ export default function OwnerReports() {
 
       {loading && !data ? (
         <div className="space-y-4 animate-pulse">
+          <div className="h-36 rounded-2xl" style={{ background: "var(--p-surface-2)" }} />
           <div className="grid grid-cols-2 gap-2.5">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-24 rounded-2xl" style={{ background: "var(--p-surface-2)" }} />
+            {[1, 2].map((i) => (
+              <div key={i} className="h-28 rounded-2xl" style={{ background: "var(--p-surface-2)" }} />
             ))}
           </div>
           <div className="h-52 rounded-2xl" style={{ background: "var(--p-surface-2)" }} />
@@ -305,21 +345,124 @@ export default function OwnerReports() {
         <p className="text-sm py-8 text-center" style={{ color: "var(--p-verifier)" }}>{error}</p>
       ) : data ? (
         <>
-          <div className="grid grid-cols-2 gap-2.5">
-            {kpis.map((kpi, i) => (
-              <div key={kpi.label} className="rounded-2xl p-4" style={{ background: "var(--p-surface)", boxShadow: "var(--p-shadow)" }}>
-                <kpi.icon className="w-4 h-4 mb-2" style={{ color: i === 0 ? "var(--p-primary)" : "var(--p-muted)" }} />
-                <p className="text-lg font-bold leading-tight" style={{ fontFamily: "var(--font-display)", color: i === 0 ? "var(--p-primary)" : "var(--p-text)" }}>
-                  {kpi.value}
-                </p>
-                <p className="text-[11px] mt-1" style={{ color: "var(--p-muted)" }}>{kpi.label}</p>
-                {i === 0 && caDelta ? (
-                  <p className="text-[11px] mt-1 font-semibold" style={{ color: caDelta.positive ? "var(--p-optimal)" : "var(--p-verifier)" }}>
-                    {caDelta.text}
-                  </p>
-                ) : null}
+          <div className="space-y-3">
+            <KpiMontantWave
+              label="Chiffre d'affaires"
+              montant={netGerant}
+              icone={CheckCircle}
+              couleur="var(--p-primary)"
+              taille="hero"
+              delta={deltaNet}
+              souslabel="Reste encaissé + avances − commission"
+              {...proprioKpiVars}
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <KpiMontantWave
+                label="Avances joueurs"
+                montant={totalAvances}
+                icone={CreditCard}
+                couleur="var(--p-info)"
+                taille="normal"
+                souslabel="Payé en ligne"
+                {...proprioKpiVars}
+              />
+              <KpiMontantWave
+                label="Matchs joués"
+                montant={matchsJoues}
+                icone={Activity}
+                couleur="var(--p-accent, var(--p-gold))"
+                taille="normal"
+                format="nombre"
+                {...proprioKpiVars}
+              />
+            </div>
+            <KpiMontantWave
+              label="À venir"
+              montant={Number(data.a_venir || 0)}
+              icone={CalendarClock}
+              couleur="var(--p-info)"
+              taille="petit"
+              format="nombre"
+              souslabel="résas confirmées"
+              {...proprioKpiVars}
+            />
+          </div>
+
+          {/* Ventilation transparente — montants uniquement, jamais de Wave/OM */}
+          <div>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--p-text)" }}>
+              Détail de cette période
+            </h3>
+            <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid var(--p-border)" }}>
+              <div
+                className="flex justify-between items-center px-4 py-3.5"
+                style={{ borderBottom: "1px solid var(--p-border)" }}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full" style={{ background: "var(--p-primary)" }} />
+                  <span className="text-sm" style={{ color: "var(--p-text)" }}>
+                    Encaissé total (avances joueurs)
+                  </span>
+                </div>
+                <span className="font-bold text-sm" style={{ color: "var(--p-text)" }}>
+                  {formaterMontant(Number(data.total_avances ?? data.total_encaisse))}
+                </span>
               </div>
-            ))}
+
+              <div
+                className="flex justify-between items-center px-4 py-3.5"
+                style={{ borderBottom: "1px solid var(--p-border)" }}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full" style={{ background: "var(--p-muted)" }} />
+                  <span className="text-sm" style={{ color: "var(--p-text-2)" }}>
+                    Commission TerrainSN
+                    {Number(data.commission_pct) > 0 ? ` (${Number(data.commission_pct)}%)` : ""}
+                  </span>
+                </div>
+                <span className="text-sm" style={{ color: "var(--p-danger)" }}>
+                  −{formaterMontant(Number(data.total_commission || 0))}
+                </span>
+              </div>
+
+              {Number(data.frais_payout_gerant || 0) > 0 ? (
+                <div
+                  className="flex justify-between items-center px-4 py-3.5"
+                  style={{ borderBottom: "1px solid var(--p-border)" }}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full" style={{ background: "var(--p-muted)" }} />
+                    <span className="text-sm" style={{ color: "var(--p-text-2)" }}>
+                      Frais de reversement
+                    </span>
+                  </div>
+                  <span className="text-sm" style={{ color: "var(--p-danger)" }}>
+                    −{formaterMontant(Number(data.frais_payout_gerant || 0))}
+                  </span>
+                </div>
+              ) : null}
+
+              <div
+                className="flex justify-between items-center px-4 py-4"
+                style={{ background: "var(--p-success-subtle)" }}
+              >
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4" style={{ color: "var(--p-success)" }} />
+                  <span className="text-sm font-bold" style={{ color: "var(--p-success-text)" }}>
+                    Net reçu par ton gérant
+                  </span>
+                </div>
+                <span
+                  className="font-black text-base"
+                  style={{ color: "var(--p-success-text)", fontFamily: "var(--font-display)" }}
+                >
+                  {formaterMontant(Number(data.net_recu ?? data.montant_net ?? 0))}
+                </span>
+              </div>
+            </div>
+            <p className="text-xs mt-2 text-center" style={{ color: "var(--p-muted)" }}>
+              Le &quot;Net reçu&quot; correspond aux reversements effectués sur le Wave/OM de ton gérant.
+            </p>
           </div>
 
           {Number(data.confirmations_manuelles?.nb_confirmations_manuelles || 0) > 0 ? (

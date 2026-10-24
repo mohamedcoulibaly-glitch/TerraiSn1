@@ -21,6 +21,7 @@ import {
   Shield,
   ChevronDown,
   KeyRound,
+  Link2,
 } from "lucide-react";
 import { WhatsAppLucideIcon } from "@/components/WhatsAppIcon";
 import type { LucideIcon } from "lucide-react";
@@ -96,6 +97,7 @@ const SECTIONS: { title: string; items: NavEntry[] }[] = [
     title: "Gestion",
     items: [
       { kind: "link", to: "/backoffice/superadmin/terrains", label: "Terrains", icon: Map },
+      { kind: "link", to: "/backoffice/superadmin/rattachements", label: "Rattachements", icon: Link2 },
       {
         kind: "group",
         label: "Utilisateurs",

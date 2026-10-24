@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import Select2 from "@/components/Select2";
 import ContacterAdminCard from "./parametres/ContacterAdminCard";
 import { SubView, Surface } from "./parametres/ParametresChrome";
+import CardPlanningGerant from "@/espaces/backoffice/components/CardPlanningGerant";
 import { labelNuitDuJourASuivant, optionsHeuresSelect2 } from "@/utils/heuresSelect2";
 
 function estFermetureNuit(heureFin: string) {
@@ -103,48 +104,80 @@ function MonPlanningGardeSection() {
   const { user } = useAuth();
   const [data, setData] = useState<{
     planning: any[];
+    planning_equipe?: any[];
     collegues: any[];
     garde_actuelle: any;
     multi_gerants: boolean;
+    terrain_id?: number | null;
+    nb_gerants?: number;
+    est_principal?: boolean;
+    peut_modifier_planning?: boolean;
   } | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     gerantApi
       .planning()
       .then((payload) => setData(payload as any))
       .catch(() => setData(null));
-  }, []);
+  }, [reloadKey]);
 
   if (!data?.multi_gerants) return null;
 
   const myId = Number(user?.id);
-  const mine = (data.planning || []).filter((p) => Number(p.gerant_id) === myId);
-  const hebdo = JOURS_GARDE.map((_, i) => {
-    const slot = mine.find(
+  const equipe = Array.isArray(data.planning_equipe) && data.planning_equipe.length
+    ? data.planning_equipe
+    : data.planning || [];
+  const peutModifier = Boolean(data.peut_modifier_planning);
+  const terrainId = Number(data.terrain_id || 0);
+
+  const planning = JOURS_GARDE.map((_, i) => {
+    const slot = equipe.find(
       (p) => p.jour_semaine != null && Number(p.jour_semaine) === i && !p.date_specifique,
     );
-    return slot
-      ? {
-          actif: true,
-          debut: String(slot.heure_debut || "").slice(0, 5),
-          fin: String(slot.heure_fin || "").slice(0, 5),
-        }
-      : { actif: false, debut: "", fin: "" };
+    if (!slot) {
+      return { est_moi: false, gerant_prenom: "—", heure_debut: "", heure_fin: "", vide: true };
+    }
+    const estMoi = Number(slot.gerant_id) === myId;
+    const prenom =
+      String(slot.prenom || "").trim()
+      || (data.collegues || []).find((c) => Number(c.gerant_id ?? c.id) === Number(slot.gerant_id))?.prenom
+      || "Gérant";
+    return {
+      est_moi: estMoi,
+      gerant_prenom: String(prenom).split(/\s+/)[0],
+      heure_debut: String(slot.heure_debut || "").slice(0, 5),
+      heure_fin: String(slot.heure_fin || "").slice(0, 5),
+      vide: false,
+    };
   });
+
   const jeSuisDeGarde = Number(data.garde_actuelle?.gerant_id) === myId;
 
   return (
     <Surface>
-      <h3 className="text-base font-semibold" style={{ color: "var(--g-text)" }}>
-        Mon planning de garde
-      </h3>
-      <p className="text-sm" style={{ color: "var(--g-muted)" }}>
-        Ton terrain a {data.collegues.length} gérants. Voici ton planning configuré par
-        l&apos;administration.
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <h3 className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>
+          Planning de l&apos;équipe cette semaine
+        </h3>
+        {peutModifier ? (
+          <span
+            className="text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0"
+            style={{
+              background: "color-mix(in srgb, var(--g-primary) 14%, transparent)",
+              color: "var(--g-primary)",
+            }}
+          >
+            Gérant principal
+          </span>
+        ) : null}
+      </div>
+      <p className="text-xs mb-3" style={{ color: "var(--g-muted)" }}>
+        Ton terrain a {data.collegues.length} gérants — qui est de garde chaque jour.
       </p>
       {jeSuisDeGarde ? (
         <span
-          className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full animate-pulse"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full animate-pulse mb-3"
           style={{
             background: "color-mix(in srgb, var(--g-primary) 14%, transparent)",
             color: "var(--g-primary)",
@@ -153,36 +186,75 @@ function MonPlanningGardeSection() {
           De garde maintenant
         </span>
       ) : null}
-      <div className="grid grid-cols-7 gap-1">
-        {hebdo.map((h, i) => (
+
+      <div className="grid grid-cols-7 gap-1 text-center text-xs mb-3">
+        {JOURS_GARDE.map((j) => (
+          <div key={j} className="font-semibold pb-1" style={{ color: "var(--g-muted)" }}>
+            {j.charAt(0)}
+          </div>
+        ))}
+        {planning.map((jour, i) => (
           <div
             key={JOURS_GARDE[i]}
-            className="rounded-lg p-1.5 text-center min-h-[48px]"
+            className="rounded-lg p-1 text-center min-h-[52px]"
             style={{
-              background: h.actif
-                ? "color-mix(in srgb, var(--g-primary) 12%, transparent)"
-                : "var(--g-surface-2)",
-              opacity: h.actif ? 1 : 0.55,
+              background: jour.est_moi ? "var(--g-primary-glow)" : "var(--g-surface-2)",
+              border: jour.est_moi ? "1px solid var(--g-primary)" : "1px solid var(--g-border)",
+              opacity: jour.vide ? 0.55 : 1,
             }}
           >
-            <p className="text-[11px] font-semibold" style={{ color: "var(--g-text)" }}>
-              {JOURS_GARDE[i]}
-            </p>
-            {h.actif ? (
-              <p className="text-[10px] mt-0.5" style={{ color: "var(--g-muted)" }}>
-                {h.debut || "—"}
-                <br />
-                {h.fin || ""}
-              </p>
-            ) : (
-              <p className="text-[10px] mt-0.5" style={{ color: "var(--g-muted)" }}>
-                —
-              </p>
-            )}
+            <div
+              className="text-xs font-semibold truncate"
+              style={{ color: jour.est_moi ? "var(--g-primary)" : "var(--g-text-2)" }}
+            >
+              {jour.vide ? "—" : jour.est_moi ? "Toi" : jour.gerant_prenom}
+            </div>
+            {!jour.vide && (jour.heure_debut || jour.heure_fin) ? (
+              <div className="text-[10px] mt-0.5" style={{ color: "var(--g-muted)" }}>
+                {jour.heure_debut || "—"}→{jour.heure_fin || "—"}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
-      <ContacterAdminCard hint="Pour changer tes jours de garde, écris à l'administration." />
+
+      {terrainId > 0 && (data.collegues || []).length > 0 ? (
+        <div className="mt-1">
+          <p className="text-xs font-semibold mb-2" style={{ color: "var(--g-text-2)" }}>
+            {peutModifier ? "Modifier les gardes par gérant" : "Détail par gérant"}
+          </p>
+          {(data.collegues || []).map((c) => (
+            <CardPlanningGerant
+              key={c.gerant_id}
+              terrainId={terrainId}
+              gerant={c}
+              estMoi={Number(c.gerant_id) === myId}
+              planningEquipe={equipe}
+              editable={peutModifier}
+              onSaved={() => setReloadKey((k) => k + 1)}
+            />
+          ))}
+          {peutModifier ? (
+            <p
+              className="text-xs mt-3 p-3 rounded-lg"
+              style={{
+                background: "color-mix(in srgb, var(--g-info) 12%, transparent)",
+                color: "var(--g-info)",
+              }}
+            >
+              Les plannings peuvent se chevaucher. En cas de chevauchement, les notifications
+              partent au gérant dont la garde est la plus récente.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs mt-3" style={{ color: "var(--g-muted)" }}>
+                Pour modifier le planning, contacte le gérant principal ou l&apos;administration.
+              </p>
+              <ContacterAdminCard hint="Pour changer tes jours de garde, écris à l'administration." />
+            </>
+          )}
+        </div>
+      ) : null}
     </Surface>
   );
 }

@@ -678,6 +678,51 @@ app.post('/api/auth/register', otpRateLimit, validateBody(validateRegisterBody),
   }
 });
 
+/**
+ * Lookup téléphone à la connexion : reconnaît un joueur fréquent sans compte complet.
+ * Ne révèle pas de données sensibles (pas de Wave/OM, pas d'historique détaillé).
+ */
+app.get('/api/auth/lookup-telephone', otpRateLimit, async (req, res) => {
+  try {
+    const raw = String(req.query.telephone || '').trim();
+    if (!raw || !otpService.isValidSenegalMobile(raw)) {
+      return res.json({ type: 'inconnu' });
+    }
+    const db = await getDb();
+    const phoneDigits = otpService.normalizeTelephone(raw);
+    const local9 = phoneDigits.startsWith('221') ? phoneDigits.slice(3) : phoneDigits;
+
+    const user = queryAll(db, 'SELECT id, prenom, nom, telephone, telephone_verified, password_hash, role FROM users')
+      .find((u) => otpService.normalizeTelephone(u.telephone) === phoneDigits);
+
+    if (user && Number(user.telephone_verified) === 1 && user.password_hash) {
+      return res.json({ type: 'compte_existant' });
+    }
+
+    const resa = queryOne(
+      db,
+      `SELECT id, joueur_nom, joueur_telephone
+       FROM reservations
+       WHERE REPLACE(REPLACE(REPLACE(COALESCE(joueur_telephone,''), ' ', ''), '+', ''), '-', '') LIKE ?
+       ORDER BY id DESC LIMIT 1`,
+      [`%${local9}`],
+    );
+
+    if (resa || (user && Number(user.telephone_verified) !== 1)) {
+      const prenomHint = (user?.prenom || String(resa?.joueur_nom || '').trim().split(/\s+/)[0] || '').trim();
+      return res.json({
+        type: 'frequent_sans_compte',
+        prenom: prenomHint || null,
+      });
+    }
+
+    return res.json({ type: 'inconnu' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // Vérification OTP → JWT joueur
 app.post('/api/auth/verify-otp', otpRateLimit, validateBody(validateVerifyOtpBody), async (req, res) => {
   try {

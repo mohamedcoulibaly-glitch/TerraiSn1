@@ -120,6 +120,29 @@ export const superAdminApi = {
   terrains: () => adminRequest("/admin/terrains"),
   createTerrain: (data: unknown) =>
     adminRequest("/admin/terrains", { method: "POST", body: JSON.stringify(data) }),
+  sites: (params?: { proprietaire_id?: number | string; q?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.proprietaire_id != null) sp.set("proprietaire_id", String(params.proprietaire_id));
+    if (params?.q) sp.set("q", params.q);
+    const q = sp.toString();
+    return adminRequest(`/admin/sites${q ? `?${q}` : ""}`) as Promise<{
+      sites: Array<{ id: number; nom: string; proprietaire_id: number; nb_terrains?: number }>;
+    }>;
+  },
+  createSite: (body: {
+    proprietaire_id: number;
+    nom: string;
+    adresse?: string;
+    ville?: string;
+  }) => adminRequest("/admin/sites", { method: "POST", body: JSON.stringify(body) }),
+  patchTerrainRattachement: (
+    id: number,
+    body: { proprietaire_id?: number | null; site_id?: number | null },
+  ) =>
+    adminRequest(`/admin/terrains/${id}/rattachement`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   updateLocalisation: (
     id: number,
     data: {

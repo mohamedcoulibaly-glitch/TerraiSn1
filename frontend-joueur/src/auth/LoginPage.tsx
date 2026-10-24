@@ -1,6 +1,6 @@
-﻿import { useEffect, useState, type HTMLAttributes } from "react";
+﻿import { useEffect, useRef, useState, type HTMLAttributes } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { AlertCircle, Check, Eye, EyeOff } from "lucide-react";
+import { AlertCircle, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { authApi } from "@/lib/api";
@@ -15,10 +15,16 @@ import LoginHeroVideo from "@/components/LoginHeroVideo";
 
 type Tab = "login" | "register";
 type Step = "form" | "otp";
+type CompteLookup = {
+  type: "inconnu" | "compte_existant" | "frequent_sans_compte";
+  prenom?: string | null;
+} | null;
+
+const OTP_LENGTH = 4;
 
 /**
  * /login — espace joueur uniquement.
- * Onglets Connexion / Inscription + vérification OTP WhatsApp.
+ * Inscription minimale : WhatsApp + prénom + mot de passe. OTP 4 chiffres.
  */
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -34,19 +40,18 @@ export default function LoginPage() {
   const [tab, setTab] = useState<Tab>("login");
   const [step, setStep] = useState<Step>("form");
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [resending, setResending] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
   const [otpTimer, setOtpTimer] = useState(30);
+  const [compteTrouve, setCompteTrouve] = useState<CompteLookup>(null);
+  const lookupTimer = useRef<number | null>(null);
 
   const [loginForm, setLoginForm] = useState({ identifier: "", password: "" });
   const [registerForm, setRegisterForm] = useState({
     prenom: "",
-    nom: "",
     telephone: "",
     password: "",
-    confirm: "",
   });
   const [otpPhone, setOtpPhone] = useState("");
   const [otpCode, setOtpCode] = useState("");
@@ -61,9 +66,38 @@ export default function LoginPage() {
     return () => window.clearInterval(id);
   }, [step]);
 
+  useEffect(() => {
+    return () => {
+      if (lookupTimer.current) window.clearTimeout(lookupTimer.current);
+    };
+  }, []);
+
   if (!loading && isAuthenticated && user && !showForgot) {
     return <Navigate to={redirectTo} replace />;
   }
+
+  const lookupTelephoneDebounced = (rawPhone: string) => {
+    if (lookupTimer.current) window.clearTimeout(lookupTimer.current);
+    setCompteTrouve(null);
+    if (!isValidSenegalMobile(rawPhone)) return;
+    lookupTimer.current = window.setTimeout(() => {
+      authApi
+        .lookupTelephone(toLocal9(rawPhone))
+        .then((r) => setCompteTrouve(r))
+        .catch(() => setCompteTrouve(null));
+    }, 450);
+  };
+
+  const passerEnInscription = () => {
+    const phone = loginForm.identifier.includes("@") ? "" : loginForm.identifier;
+    setTab("register");
+    setErrors({});
+    setRegisterForm((f) => ({
+      ...f,
+      telephone: phone || f.telephone,
+      prenom: compteTrouve?.prenom || f.prenom,
+    }));
+  };
 
   const onPhoneChange = (value: string, setter: (v: string) => void, field: string) => {
     const formatted = formatPhoneDisplay(value);
@@ -78,9 +112,13 @@ export default function LoginPage() {
   const onLoginIdentifierChange = (raw: string) => {
     if (raw.includes("@")) {
       setLoginForm((f) => ({ ...f, identifier: raw }));
+      setCompteTrouve(null);
     } else {
       const hasLetter = /[a-zA-Z]/.test(raw);
-      setLoginForm((f) => ({ ...f, identifier: hasLetter ? raw : formatPhoneDisplay(raw) }));
+      const next = hasLetter ? raw : formatPhoneDisplay(raw);
+      setLoginForm((f) => ({ ...f, identifier: next }));
+      if (!hasLetter) lookupTelephoneDebounced(next);
+      else setCompteTrouve(null);
     }
     setErrors((e) => {
       const next = { ...e };
@@ -136,14 +174,10 @@ export default function LoginPage() {
     e.preventDefault();
     const nextErrors: Record<string, string> = {};
     if (!registerForm.prenom.trim()) nextErrors.prenom = "Prénom requis";
-    if (!registerForm.nom.trim()) nextErrors.nom = "Nom requis";
     const phoneErr = phoneError(registerForm.telephone);
     if (phoneErr) nextErrors.telephone = phoneErr;
     if (registerForm.password.length < 6) {
       nextErrors.password = "Minimum 6 caractères";
-    }
-    if (registerForm.password !== registerForm.confirm) {
-      nextErrors.confirm = "Les mots de passe ne correspondent pas";
     }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
@@ -153,7 +187,6 @@ export default function LoginPage() {
       const phone = toLocal9(registerForm.telephone);
       await authApi.registerJoueur({
         prenom: registerForm.prenom.trim(),
-        nom: registerForm.nom.trim(),
         telephone: phone,
         password: registerForm.password,
       });
@@ -171,8 +204,8 @@ export default function LoginPage() {
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     const code = otpCode.replace(/\D/g, "");
-    if (code.length !== 6) {
-      setErrors({ otp: "Saisissez le code à 6 chiffres" });
+    if (code.length !== OTP_LENGTH) {
+      setErrors({ otp: `Saisissez le code à ${OTP_LENGTH} chiffres` });
       return;
     }
     setSubmitting(true);
@@ -214,8 +247,6 @@ export default function LoginPage() {
       ? "text"
       : "tel";
   const phoneValid = !!registerForm.telephone && isValidSenegalMobile(registerForm.telephone);
-  const passwordsMatch =
-    !!registerForm.confirm && registerForm.password === registerForm.confirm;
 
   return (
     <div className="login-joueur">
@@ -231,183 +262,185 @@ export default function LoginPage() {
       </div>
 
       <div className="login-sheet">
-          {step === "otp" ? (
-            <form
-              onSubmit={handleVerifyOtp}
-              className="flex flex-col gap-5 animate-[login-slide-left_0.25s_ease]"
+        {step === "otp" ? (
+          <form
+            onSubmit={handleVerifyOtp}
+            className="flex flex-col gap-5 animate-[login-slide-left_0.25s_ease]"
+          >
+            <h2
+              className="text-[18px] font-bold"
+              style={{ fontFamily: "var(--font-display)", color: "var(--lj-text)" }}
             >
-              <h2
-                className="text-[18px] font-bold"
-                style={{ fontFamily: "var(--font-display)", color: "var(--lj-text)" }}
-              >
-                Vérifie ton WhatsApp 📱
-              </h2>
-              <p className="text-[12px]" style={{ color: "var(--lj-muted)" }}>
-                On t&apos;a envoyé un code au +221 {otpPhone}
+              Vérifie ton WhatsApp
+            </h2>
+            <p className="text-[12px]" style={{ color: "var(--lj-muted)" }}>
+              On t&apos;a envoyé un code à {OTP_LENGTH} chiffres au +221 {otpPhone}
+            </p>
+
+            <OtpCases
+              theme="joueur"
+              length={OTP_LENGTH}
+              value={otpCode}
+              onChange={(v) => {
+                setOtpCode(v);
+                setErrors((prev) => ({ ...prev, otp: "" }));
+              }}
+            />
+
+            {otpTimer > 0 ? (
+              <p className="text-[13px] text-center" style={{ color: "var(--lj-muted)" }}>
+                Renvoyer le code dans {otpTimer}s
               </p>
+            ) : (
+              <button
+                type="button"
+                disabled={resending}
+                onClick={() => void handleResend()}
+                className="text-[13px] text-center font-medium min-h-[44px] disabled:opacity-50"
+                style={{ color: "var(--lj-primary)" }}
+              >
+                {resending ? "Envoi..." : "Renvoyer le code"}
+              </button>
+            )}
 
-              <OtpCases
-                theme="joueur"
-                value={otpCode}
-                onChange={(v) => {
-                  setOtpCode(v);
-                  setErrors((prev) => ({ ...prev, otp: "" }));
-                }}
+            <BoutonSoumettre
+              theme="joueur"
+              label="Vérifier"
+              labelLoading="Vérification..."
+              loading={submitting}
+              onClick={() => {}}
+            />
+            {errors.otp ? (
+              <p
+                className="flex items-center gap-2 text-[13px] animate-[login-fade-in_0.2s_ease]"
+                style={{ color: "var(--lj-error)" }}
+              >
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                {errors.otp}
+              </p>
+            ) : null}
+          </form>
+        ) : (
+          <>
+            <div className="login-tabs">
+              {(
+                [
+                  { id: "login" as Tab, label: "Connexion" },
+                  { id: "register" as Tab, label: "Inscription" },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    setTab(t.id);
+                    setErrors({});
+                  }}
+                  style={{
+                    fontWeight: tab === t.id ? 600 : 400,
+                    color: tab === t.id ? "var(--lj-tab-active)" : "var(--lj-muted)",
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+              <span
+                className="login-tabs-ink"
+                style={{ transform: tab === "register" ? "translateX(100%)" : "translateX(0)" }}
               />
+            </div>
 
-              {otpTimer > 0 ? (
-                <p className="text-[13px] text-center" style={{ color: "var(--lj-muted)" }}>
-                  Renvoyer le code dans {otpTimer}s
-                </p>
-              ) : (
+            {tab === "login" ? (
+              <form onSubmit={handleLogin} className="login-form" noValidate>
+                <FloatingInput
+                  id="login-id"
+                  theme="joueur"
+                  label="Téléphone ou email"
+                  type={loginIsEmail ? "email" : "text"}
+                  inputMode={loginInputMode}
+                  autoComplete="username"
+                  value={loginForm.identifier}
+                  onChange={onLoginIdentifierChange}
+                  erreur={errors.identifier}
+                  iconeGauche={
+                    loginIsEmail || loginHasLetter ? undefined : (
+                      <span className="text-sm">+221</span>
+                    )
+                  }
+                />
+
+                <FloatingInput
+                  id="login-pass"
+                  theme="joueur"
+                  label="Ton mot de passe"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  value={loginForm.password}
+                  onChange={(v) => {
+                    setLoginForm((f) => ({ ...f, password: v }));
+                    setErrors((prev) => ({ ...prev, password: "" }));
+                  }}
+                  erreur={errors.password}
+                  iconeDroite={showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  onIconeDroiteClick={() => setShowPassword(!showPassword)}
+                />
+
                 <button
                   type="button"
-                  disabled={resending}
-                  onClick={() => void handleResend()}
-                  className="text-[13px] text-center font-medium min-h-[44px] disabled:opacity-50"
-                  style={{ color: "var(--lj-primary)" }}
+                  className="login-forgot"
+                  onClick={() => setShowForgot(true)}
                 >
-                  {resending ? "Envoi..." : "Renvoyer le code"}
+                  Mot de passe oublié ?
                 </button>
-              )}
 
-              <BoutonSoumettre
-                theme="joueur"
-                label="Vérifier"
-                labelLoading="Vérification..."
-                loading={submitting}
-                onClick={() => {}}
-              />
-              {errors.otp ? (
-                <p
-                  className="flex items-center gap-2 text-[13px] animate-[login-fade-in_0.2s_ease]"
-                  style={{ color: "var(--lj-error)" }}
-                >
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  {errors.otp}
-                </p>
-              ) : null}
-            </form>
-          ) : (
-            <>
-              <div className="login-tabs">
-                {(
-                  [
-                    { id: "login" as Tab, label: "Connexion" },
-                    { id: "register" as Tab, label: "Inscription" },
-                  ] as const
-                ).map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => {
-                      setTab(t.id);
-                      setErrors({});
-                    }}
-                    style={{
-                      fontWeight: tab === t.id ? 600 : 400,
-                      color: tab === t.id ? "var(--lj-tab-active)" : "var(--lj-muted)",
-                    }}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-                <span
-                  className="login-tabs-ink"
-                  style={{ transform: tab === "register" ? "translateX(100%)" : "translateX(0)" }}
+                <BoutonSoumettre
+                  theme="joueur"
+                  label="Se connecter"
+                  labelLoading="Connexion en cours..."
+                  loading={submitting}
+                  onClick={() => {}}
                 />
-              </div>
 
-              {tab === "login" ? (
-                <form onSubmit={handleLogin} className="login-form" noValidate>
-                  <FloatingInput
-                    id="login-id"
-                    theme="joueur"
-                    label="Téléphone ou email"
-                    type={loginIsEmail ? "email" : "text"}
-                    inputMode={loginInputMode}
-                    autoComplete="username"
-                    value={loginForm.identifier}
-                    onChange={onLoginIdentifierChange}
-                    erreur={errors.identifier}
-                    iconeGauche={
-                      loginIsEmail || loginHasLetter ? undefined : (
-                        <span className="text-sm">+221</span>
-                      )
-                    }
-                  />
-
-                  <FloatingInput
-                    id="login-pass"
-                    theme="joueur"
-                    label="Ton mot de passe"
-                    type={showPassword ? "text" : "password"}
-                    autoComplete="current-password"
-                    value={loginForm.password}
-                    onChange={(v) => {
-                      setLoginForm((f) => ({ ...f, password: v }));
-                      setErrors((prev) => ({ ...prev, password: "" }));
-                    }}
-                    erreur={errors.password}
-                    iconeDroite={showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    onIconeDroiteClick={() => setShowPassword(!showPassword)}
-                  />
-
-                  <button
-                    type="button"
-                    className="login-forgot"
-                    onClick={() => setShowForgot(true)}
+                {compteTrouve?.type === "frequent_sans_compte" ? (
+                  <div
+                    className="mt-1 p-3 rounded-xl"
+                    style={{ background: "var(--lj-primary-glow)", border: "1px solid var(--lj-primary)" }}
                   >
-                    Mot de passe oublié ?
-                  </button>
-
-                  <BoutonSoumettre
-                    theme="joueur"
-                    label="Se connecter"
-                    labelLoading="Connexion en cours..."
-                    loading={submitting}
-                    onClick={() => {}}
-                  />
-                  {errors.form ? (
-                    <p
-                      className="flex items-center gap-2 text-[13px] animate-[login-fade-in_0.2s_ease]"
-                      style={{ color: "var(--lj-error)" }}
-                    >
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      {errors.form}
+                    <p className="text-sm font-semibold" style={{ color: "var(--lj-primary)" }}>
+                      On te reconnaît !
                     </p>
-                  ) : null}
-                </form>
-              ) : (
-                <form onSubmit={handleRegister} className="login-form" noValidate>
-                  <FloatingInput
-                    id="prenom"
-                    theme="joueur"
-                    label="Prénom"
-                    autoComplete="given-name"
-                    value={registerForm.prenom}
-                    onChange={(v) => {
-                      setRegisterForm((f) => ({ ...f, prenom: v }));
-                      setErrors((prev) => ({ ...prev, prenom: "" }));
-                    }}
-                    erreur={errors.prenom}
-                  />
-                  <FloatingInput
-                    id="nom"
-                    theme="joueur"
-                    label="Nom"
-                    autoComplete="family-name"
-                    value={registerForm.nom}
-                    onChange={(v) => {
-                      setRegisterForm((f) => ({ ...f, nom: v }));
-                      setErrors((prev) => ({ ...prev, nom: "" }));
-                    }}
-                    erreur={errors.nom}
-                  />
+                    <p className="text-xs mt-0.5" style={{ color: "var(--lj-muted)" }}>
+                      Tu as déjà réservé chez nous. Crée ton compte pour gérer tes réservations
+                      facilement.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={passerEnInscription}
+                      className="mt-2 text-xs font-semibold"
+                      style={{ color: "var(--lj-primary)" }}
+                    >
+                      Créer mon compte →
+                    </button>
+                  </div>
+                ) : null}
+
+                {errors.form ? (
+                  <p
+                    className="flex items-center gap-2 text-[13px] animate-[login-fade-in_0.2s_ease]"
+                    style={{ color: "var(--lj-error)" }}
+                  >
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    {errors.form}
+                  </p>
+                ) : null}
+              </form>
+            ) : (
+              <form onSubmit={handleRegister} className="login-form" noValidate>
+                <div className="flex flex-col gap-4">
                   <FloatingInput
                     id="reg-phone"
                     theme="joueur"
-                    label="Ton numéro de téléphone"
+                    label="Ton numéro WhatsApp"
                     type="tel"
                     inputMode="tel"
                     autoComplete="tel"
@@ -417,13 +450,28 @@ export default function LoginPage() {
                     }
                     erreur={errors.telephone}
                     succes={phoneValid}
+                    aide="Tu recevras un code de confirmation sur ce numéro"
                     iconeGauche={<span className="text-sm">+221</span>}
                   />
+
+                  <FloatingInput
+                    id="prenom"
+                    theme="joueur"
+                    label="Ton prénom"
+                    autoComplete="given-name"
+                    value={registerForm.prenom}
+                    onChange={(v) => {
+                      setRegisterForm((f) => ({ ...f, prenom: v }));
+                      setErrors((prev) => ({ ...prev, prenom: "" }));
+                    }}
+                    erreur={errors.prenom}
+                  />
+
                   <div>
                     <FloatingInput
                       id="reg-pass"
                       theme="joueur"
-                      label="Ton mot de passe"
+                      label="Mot de passe"
                       type={showPassword ? "text" : "password"}
                       autoComplete="new-password"
                       value={registerForm.password}
@@ -432,37 +480,28 @@ export default function LoginPage() {
                         setErrors((prev) => ({ ...prev, password: "" }));
                       }}
                       erreur={errors.password}
+                      aide="Au moins 6 caractères"
                       iconeDroite={showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       onIconeDroiteClick={() => setShowPassword(!showPassword)}
                     />
                     <IndicateurForceMdp password={registerForm.password} theme="joueur" />
                   </div>
-                  <FloatingInput
-                    id="reg-confirm"
-                    theme="joueur"
-                    label="Confirmer le mot de passe"
-                    type={showConfirm ? "text" : "password"}
-                    autoComplete="new-password"
-                    value={registerForm.confirm}
-                    onChange={(v) => {
-                      setRegisterForm((f) => ({ ...f, confirm: v }));
-                      setErrors((prev) => ({ ...prev, confirm: "" }));
-                    }}
-                    erreur={errors.confirm}
-                    succes={passwordsMatch}
-                    iconeDroite={
-                      passwordsMatch ? <Check className="w-4 h-4" /> : showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />
-                    }
-                    onIconeDroiteClick={passwordsMatch ? undefined : () => setShowConfirm(!showConfirm)}
-                  />
 
                   <BoutonSoumettre
                     theme="joueur"
-                    label="S'inscrire"
-                    labelLoading="Création du compte..."
+                    label="Créer mon compte"
+                    labelLoading="Envoi du code..."
                     loading={submitting}
                     onClick={() => {}}
                   />
+
+                  <p className="text-xs text-center" style={{ color: "var(--lj-muted)" }}>
+                    En créant ton compte, tu acceptes nos{" "}
+                    <a href="/conditions" style={{ color: "var(--lj-primary)" }}>
+                      conditions d&apos;utilisation
+                    </a>
+                  </p>
+
                   {errors.form ? (
                     <p
                       className="flex items-center gap-2 text-[13px] animate-[login-fade-in_0.2s_ease]"
@@ -472,10 +511,11 @@ export default function LoginPage() {
                       {errors.form}
                     </p>
                   ) : null}
-                </form>
-              )}
-            </>
-          )}
+                </div>
+              </form>
+            )}
+          </>
+        )}
       </div>
 
       <MotDePasseOublie

@@ -18,6 +18,8 @@ export interface FloatingInputProps {
   maxLength?: number;
   onFocus?: () => void;
   onBlur?: () => void;
+  /** Texte d'aide sous le champ (hors erreur). */
+  aide?: string;
 }
 
 export default function FloatingInput({
@@ -38,6 +40,7 @@ export default function FloatingInput({
   maxLength,
   onFocus,
   onBlur,
+  aide,
 }: FloatingInputProps) {
   const [focused, setFocused] = useState(false);
   const errorColor = theme === "joueur" ? "var(--lj-error)" : "var(--lb-error)";
@@ -94,6 +97,10 @@ export default function FloatingInput({
       {erreur ? (
         <p className="mt-1.5 text-[13px] animate-[login-fade-in_0.2s_ease]" style={{ color: errorColor }}>
           {erreur}
+        </p>
+      ) : aide ? (
+        <p className="mt-1.5 text-[12px]" style={{ color: theme === "joueur" ? "var(--lj-muted)" : "var(--lb-muted)" }}>
+          {aide}
         </p>
       ) : null}
     </div>

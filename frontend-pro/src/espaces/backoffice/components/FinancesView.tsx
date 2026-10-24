@@ -1,5 +1,6 @@
-import { Banknote, CalendarCheck, CalendarClock, Wallet } from "lucide-react";
+import { Activity, CheckCircle, CreditCard, Wallet } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { KpiMontantWave } from "./KpiMontantWave";
 
 export type PeriodeFinances = "aujourd_hui" | "semaine" | "mois" | "annee";
 
@@ -37,6 +38,18 @@ export type FinancesData = {
     a_venir?: number;
     nb_reservations?: number;
   }>;
+  solde_disponible?: number;
+  solde_a_retirer?: number;
+  total_avances?: number;
+  total_commission?: number;
+  frais_payout_gerant?: number;
+  montant_net?: number;
+  soldes_encaissees?: number;
+  montant_touche?: number;
+  net_recu?: number;
+  valeur_totale_matchs?: number;
+  delta_total_pct?: number | null;
+  delta_net_pct?: number | null;
 };
 
 export const PERIODES_FINANCES: Array<{ id: PeriodeFinances; label: string }> = [
@@ -62,17 +75,13 @@ function formatLigneDate(date?: string, heure?: string) {
 export function FinancesSkeleton() {
   return (
     <div className="space-y-4 animate-pulse">
+      <div className="h-36 rounded-2xl" style={{ background: "var(--g-surface-2)" }} />
       <div className="grid grid-cols-2 gap-2.5">
-        {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="h-24 rounded-2xl" style={{ background: "var(--g-surface-2)" }} />
+        {[1, 2].map((i) => (
+          <div key={i} className="h-28 rounded-2xl" style={{ background: "var(--g-surface-2)" }} />
         ))}
       </div>
       <div className="h-52 rounded-2xl" style={{ background: "var(--g-surface-2)" }} />
-      <div className="space-y-2">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="h-16 rounded-xl" style={{ background: "var(--g-surface-2)" }} />
-        ))}
-      </div>
     </div>
   );
 }
@@ -80,69 +89,113 @@ export function FinancesSkeleton() {
 export default function FinancesView({
   data,
   showTerrainName = false,
+  onRetrait,
+  peutRetirer = false,
 }: {
   data: FinancesData;
   showTerrainName?: boolean;
+  onRetrait?: () => void;
+  peutRetirer?: boolean;
 }) {
-  const kpis = [
-    {
-      label: "Montant total encaissé",
-      value: formatFcfa(data.total_encaisse),
-      icon: Wallet,
-      accent: true,
-    },
-    {
-      label: "Avances reçues",
-      value: formatFcfa(data.avances_recues),
-      icon: Banknote,
-      accent: false,
-    },
-    {
-      label: "Matchs joués",
-      value: String(data.matchs_joues ?? 0),
-      icon: CalendarCheck,
-      accent: false,
-    },
-    {
-      label: "À venir",
-      value: String(data.a_venir ?? 0),
-      icon: CalendarClock,
-      accent: false,
-    },
-  ];
+  const totalEncaisse = Number(data.total_encaisse || 0);
+  const totalAvances = Number(data.total_avances ?? data.avances_recues ?? totalEncaisse);
+  const totalCommission = Number(data.total_commission || 0);
+  const fraisPayout = Number(data.frais_payout_gerant || 0);
+  const soldesEncaissees = Number(data.soldes_encaissees || 0);
+  // CA = reste encaissé + avances − commission (− frais)
+  const montantTouche = Number(
+    data.montant_touche
+      ?? Math.max(0, totalAvances + soldesEncaissees - totalCommission - fraisPayout),
+  );
+  // Solde à retirer = CA − avances en ligne
+  const solde = Number(
+    data.solde_a_retirer
+      ?? Math.max(0, montantTouche - totalAvances),
+  );
+  const matchsJoues = Number(data.matchs_joues || 0);
+  const deltaNet =
+    data.delta_net_pct != null
+      ? Number(data.delta_net_pct)
+      : data.delta_total_pct != null
+        ? Number(data.delta_total_pct)
+        : undefined;
 
   const historique = data.historique || [];
   const graphique = data.graphique || [];
   const hasChart = graphique.some((p) => Number(p.montant) > 0);
 
+  const souslabelTouche = [
+    `Reste encaissé + avances − commission`,
+    fraisPayout > 0 ? ` − frais` : "",
+  ].join("");
+
   return (
-    <>
-      <div className="grid grid-cols-2 gap-2.5">
-        {kpis.map((kpi) => (
-          <div
-            key={kpi.label}
-            className="rounded-2xl p-4"
-            style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}
-          >
-            <kpi.icon
-              className="w-4 h-4 mb-2"
-              style={{ color: kpi.accent ? "var(--g-primary)" : "var(--g-muted)" }}
-            />
-            <p
-              className="text-lg font-bold leading-tight"
-              style={{
-                fontFamily: "var(--font-display)",
-                color: kpi.accent ? "var(--g-primary)" : "var(--g-text)",
-              }}
-            >
-              {kpi.value}
-            </p>
-            <p className="text-[11px] mt-1" style={{ color: "var(--g-muted)" }}>
-              {kpi.label}
-            </p>
-          </div>
-        ))}
+    <div className="space-y-3">
+      {/* 3 KPI — chiffre d'affaires, avances, matchs (nombre) */}
+      <KpiMontantWave
+        label="Chiffre d'affaires"
+        montant={montantTouche}
+        icone={CheckCircle}
+        couleur="var(--g-primary)"
+        taille="hero"
+        delta={deltaNet}
+        souslabel={souslabelTouche}
+      />
+
+      <div className="grid grid-cols-2 gap-3">
+        <KpiMontantWave
+          label="Avances joueurs"
+          montant={totalAvances}
+          icone={CreditCard}
+          couleur="var(--g-info)"
+          taille="normal"
+          souslabel="Payé en ligne"
+        />
+        <KpiMontantWave
+          label="Matchs joués"
+          montant={matchsJoues}
+          icone={Activity}
+          couleur="var(--g-accent)"
+          taille="normal"
+          format="nombre"
+        />
       </div>
+
+      {/* Solde = net touché − avances en ligne */}
+      {(solde > 0 || peutRetirer) && (
+        <button
+          type="button"
+          onClick={peutRetirer ? onRetrait : undefined}
+          disabled={!peutRetirer}
+          className={`w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left ${peutRetirer ? "btn-press" : ""}`}
+          style={{
+            background: "var(--g-surface-2)",
+            border: "1px solid var(--g-border)",
+            cursor: peutRetirer ? "pointer" : "default",
+            opacity: peutRetirer ? 1 : 0.85,
+          }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Wallet className="w-4 h-4 shrink-0" style={{ color: "var(--g-primary)" }} />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--g-muted)" }}>
+                Solde à retirer
+              </p>
+              <p className="text-sm font-bold tabular-nums" style={{ color: "var(--g-text)" }}>
+                {formatFcfa(solde)}
+              </p>
+              <p className="text-[11px] mt-0.5" style={{ color: "var(--g-muted)" }}>
+                Chiffre d'affaires − avances en ligne
+              </p>
+            </div>
+          </div>
+          {peutRetirer ? (
+            <span className="text-xs font-semibold shrink-0" style={{ color: "var(--g-primary)" }}>
+              Retirer →
+            </span>
+          ) : null}
+        </button>
+      )}
 
       {data.mention_blocages ? (
         <div
@@ -242,6 +295,6 @@ export default function FinancesView({
           </ul>
         )}
       </section>
-    </>
+    </div>
   );
 }

@@ -35,7 +35,8 @@
     "test:paydunya-whatsapp:integration": "node scripts/test-paydunya-whatsapp-integration.js",
     "test:paydunya-whatsapp:e2e": "node scripts/test-paydunya-whatsapp-e2e.js",
     "test:mohamed": "node scripts/run-mohamed-suite.js",
-    "seed:e2e": "node scripts/seed-e2e.js"
+    "seed:e2e": "node scripts/seed-e2e.js",
+    "seed:multi-gerant": "node scripts/seed-gerant-multi-terrains.js"
   },
   "keywords": [],
   "author": "",

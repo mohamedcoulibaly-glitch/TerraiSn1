@@ -60,12 +60,13 @@ describe("ROUTE_MAP — complétude par rôle", () => {
     );
   });
 
-  it("proprietaire : revenus / santé / terrains", () => {
+  it("proprietaire : revenus / santé / audit / terrains", () => {
     expect(ROUTE_MAP.proprietaire.routes).toEqual([
       "/backoffice/proprietaire",
       "/backoffice/proprietaire/revenus",
       "/backoffice/proprietaire/historique",
       "/backoffice/proprietaire/sante",
+      "/backoffice/proprietaire/audit",
       "/backoffice/proprietaire/terrains",
       "/backoffice/proprietaire/terrain/:id",
       "/profil/proprietaire",
@@ -82,6 +83,7 @@ describe("ROUTE_MAP — complétude par rôle", () => {
     expect(ROUTE_MAP.super_admin.routes).toEqual([
       "/backoffice/superadmin",
       "/backoffice/superadmin/terrains",
+      "/backoffice/superadmin/rattachements",
       "/backoffice/superadmin/gerants",
       "/backoffice/superadmin/proprietaires",
       "/backoffice/superadmin/superadmins",

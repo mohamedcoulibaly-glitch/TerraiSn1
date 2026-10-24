@@ -4,6 +4,7 @@
  * Adapté SQLite sync (sql.js) : getDb() async, queryOne/queryAll/runSql/transaction synchrones.
  */
 const { getDb, queryAll, queryOne, runSql, transaction } = require('../database');
+const { assertGerantCompatibleAvecTerrain } = require('./siteService');
 
 function toYmdLocal(dateTime = new Date()) {
   const y = dateTime.getFullYear();
@@ -160,25 +161,140 @@ async function verifierAccesTerrain(gerant_id, terrain_id) {
   `, [Number(gerant_id), Number(terrain_id)]);
 }
 
+function enrichTerrainsGerantKpis(db, rows) {
+  if (!rows.length) return rows;
+  const ids = rows.map((r) => Number(r.id)).filter(Boolean);
+  if (!ids.length) return rows;
+
+  const placeholders = ids.map(() => '?').join(',');
+  const today = toYmdLocal();
+  const now = new Date();
+  const nowHm = toHmLocal(now);
+  const inOneHour = new Date(now.getTime() + 60 * 60 * 1000);
+  const limiteHm = toYmdLocal(inOneHour) === today ? toHmLocal(inOneHour) : '23:59';
+
+  const photos = queryAll(db, `
+    SELECT terrain_id, url
+    FROM terrain_photos
+    WHERE terrain_id IN (${placeholders})
+    ORDER BY est_principale DESC, ordre ASC, id ASC
+  `, ids);
+  const photoByTerrain = new Map();
+  for (const p of photos) {
+    const tid = Number(p.terrain_id);
+    if (!photoByTerrain.has(tid) && p.url) photoByTerrain.set(tid, p.url);
+  }
+
+  const kpis = queryAll(db, `
+    SELECT terrain_id,
+      COUNT(*) AS matchs_aujourd_hui,
+      SUM(
+        CASE
+          WHEN qr_code_scanne_at IS NULL
+            AND heure_debut > ?
+            AND heure_debut <= ?
+          THEN 1 ELSE 0
+        END
+      ) AS imminent_count,
+      SUM(
+        CASE
+          WHEN qr_code_scanne_at IS NULL
+            AND heure_debut <= ?
+          THEN 1 ELSE 0
+        END
+      ) AS en_attente_scan
+    FROM reservations
+    WHERE terrain_id IN (${placeholders})
+      AND date = ?
+      AND LOWER(COALESCE(statut, '')) IN ('confirme', 'acceptee', 'confirmee', 'paye', 'valide')
+    GROUP BY terrain_id
+  `, [nowHm, limiteHm, nowHm, ...ids, today]);
+  const kpiByTerrain = new Map(kpis.map((k) => [Number(k.terrain_id), k]));
+
+  const libres = queryAll(db, `
+    SELECT terrain_id, COUNT(*) AS creneaux_libres_maintenant
+    FROM creneaux
+    WHERE terrain_id IN (${placeholders})
+      AND date = ?
+      AND LOWER(COALESCE(statut, '')) = 'libre'
+      AND heure_debut > ?
+    GROUP BY terrain_id
+  `, [...ids, today, nowHm]);
+  const libresByTerrain = new Map(libres.map((r) => [Number(r.terrain_id), r]));
+
+  return rows.map((row) => {
+    const tid = Number(row.id);
+    const kpi = kpiByTerrain.get(tid);
+    const libre = libresByTerrain.get(tid);
+    let photoPrincipale = photoByTerrain.get(tid) || null;
+    if (!photoPrincipale && row.photos) {
+      try {
+        const parsed = typeof row.photos === 'string' ? JSON.parse(row.photos) : row.photos;
+        if (Array.isArray(parsed) && parsed[0]) {
+          photoPrincipale = typeof parsed[0] === 'string' ? parsed[0] : parsed[0].url || null;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const { photos: _photos, ...rest } = row;
+    const imminent = Number(kpi?.imminent_count) || 0;
+    const enAttenteScan = Number(kpi?.en_attente_scan) || 0;
+    const libresNow = Number(libre?.creneaux_libres_maintenant) || 0;
+    return {
+      ...rest,
+      quartier: row.adresse || row.ville || '',
+      photo_principale: photoPrincipale,
+      matchs_aujourd_hui: Number(kpi?.matchs_aujourd_hui) || 0,
+      imminent_count: imminent,
+      imminents_count: imminent,
+      en_attente_scan: enAttenteScan,
+      creneaux_libres_maintenant: libresNow,
+    };
+  });
+}
+
+/** Résumé alertes cross-terrain (tous les terrains actifs du gérant). */
+async function listAlertesTerrainsGerant(gerant_id) {
+  const terrains = await listTerrainsGerant(gerant_id);
+  return {
+    terrains: terrains.map((t) => ({
+      id: Number(t.id),
+      nom: t.nom,
+      quartier: t.quartier || t.adresse || t.ville || '',
+      site_id: t.site_id != null ? Number(t.site_id) : null,
+      imminents_count: Number(t.imminents_count ?? t.imminent_count) || 0,
+      en_attente_scan: Number(t.en_attente_scan) || 0,
+      creneaux_libres_maintenant: Number(t.creneaux_libres_maintenant) || 0,
+      matchs_aujourd_hui: Number(t.matchs_aujourd_hui) || 0,
+    })),
+    heure_serveur: new Date().toISOString(),
+  };
+}
+
 async function listTerrainsGerant(gerant_id) {
   const db = await getDb();
   const rows = queryAll(db, `
     SELECT gt.terrain_id AS id, gt.est_principal, gt.note, gt.actif,
-           t.nom, t.adresse, t.ville
+           t.nom, t.adresse, t.ville, t.photos, t.site_id, t.proprietaire_id
     FROM gerants_terrains gt
     JOIN terrains t ON t.id = gt.terrain_id
     WHERE gt.gerant_id = ? AND gt.actif = 1
     ORDER BY gt.est_principal DESC, t.nom ASC
   `, [Number(gerant_id)]);
 
-  if (rows.length) return rows;
+  if (rows.length) return enrichTerrainsGerantKpis(db, rows);
 
   // Fallback JWT / employes.terrain_id
   const emp = queryOne(db, 'SELECT terrain_id FROM employes WHERE id = ?', [Number(gerant_id)]);
   if (!emp?.terrain_id) return [];
-  const t = queryOne(db, 'SELECT id, nom, adresse, ville FROM terrains WHERE id = ?', [emp.terrain_id]);
+  const t = queryOne(
+    db,
+    'SELECT id, nom, adresse, ville, photos, site_id, proprietaire_id FROM terrains WHERE id = ?',
+    [emp.terrain_id],
+  );
   if (!t) return [];
-  return [{ ...t, est_principal: 1, note: null, actif: 1 }];
+  return enrichTerrainsGerantKpis(db, [{ ...t, est_principal: 1, note: null, actif: 1 }]);
 }
 
 function logAudit(db, { terrain_id, gerant_id, action, fait_par, role_fait_par, detail }) {
@@ -246,6 +362,9 @@ async function ajouterGerant(terrain_id, payload, fait_par, role_fait_par = 'sup
     err.statusCode = 404;
     throw err;
   }
+
+  // Même propriétaire + même site (si site_id renseigné)
+  assertGerantCompatibleAvecTerrain(db, gid, tid);
 
   const existing = queryOne(db, `
     SELECT id, actif FROM gerants_terrains WHERE gerant_id = ? AND terrain_id = ?
@@ -468,6 +587,24 @@ async function retirerGerant(terrain_id, gerant_id, fait_par, role_fait_par = 's
   return await getGerantsTerrain(tid, { inclureInactifs: true });
 }
 
+async function assertEstGerantPrincipal(terrain_id, gerant_id) {
+  const db = await getDb();
+  const row = queryOne(db, `
+    SELECT id FROM gerants_terrains
+    WHERE terrain_id = ? AND gerant_id = ? AND est_principal = 1 AND actif = 1
+  `, [Number(terrain_id), Number(gerant_id)]);
+  if (!row) {
+    const err = new Error('Seul le gérant principal peut modifier les plannings.');
+    err.statusCode = 403;
+    throw err;
+  }
+  return true;
+}
+
+/**
+ * Remplace le planning d'un gérant sur un terrain.
+ * Réutilisé par l'admin et par le gérant principal (même table planning_garde).
+ */
 async function remplacerPlanning(terrain_id, gerant_id, { planning_hebdo = [], dates_specifiques = [] }, fait_par, role_fait_par = 'super_admin') {
   const db = await getDb();
   const tid = Number(terrain_id);
@@ -521,6 +658,31 @@ async function remplacerPlanning(terrain_id, gerant_id, { planning_hebdo = [], d
   });
 
   return await listPlanningGerant(tid, gid);
+}
+
+/**
+ * Gérant principal → édite le planning d'un collègue (ou le sien) sur son terrain.
+ */
+async function remplacerPlanningParPrincipal(terrain_id, cible_gerant_id, payload, fait_par) {
+  const tid = Number(terrain_id);
+  const cible = Number(cible_gerant_id);
+  const auteur = Number(fait_par);
+  await assertEstGerantPrincipal(tid, auteur);
+
+  const cibleOk = await verifierAccesTerrain(cible, tid);
+  if (!cibleOk) {
+    const err = new Error('Ce gérant n\'est pas rattaché à ce terrain');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return remplacerPlanning(
+    tid,
+    cible,
+    payload || {},
+    auteur,
+    'gerant_principal',
+  );
 }
 
 async function listPlanningGerant(terrain_id, gerant_id = null) {
@@ -626,11 +788,14 @@ module.exports = {
   getGerantsTerrain,
   verifierAccesTerrain,
   listTerrainsGerant,
+  listAlertesTerrainsGerant,
   definirGerantPrincipal,
   ajouterGerant,
   modifierGerant,
   retirerGerant,
+  assertEstGerantPrincipal,
   remplacerPlanning,
+  remplacerPlanningParPrincipal,
   listPlanningGerant,
   listPlanningGerantConnecte,
   heartbeat,

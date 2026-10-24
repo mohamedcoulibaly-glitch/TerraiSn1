@@ -68,7 +68,7 @@ async function main() {
   h.assertEqual('register nom', reg.nom, 'Diop');
   h.assertThrows(
     'register password court',
-    () => validateRegisterBody({ nom: 'X', telephone: '771234567', password: '123' }),
+    () => validateRegisterBody({ prenom: 'X', telephone: '771234567', password: '123' }),
     'Mot de passe',
   );
   h.assertThrows(

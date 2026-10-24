@@ -13,7 +13,7 @@ const {
   avanceOf,
   localDateYmd,
 } = require('../ownerRevenueService');
-const { logActivite } = require('../services/auditService');
+const { logActivite, listAuditProprietaire } = require('../services/auditService');
 const { grilleTarifs, sauvegarderGrille, calculerDevis } = require('../pricingService');
 const { normalizeHourString } = require('../reservationLockService');
 const whatsappClient = require('../whatsappClient');
@@ -28,8 +28,25 @@ const {
 const { demanderRetrait } = require('../services/retraitService');
 const { normaliserNumeroSn } = require('../services/calculsPaiement');
 const detteService = require('../services/detteCommissionService');
+const { agregatsNetTerrains, deltaPctVsPrecedent } = require('../services/financeNetService');
 
 const router = express.Router();
+
+/** Feed activité gérants — branché sur activite_gerant (+ gardes / sessions actives). */
+router.get('/proprietaire/audit', authMiddleware, requireRole('proprietaire'), async (req, res) => {
+  try {
+    const payload = await listAuditProprietaire(req.user.id, {
+      terrain_id: req.query.terrain_id,
+      type: String(req.query.type || 'tout'),
+      periode: String(req.query.periode || 'aujourd_hui'),
+      limit: req.query.limit,
+    });
+    res.json(payload);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
 
 router.get('/proprietaire/revenus', authMiddleware, requireRole('proprietaire'), async (req, res) => {
   const db = await getDb();
@@ -94,6 +111,16 @@ router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire')
         graphique: [],
         par_terrain: [],
         variation: null,
+        net_recu: 0,
+        montant_net: 0,
+        soldes_encaissees: 0,
+        montant_touche: 0,
+        solde_a_retirer: 0,
+        total_commission: 0,
+        total_avances: 0,
+        frais_payout_gerant: 0,
+        valeur_totale_matchs: 0,
+        commission_pct: 0,
         mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
       });
     }
@@ -145,7 +172,6 @@ router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire')
 
     const totalEncaisse = sumAvances(reservations);
     const prevEncaisse = sumAvances(previousRows);
-    const matchsJoues = reservations.filter((r) => isPlayedStatus(r.statut)).length;
     const aVenir = reservations.filter(
       (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
     ).length;
@@ -203,13 +229,23 @@ router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire')
       avances_manuelles: manuelles.reduce((s, r) => s + avanceOf(r), 0),
     };
 
+    const until = periode === 'aujourd_hui' ? today : null;
+    const net = agregatsNetTerrains(db, ids, since, until);
+    const commissionPctRow = queryOne(
+      db,
+      `SELECT AVG(COALESCE(commission_pourcentage, 0)) AS pct
+       FROM terrains WHERE id IN (${placeholders})`,
+      ids,
+    );
+    const deltaPct = deltaPctVsPrecedent(db, ids, since, today, net.total_avances || totalEncaisse);
+
     res.json({
       periode,
       from,
       to,
       total_encaisse: totalEncaisse,
       avances_recues: totalEncaisse,
-      matchs_joues: matchsJoues,
+      matchs_joues: net.matchs_joues,
       a_venir: aVenir,
       historique,
       graphique,
@@ -221,6 +257,18 @@ router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire')
       encaisse_abonnements: 0,
       encaisse_tournois: 0,
       encaisse_blocages: 0,
+      total_avances: net.total_avances || totalEncaisse,
+      total_commission: net.total_commission,
+      frais_payout_gerant: net.frais_payout_gerant,
+      montant_net: net.montant_net,
+      soldes_encaissees: net.soldes_encaissees,
+      montant_touche: net.montant_touche,
+      solde_a_retirer: net.solde_a_retirer,
+      net_recu: net.net_recu,
+      valeur_totale_matchs: net.valeur_totale_matchs,
+      commission_pct: Number(commissionPctRow?.pct || 0),
+      delta_total_pct: deltaPct,
+      delta_net_pct: deltaPctVsPrecedent(db, ids, since, today, net.montant_touche, 'touche'),
     });
   } catch (err) {
     console.error(err);
@@ -344,7 +392,6 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       (s, r) => s + (['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut)) ? Number(r.montant_avance || 0) : 0),
       0,
     );
-    const matchsJoues = reservations.filter((r) => ['match_joue', 'joue'].includes(String(r.statut))).length;
     const aVenir = reservations.filter(
       (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
     ).length;
@@ -361,13 +408,25 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
     const graphique = [...byDay.values()].sort((a, b) => String(a.label).localeCompare(String(b.label)));
 
     const terrainNom = reservations[0]?.terrain_nom || null;
+    const until = periode === 'aujourd_hui' ? today : null;
+    const net = agregatsNetTerrains(db, [terrainId], from, until);
+    const terrain = queryOne(
+      db,
+      'SELECT commission_pourcentage, delai_paiement_dette_jours FROM terrains WHERE id = ?',
+      [terrainId],
+    );
+    const wallet = portefeuilleTerrain(db, terrainId, req.user.id);
+    const dette = detteService.detteOuverteTerrain(db, terrainId);
+    const deltaPct = deltaPctVsPrecedent(db, [terrainId], from, today, net.total_avances || totalEncaisse);
+
     res.json({
       periode,
       from,
       to: today,
       total_encaisse: totalEncaisse,
+      total_avances: net.total_avances || totalEncaisse,
       avances_recues: totalEncaisse,
-      matchs_joues: matchsJoues,
+      matchs_joues: net.matchs_joues,
       a_venir: aVenir,
       historique,
       graphique,
@@ -376,7 +435,7 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
         nom: terrainNom || `Terrain #${terrainId}`,
         total_encaisse: totalEncaisse,
         avances_recues: totalEncaisse,
-        matchs_joues: matchsJoues,
+        matchs_joues: net.matchs_joues,
         a_venir: aVenir,
         nb_reservations: reservations.length,
       }],
@@ -384,6 +443,21 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       encaisse_abonnements: 0,
       encaisse_tournois: 0,
       encaisse_blocages: 0,
+      solde_disponible: Number(wallet?.solde_disponible || 0),
+      solde_a_retirer: net.solde_a_retirer,
+      total_commission: net.total_commission,
+      frais_payout_gerant: net.frais_payout_gerant,
+      montant_net: net.montant_net,
+      soldes_encaissees: net.soldes_encaissees,
+      montant_touche: net.montant_touche,
+      net_recu: net.net_recu,
+      valeur_totale_matchs: net.valeur_totale_matchs,
+      dette_commission: Number(dette?.total || 0),
+      date_echeance: dette?.date_echeance || null,
+      delai_paiement_jours: Number(terrain?.delai_paiement_dette_jours || 0) || null,
+      commission_pct: Number(terrain?.commission_pourcentage || 0),
+      delta_total_pct: deltaPct,
+      delta_net_pct: deltaPctVsPrecedent(db, [terrainId], from, today, net.montant_touche, 'touche'),
     });
   } catch (err) {
     console.error(err);

@@ -173,9 +173,111 @@ router.get('/profile', async (req, res) => {
 
 router.get('/terrains', async (req, res) => {
   const db = await getDb();
-  const rows = queryAll(db, `SELECT t.*, p.nom AS proprietaire_nom FROM terrains t
-    LEFT JOIN proprietaires p ON p.id = t.proprietaire_id ORDER BY t.created_at DESC`);
+  const rows = queryAll(db, `SELECT t.*, p.nom AS proprietaire_nom,
+      (SELECT TRIM(COALESCE(e.prenom,'') || ' ' || COALESCE(e.nom,''))
+         FROM gerants_terrains gt
+         JOIN employes e ON e.id = gt.gerant_id
+         WHERE gt.terrain_id = t.id AND gt.actif = 1 AND gt.est_principal = 1
+         LIMIT 1) AS gerant_principal_nom,
+      (SELECT COUNT(1) FROM gerants_terrains gt
+         WHERE gt.terrain_id = t.id AND gt.actif = 1) AS nb_gerants,
+      (SELECT s.nom FROM sites s WHERE s.id = t.site_id LIMIT 1) AS site_nom
+    FROM terrains t
+    LEFT JOIN proprietaires p ON p.id = t.proprietaire_id
+    ORDER BY t.created_at DESC`);
   res.json(rows.map((row) => resumeListeTerrain(db, row)));
+});
+
+/** Complexes (sites) d'un propriétaire — Phase 2/7. */
+router.get('/sites', async (req, res) => {
+  try {
+    const db = await getDb();
+    const pid = req.query.proprietaire_id != null ? Number(req.query.proprietaire_id) : null;
+    const q = String(req.query.q || '').trim();
+    const params = [];
+    let sql = `SELECT s.*,
+        (SELECT COUNT(1) FROM terrains t WHERE t.site_id = s.id) AS nb_terrains
+      FROM sites s WHERE 1=1`;
+    if (pid) {
+      sql += ' AND s.proprietaire_id = ?';
+      params.push(pid);
+    }
+    if (q) {
+      sql += ' AND s.nom LIKE ?';
+      params.push(`%${q}%`);
+    }
+    sql += ' ORDER BY s.nom ASC LIMIT 60';
+    res.json({ sites: queryAll(db, sql, params) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+router.post('/sites', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { ensureSite } = require('../services/siteService');
+    const id = ensureSite(db, {
+      proprietaire_id: req.body?.proprietaire_id,
+      nom: req.body?.nom,
+      adresse: req.body?.adresse,
+      ville: req.body?.ville,
+    });
+    const site = queryOne(db, 'SELECT * FROM sites WHERE id = ?', [id]);
+    res.status(201).json(site);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+/** Rattache propriétaire / site sans toucher au reste du terrain. */
+router.patch('/terrains/:id/rattachement', async (req, res) => {
+  try {
+    const db = await getDb();
+    const tid = Number(req.params.id);
+    const terrain = queryOne(db, 'SELECT id, proprietaire_id, site_id FROM terrains WHERE id = ?', [tid]);
+    if (!terrain) return res.status(404).json({ error: 'Terrain introuvable' });
+
+    const updates = [];
+    const params = [];
+    if (req.body?.proprietaire_id != null && req.body.proprietaire_id !== '') {
+      const pid = Number(req.body.proprietaire_id);
+      const p = queryOne(db, 'SELECT id FROM proprietaires WHERE id = ?', [pid]);
+      if (!p) return res.status(404).json({ error: 'Propriétaire introuvable' });
+      updates.push('proprietaire_id = ?');
+      params.push(pid);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'site_id')) {
+      const sid = req.body.site_id == null || req.body.site_id === '' ? null : Number(req.body.site_id);
+      const proprioCible = req.body.proprietaire_id != null && req.body.proprietaire_id !== ''
+        ? Number(req.body.proprietaire_id)
+        : Number(terrain.proprietaire_id);
+      if (sid != null) {
+        const site = queryOne(db, 'SELECT id, proprietaire_id FROM sites WHERE id = ?', [sid]);
+        if (!site) return res.status(404).json({ error: 'Site introuvable' });
+        if (Number(site.proprietaire_id) !== proprioCible) {
+          return res.status(400).json({ error: 'Le site doit appartenir au même propriétaire' });
+        }
+      }
+      updates.push('site_id = ?');
+      params.push(sid);
+    }
+    if (!updates.length) return res.status(400).json({ error: 'Rien à mettre à jour' });
+    params.push(tid);
+    runSql(db, `UPDATE terrains SET ${updates.join(', ')} WHERE id = ?`, params);
+    const row = queryOne(
+      db,
+      `SELECT t.*, p.nom AS proprietaire_nom FROM terrains t
+       LEFT JOIN proprietaires p ON p.id = t.proprietaire_id WHERE t.id = ?`,
+      [tid],
+    );
+    res.json(resumeListeTerrain(db, row));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erreur serveur' });
+  }
 });
 
 function parseCoord(value) {
@@ -191,17 +293,25 @@ function terrainADesCoordonnees(terrain) {
 router.post('/terrains', async (req, res) => {
   try {
     const db = await getDb();
-    const { nom, quartier, ville, surface, taille, prix_heure, prix_moitie, prix_entier, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, adresse_theorique, adresse_nominatim, photos, proprietaire_id, commodites, commodite_ids, delai_remboursement_heures } = req.body;
+    const { nom, quartier, ville, surface, taille, prix_heure, prix_moitie, prix_entier, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, adresse_theorique, adresse_nominatim, photos, proprietaire_id, site_id, commodites, commodite_ids, delai_remboursement_heures } = req.body;
     if (!nom || !prix_heure || !proprietaire_id) return res.status(400).json({ error: 'Nom, prix et proprietaire requis' });
     const prixEntier = Number(prix_entier || prix_heure);
     const prixMoitie = Number(prix_moitie || prixEntier * 0.6);
     const pourcentageAvance = Number(pourcentage_avance || 8);
     const avanceReference = montantAvanceReference(prixEntier, pourcentageAvance);
     const delaiRemboursement = normaliserDelaiHeures(delai_remboursement_heures);
+    let siteId = site_id != null && site_id !== '' ? Number(site_id) : null;
+    if (siteId) {
+      const site = queryOne(db, 'SELECT id, proprietaire_id FROM sites WHERE id = ?', [siteId]);
+      if (!site) return res.status(404).json({ error: 'Site introuvable' });
+      if (Number(site.proprietaire_id) !== Number(proprietaire_id)) {
+        return res.status(400).json({ error: 'Le site doit appartenir au même propriétaire' });
+      }
+    }
     const result = runSql(db, `INSERT INTO terrains
-      (proprietaire_id, nom, adresse, ville, sport, type, prix_heure, prix_entier, prix_moitie, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, adresse_theorique, adresse_nominatim, photos, description, commodites, is_active, delai_remboursement_heures)
-      VALUES (?, ?, ?, ?, 'foot', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-      [proprietaire_id, nom, quartier, ville || 'Dakar', taille || '11v11', prixEntier, prixEntier, prixMoitie, avanceReference, avanceReference, pourcentageAvance, modele_revenus || 'commission', Number(commission_pourcentage || 0), Number(abonnement_montant || 0), Number(achat_definitif_montant || 0), parseCoord(latitude), parseCoord(longitude), adresse_theorique ? String(adresse_theorique).trim() : null, adresse_nominatim ? String(adresse_nominatim).trim() : null, JSON.stringify(photos || []), surface || 'synthetique', typeof commodites === 'string' ? commodites : JSON.stringify(Array.isArray(commodites) ? commodites : []), delaiRemboursement]);
+      (proprietaire_id, site_id, nom, adresse, ville, sport, type, prix_heure, prix_entier, prix_moitie, montant_acompte, acompte, pourcentage_avance, modele_revenus, commission_pourcentage, abonnement_montant, achat_definitif_montant, latitude, longitude, adresse_theorique, adresse_nominatim, photos, description, commodites, is_active, delai_remboursement_heures)
+      VALUES (?, ?, ?, ?, ?, 'foot', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      [proprietaire_id, siteId, nom, quartier, ville || 'Dakar', taille || '11v11', prixEntier, prixEntier, prixMoitie, avanceReference, avanceReference, pourcentageAvance, modele_revenus || 'commission', Number(commission_pourcentage || 0), Number(abonnement_montant || 0), Number(achat_definitif_montant || 0), parseCoord(latitude), parseCoord(longitude), adresse_theorique ? String(adresse_theorique).trim() : null, adresse_nominatim ? String(adresse_nominatim).trim() : null, JSON.stringify(photos || []), surface || 'synthetique', typeof commodites === 'string' ? commodites : JSON.stringify(Array.isArray(commodites) ? commodites : []), delaiRemboursement]);
     const terrainId = result.lastInsertRowid;
     const actor = commoditesService.actorFromReq(req);
     let ids = Array.isArray(commodite_ids) ? commodite_ids.map(Number).filter((n) => n > 0) : [];
@@ -975,11 +1085,21 @@ router.get('/revenus', async (req, res) => {
   const period = req.query.periode === 'semaine' ? 7 : req.query.periode === 'annee' ? 365 : 31;
   const start = new Date(); start.setDate(start.getDate() - period + 1);
   const from = start.toISOString().slice(0, 10);
-  const rows = queryAll(db, `SELECT t.id, t.nom, COUNT(r.id) AS reservations,
-    COALESCE(SUM(CASE WHEN r.statut = 'joue' THEN r.prix_total ELSE 0 END), 0) AS revenu
+  const rows = queryAll(db, `SELECT t.id, t.nom,
+    COUNT(r.id) AS reservations,
+    SUM(CASE WHEN LOWER(COALESCE(r.statut,'')) IN ('match_joue','joue') THEN 1 ELSE 0 END) AS matchs_joues,
+    COALESCE(SUM(CASE WHEN LOWER(COALESCE(r.statut,'')) IN ('match_joue','joue') THEN COALESCE(r.prix_total, r.montant, 0) ELSE 0 END), 0) AS revenu
     FROM terrains t LEFT JOIN reservations r ON r.terrain_id = t.id AND r.date >= ?
     GROUP BY t.id, t.nom ORDER BY revenu DESC`, [from]);
-  res.json({ periode: req.query.periode || 'mois', depuis: from, total: rows.reduce((sum, row) => sum + Number(row.revenu), 0), terrains: rows });
+  const total = rows.reduce((sum, row) => sum + Number(row.revenu), 0);
+  const matchsJoues = rows.reduce((sum, row) => sum + Number(row.matchs_joues || 0), 0);
+  res.json({
+    periode: req.query.periode || 'mois',
+    depuis: from,
+    total,
+    matchs_joues: matchsJoues,
+    terrains: rows,
+  });
 });
 
 router.get('/finances', async (req, res) => {

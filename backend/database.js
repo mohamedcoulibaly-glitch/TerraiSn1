@@ -1083,6 +1083,21 @@ function initContratPaiementSchema(database) {
   )`);
   database.run('CREATE INDEX IF NOT EXISTS idx_terrain_durees_terrain ON terrain_durees(terrain_id)');
 
+  // Complexes / sites : un gérant multi-terrains reste limité à un même site (+ même proprio)
+  database.run(`CREATE TABLE IF NOT EXISTS sites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proprietaire_id INTEGER NOT NULL,
+    nom VARCHAR(255) NOT NULL,
+    adresse VARCHAR(255),
+    ville VARCHAR(100),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (proprietaire_id) REFERENCES proprietaires(id)
+  )`);
+  addColumnIfMissing(database, 'terrains', 'site_id', 'INTEGER');
+  database.run('CREATE INDEX IF NOT EXISTS idx_sites_proprietaire ON sites(proprietaire_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_terrains_site ON terrains(site_id)');
+
   database.run(`CREATE TABLE IF NOT EXISTS gerants_terrains (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     gerant_id INTEGER NOT NULL,

@@ -235,13 +235,64 @@ async function main() {
   for (const row of pastIds) {
     const h = Number(String(row.heure_debut).slice(0, 2));
     if (h < hour - 1) {
+      const resa = queryOne(db, 'SELECT reste_a_payer, montant_restant FROM reservations WHERE id = ?', [row.id]);
+      const reste = Math.max(0, Number(resa?.reste_a_payer ?? resa?.montant_restant ?? 0));
       runSql(
         db,
         `UPDATE reservations SET statut = 'match_joue', operational_stage = 'closed',
+          reste_a_payer = 0, montant_restant = 0,
           checked_in_at = ?, qr_code_scanne_at = ?, checkout_at = ?
          WHERE id = ?`,
         [`${today} ${hh(h)}:05`, `${today} ${hh(h)}:08`, `${today} ${hh(h + 1)}:02`, row.id],
       );
+      // Encaissement reste sur place (espèces) — le CA lit prix_total des match_joue
+      if (reste > 0) {
+        const deja = queryOne(
+          db,
+          `SELECT id FROM paiements WHERE reservation_id = ? AND reference_externe = ?`,
+          [row.id, `SOLDE-${row.id}`],
+        );
+        if (!deja) {
+          runSql(
+            db,
+            `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe)
+             VALUES (?, ?, 'especes', 'paye', ?)`,
+            [row.id, reste, `SOLDE-${row.id}`],
+          );
+        }
+      }
+    }
+  }
+
+  // Historique 5 jours passés : matchs joués + encaissés (KPI CA semaine/mois)
+  for (let d = 1; d <= 5; d += 1) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - d);
+    const dayStr = ymd(day);
+    for (const hStart of d % 2 === 0 ? [17, 20] : [18, 21]) {
+      const player = players[(d + hStart) % players.length];
+      const code = `TF-FLUX-${dayStr.replace(/-/g, '')}-${String(hStart).padStart(2, '0')}-J`;
+      const id = creerEnAttente(db, {
+        terrainId, player, date: dayStr, hStart, prix, code, stage: 'closed',
+      });
+      await confirmerPaiementEtNotifier(id, `TF-${id}-${Date.now()}-HIST`);
+      const resa = queryOne(db, 'SELECT reste_a_payer, montant_restant FROM reservations WHERE id = ?', [id]);
+      const reste = Math.max(0, Number(resa?.reste_a_payer ?? resa?.montant_restant ?? 0));
+      runSql(
+        db,
+        `UPDATE reservations SET statut = 'match_joue', operational_stage = 'closed',
+          reste_a_payer = 0, montant_restant = 0,
+          checked_in_at = ?, qr_code_scanne_at = ?, checkout_at = ?
+         WHERE id = ?`,
+        [`${dayStr} ${hh(hStart)}:05`, `${dayStr} ${hh(hStart)}:08`, `${dayStr} ${hh(hStart + 1)}:02`, id],
+      );
+      if (reste > 0) {
+        runSql(
+          db,
+          `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe)
+           VALUES (?, ?, 'especes', 'paye', ?)`,
+          [id, reste, `SOLDE-${id}`],
+        );
+      }
     }
   }
 
@@ -254,7 +305,20 @@ async function main() {
     [terrainId, today, hh(hour)],
   );
   const dus = queryOne(db, `SELECT COUNT(*) AS n, COALESCE(SUM(du_gerant),0) AS solde FROM dus WHERE terrain_id = ? AND statut IN ('payable','en_fenetre')`, [terrainId]);
-  const notifs = queryOne(db, `SELECT COUNT(*) AS n FROM notifications WHERE created_at >= date('now','localtime')`);
+  const ca = queryOne(
+    db,
+    `SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE(prix_total, montant, 0)), 0) AS ca
+     FROM reservations WHERE terrain_id = ? AND statut IN ('match_joue', 'joue')
+       AND date >= date('now', '-31 days')`,
+    [terrainId],
+  );
+  const soldes = queryOne(
+    db,
+    `SELECT COUNT(*) AS n, COALESCE(SUM(montant), 0) AS total
+     FROM paiements WHERE reference_externe LIKE 'SOLDE-%'
+       AND reservation_id IN (SELECT id FROM reservations WHERE terrain_id = ?)`,
+    [terrainId],
+  );
 
   console.log('\n=== Flux gérant Mohamed ===');
   console.log(`Terrain #${terrainId}  Wave=${contrat.wave_numero} (${contrat.wave_statut})  mode=${contrat.payout_mode}`);
@@ -264,6 +328,8 @@ async function main() {
   console.log(`Confirmées + notifs envoyées (mock si WHATSAPP_MOCK=true) : ${notifOk}`);
   console.log(`En attente de paiement (checkout simulation) : ${pendingIds.length} ids ${pendingIds.join(',')}`);
   console.log(`Dûs payables : ${dus.n} lignes / ${dus.solde} FCFA`);
+  console.log(`CA matchs joués (31j) : ${ca.n} matchs → ${Number(ca.ca).toLocaleString('fr-FR')} FCFA`);
+  console.log(`Encaissements terrain (SOLDE) : ${soldes.n} → ${Number(soldes.total).toLocaleString('fr-FR')} FCFA`);
   console.log(`Login gérant : ${GERANT_EMAIL} / password123`);
 }
 

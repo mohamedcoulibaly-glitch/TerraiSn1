@@ -804,6 +804,47 @@ export const proprietaireApi = {
     return await request(`/proprietaire/sante/${terrainId}`);
   },
 
+  async audit(params?: {
+    terrain_id?: number | string;
+    type?: string;
+    periode?: 'aujourd_hui' | 'semaine' | 'mois';
+    limit?: number;
+  }) {
+    const sp = new URLSearchParams();
+    if (params?.terrain_id != null && params.terrain_id !== '' && params.terrain_id !== 'tous') {
+      sp.set('terrain_id', String(params.terrain_id));
+    }
+    if (params?.type) sp.set('type', params.type);
+    if (params?.periode) sp.set('periode', params.periode);
+    if (params?.limit != null) sp.set('limit', String(params.limit));
+    const q = sp.toString();
+    return await request(`/proprietaire/audit${q ? `?${q}` : ''}`) as {
+      terrains: Array<{ id: number; nom: string }>;
+      gardes: Array<{
+        terrain_id: number;
+        terrain_nom?: string | null;
+        gerant_id: number;
+        prenom?: string | null;
+        nom?: string | null;
+        en_ligne?: boolean;
+        derniere_activite?: string | null;
+      }>;
+      activites: Array<{
+        id: number;
+        action: string;
+        detail: string;
+        created_at: string;
+        gerant_prenom?: string | null;
+        gerant_nom?: string | null;
+        terrain_id: number;
+        terrain_nom?: string | null;
+      }>;
+      periode: string;
+      type: string;
+      depuis?: string;
+    };
+  },
+
   async confirmerAvance(reservationId: number | string) {
     return await request(`/proprietaire/reservations/${reservationId}/confirmer-avance`, {
       method: 'POST',
@@ -875,16 +916,81 @@ export const gerantApi = {
         nom: string;
         adresse?: string;
         ville?: string;
+        quartier?: string;
+        photo_principale?: string | null;
+        matchs_aujourd_hui?: number;
+        imminent_count?: number;
+        imminents_count?: number;
+        en_attente_scan?: number;
+        creneaux_libres_maintenant?: number;
+        site_id?: number | null;
         est_principal?: number;
         note?: string | null;
+        actif?: number;
       }>;
       terrain_actif: number | null;
       terrains_ids: number[];
     };
   },
 
+  async terrainsAlertes() {
+    return await request('/gerant/terrains/alertes') as {
+      terrains: Array<{
+        id: number;
+        nom: string;
+        quartier?: string;
+        site_id?: number | null;
+        imminents_count: number;
+        en_attente_scan: number;
+        creneaux_libres_maintenant: number;
+        matchs_aujourd_hui?: number;
+      }>;
+      heure_serveur: string;
+    };
+  },
+
   async planning() {
-    return await request('/gerant/planning');
+    return await request('/gerant/planning') as {
+      planning: unknown[];
+      planning_equipe?: unknown[];
+      collegues: Array<{
+        gerant_id: number;
+        prenom?: string;
+        nom?: string;
+        est_principal?: number;
+        photo_profil?: string | null;
+        nb_gardes?: number;
+      }>;
+      garde_actuelle: { gerant_id?: number } | null;
+      multi_gerants: boolean;
+      terrain_id?: number | null;
+      nb_gerants?: number;
+      est_principal?: boolean;
+      peut_modifier_planning?: boolean;
+    };
+  },
+
+  async saveEquipePlanning(
+    terrainId: number,
+    gerantId: number,
+    payload: {
+      planning_hebdo: Array<{
+        jour_semaine: number;
+        heure_debut?: string | null;
+        heure_fin?: string | null;
+        actif?: boolean | number;
+      }>;
+      dates_specifiques?: Array<{
+        date_specifique: string;
+        heure_debut?: string | null;
+        heure_fin?: string | null;
+      }>;
+    },
+  ) {
+    return await request(`/gerant/terrain/${terrainId}/gerants/${gerantId}/planning`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }) as { planning: unknown[]; planning_equipe?: unknown[]; succes?: boolean };
   },
 
   async heartbeat(terrainId?: number) {

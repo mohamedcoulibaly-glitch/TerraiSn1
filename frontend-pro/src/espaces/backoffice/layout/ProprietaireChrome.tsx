@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, TrendingUp, MapPin, ShieldCheck } from "lucide-react";
+import { Activity, LayoutDashboard, TrendingUp, MapPin, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
@@ -10,6 +10,7 @@ import { hapticSelection } from "@/lib/haptics";
 const TABS = [
   { id: "dashboard", label: "Aperçu", icon: LayoutDashboard, route: "/backoffice/proprietaire", end: true },
   { id: "revenus", label: "Revenus", icon: TrendingUp, route: "/backoffice/proprietaire/revenus", end: false },
+  { id: "audit", label: "Activité", icon: Activity, route: "/backoffice/proprietaire/audit", end: false },
   { id: "sante", label: "Santé", icon: ShieldCheck, route: "/backoffice/proprietaire/sante", end: false },
   { id: "terrains", label: "Terrains", icon: MapPin, route: "/backoffice/proprietaire/terrains", end: false },
 ] as const;
@@ -165,7 +166,7 @@ export default function ProprietaireChrome() {
         className="md:hidden fixed bottom-0 inset-x-0 z-40 pb-[env(safe-area-inset-bottom)]"
         style={{ background: "var(--p-nav-bg)", borderTop: "1px solid var(--p-nav-border)" }}
       >
-        <div className="grid grid-cols-4 max-w-lg mx-auto">
+        <div className="grid grid-cols-5 max-w-lg mx-auto">
           {TABS.map((tab) => {
             const active = tabActive(tab.route, tab.end, location.pathname);
             return (

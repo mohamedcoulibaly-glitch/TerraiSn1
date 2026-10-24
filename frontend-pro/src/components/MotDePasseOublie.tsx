@@ -106,8 +106,8 @@ export default function MotDePasseOublie({
 
   const verifierOtp = async () => {
     const code = otp.replace(/\D/g, "");
-    if (code.length !== 6) {
-      setErreur("Saisissez le code à 6 chiffres");
+    if (code.length !== 4) {
+      setErreur("Saisissez le code à 4 chiffres");
       return;
     }
     setSubmitting(true);
@@ -220,7 +220,7 @@ export default function MotDePasseOublie({
             <p className="text-[12px]" style={{ color: muted }}>
               On t&apos;a envoyé un code au +221 {local}
             </p>
-            <OtpCases theme={theme} value={otp} onChange={(v) => { setOtp(v); setErreur(""); }} />
+            <OtpCases theme={theme} length={4} value={otp} onChange={(v) => { setOtp(v); setErreur(""); }} />
             {timer > 0 ? (
               <p className="text-[13px] text-center" style={{ color: muted }}>
                 Renvoyer le code dans {timer}s

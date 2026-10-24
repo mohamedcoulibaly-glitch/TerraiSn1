@@ -28,8 +28,9 @@ function requireOptionalString(body, field, { max = 255 } = {}) {
 }
 
 function validateRegisterBody(body) {
-  const nom = requireString(body, 'nom', { min: 1, max: 120, label: 'Nom' });
-  const prenom = requireOptionalString(body, 'prenom', { max: 120 });
+  // Inscription joueur minimal : téléphone + prénom + mot de passe (pas de nom/email requis).
+  const prenom = requireString(body, 'prenom', { min: 1, max: 120, label: 'Prénom' });
+  const nom = requireOptionalString(body, 'nom', { max: 120 }) || '';
   const telephone = requireString(body, 'telephone', { min: 8, max: 30, label: 'Téléphone' });
   const password = requireString(body, 'password', { min: 6, max: 128, label: 'Mot de passe' });
   const email = requireOptionalString(body, 'email', { max: 180 });

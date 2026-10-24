@@ -364,8 +364,17 @@ export const authApi = {
     return this.login(payload);
   },
 
-  async registerJoueur(data: { prenom: string; nom: string; telephone: string; password: string }) {
+  async registerJoueur(data: { prenom: string; telephone: string; password: string; nom?: string }) {
     return await request('/auth/register', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  /** Reconnaît un joueur fréquent sans compte (réservations gérant). */
+  async lookupTelephone(telephone: string) {
+    const sp = new URLSearchParams({ telephone });
+    return await request(`/auth/lookup-telephone?${sp.toString()}`) as {
+      type: 'inconnu' | 'compte_existant' | 'frequent_sans_compte';
+      prenom?: string | null;
+    };
   },
 
   async verifyOtp(data: { telephone: string; code: string }) {

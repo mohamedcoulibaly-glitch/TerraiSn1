@@ -6,6 +6,7 @@ async function main() {
   const wanted = [
     'terrain_formats',
     'terrain_durees',
+    'sites',
     'gerants_terrains',
     'planning_garde',
     'push_logs',
@@ -27,7 +28,7 @@ async function main() {
   }
   const cols = queryAll(db, 'PRAGMA table_info(terrains)');
   const colNames = new Set(cols.map((c) => c.name));
-  for (const c of ['politique_paiement', 'delai_verrou_paiement_min', 'delai_paiement_dette_jours']) {
+  for (const c of ['politique_paiement', 'delai_verrou_paiement_min', 'delai_paiement_dette_jours', 'site_id']) {
     if (!colNames.has(c)) {
       console.error('MISSING column terrains.' + c);
       process.exit(1);

@@ -46,7 +46,7 @@ async function main() {
 
   h.assertThrows(
     'mot de passe court',
-    () => validateRegisterBody({ nom: 'A', telephone: '771234567', password: '12' }),
+    () => validateRegisterBody({ prenom: 'A', telephone: '771234567', password: '12' }),
     'Mot de passe',
   );
   h.exitIfFailed();

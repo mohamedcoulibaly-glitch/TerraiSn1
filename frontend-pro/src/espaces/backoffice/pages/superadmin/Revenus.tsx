@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
+import { Activity, CheckCircle, CreditCard } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import SaPageHeader from "@/espaces/backoffice/components/superadmin/ui/SaPageHeader";
+import { KpiMontantWave } from "@/espaces/backoffice/components/KpiMontantWave";
 import { superAdminApi } from "@/services/superAdminApi";
 import { useSaCrumbs } from "@/espaces/backoffice/layout/SuperadminLayout";
 import { fcfa, getContratOverlay } from "@/lib/saContrat";
 import Select2 from "@/components/Select2";
+
+const saKpiVars = {
+  surfaceVar: "var(--sa-surface)",
+  borderVar: "var(--sa-border)",
+  textVar: "var(--sa-text)",
+  mutedVar: "var(--sa-muted)",
+  shadowVar: "var(--sa-shadow)",
+  dangerVar: "var(--sa-danger)",
+} as const;
 
 const PERIODS = [
   { value: "semaine", label: "Cette semaine" },
@@ -67,6 +78,8 @@ export default function Revenus() {
   const fenetre = 0;
   const fraisAbsorbes = table.reduce((s, r) => s + r.frais, 0);
   const net = commissionMois - fraisAbsorbes;
+  const totalAvances = table.reduce((s, r) => s + r.avances, 0);
+  const netGerant = Math.max(0, totalAvances - commissionMois - fraisAbsorbes);
 
   const chartData = table.map((t) => ({
     name: (t.nom || "").slice(0, 12),
@@ -110,21 +123,57 @@ export default function Revenus() {
       />
 
       <p className="text-[12px]" style={{ color: "var(--sa-muted)" }}>
-        Revenus de TerrainSN (commission + frais absorbés) — pas les revenus propriétaires ni gérants.
+        Trio KPI aligné gérant / proprio — le détail commission reste réservé au superadmin.
       </p>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {[
-          { label: "Commission acquise ce mois", value: fcfa(commissionMois), color: "var(--sa-success)" },
-          { label: "Commission encore en fenêtre", value: fcfa(fenetre), color: "var(--sa-warning)" },
-          { label: "Frais payout absorbés", value: fcfa(fraisAbsorbes), color: "var(--sa-warning)" },
-          { label: "Revenu net", value: fcfa(net), color: "var(--sa-primary)" },
-        ].map((k) => (
-          <article key={k.label} className="rounded-xl p-4" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-            <p className="text-[11px]" style={{ color: "var(--sa-muted)" }}>{k.label}</p>
-            <p className="mt-2 text-[20px] font-semibold" style={{ color: k.color, fontFamily: "var(--font-display)" }}>{k.value}</p>
-          </article>
-        ))}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <KpiMontantWave
+          label="Net gérant (reversé)"
+          montant={netGerant}
+          icone={CheckCircle}
+          couleur="var(--sa-success)"
+          taille="normal"
+          {...saKpiVars}
+        />
+        <KpiMontantWave
+          label="Avances joueurs"
+          montant={totalAvances}
+          icone={CreditCard}
+          couleur="var(--sa-info, var(--sa-primary))"
+          taille="normal"
+          {...saKpiVars}
+        />
+        <KpiMontantWave
+          label="Matchs joués"
+          montant={Number(data?.matchs_joues || 0)}
+          icone={Activity}
+          couleur="var(--sa-warning)"
+          taille="normal"
+          format="nombre"
+          {...saKpiVars}
+        />
+      </div>
+
+      <div
+        className="rounded-xl p-4 space-y-3"
+        style={{ background: "var(--sa-surface-2, var(--sa-surface))", border: "1px solid var(--sa-border)" }}
+      >
+        <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--sa-muted)" }}>
+          Détail financier (superadmin uniquement)
+        </p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { label: "Commission acquise", value: fcfa(commissionMois), color: "var(--sa-success)" },
+            { label: "Commission encore en fenêtre", value: fcfa(fenetre), color: "var(--sa-warning)" },
+            { label: "Frais payout absorbés", value: fcfa(fraisAbsorbes), color: "var(--sa-warning)" },
+            { label: "Revenu net TerrainSN", value: fcfa(net), color: "var(--sa-primary)" },
+          ].map((k) => (
+            <article key={k.label} className="rounded-xl p-3" style={{ background: "var(--sa-surface)" }}>
+              <p className="text-[11px]" style={{ color: "var(--sa-muted)" }}>{k.label}</p>
+              <p className="mt-1.5 text-[18px] font-semibold" style={{ color: k.color, fontFamily: "var(--font-display)" }}>{k.value}</p>
+            </article>
+          ))}
+        </div>
       </div>
 
       <div className="rounded-xl p-4" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>

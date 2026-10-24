@@ -27,6 +27,7 @@ const ProfilAdmin = lazy(() => import("@/espaces/profil/ProfilAdmin"));
 
 const SuperAdminDashboard = lazy(() => import("@/espaces/backoffice/pages/superadmin/Dashboard"));
 const GestionTerrains = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionTerrains"));
+const RattachementsAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/Rattachements"));
 const TerrainFicheAdmin = lazy(() => import("@/espaces/backoffice/pages/superadmin/TerrainFiche"));
 const GestionGerants = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionGerants"));
 const GestionProprietaires = lazy(() => import("@/espaces/backoffice/pages/superadmin/GestionProprietaires"));
@@ -52,6 +53,7 @@ const HistoriqueProprietaire = lazy(() => import("@/espaces/backoffice/pages/pro
 const MesTerrains = lazy(() => import("@/espaces/backoffice/pages/proprietaire/MesTerrains"));
 const TerrainDetail = lazy(() => import("@/espaces/backoffice/pages/proprietaire/TerrainDetail"));
 const SanteProprietaire = lazy(() => import("@/espaces/backoffice/pages/proprietaire/Sante"));
+const AuditProprietaire = lazy(() => import("@/espaces/backoffice/pages/proprietaire/Audit"));
 
 function RedirectProprietaireTerrain() {
   const { id } = useParams();
@@ -120,6 +122,7 @@ export default function AppRouter() {
         <Route path="superadmin" element={<RoleGuard roles={["super_admin"]}>{withSuspense(SuperAdminDashboard)}</RoleGuard>} />
         <Route path="superadmin/terrains" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionTerrains)}</RoleGuard>} />
         <Route path="superadmin/terrains/:id" element={<RoleGuard roles={["super_admin"]}>{withSuspense(TerrainFicheAdmin)}</RoleGuard>} />
+        <Route path="superadmin/rattachements" element={<RoleGuard roles={["super_admin"]}>{withSuspense(RattachementsAdmin)}</RoleGuard>} />
         <Route path="superadmin/gerants" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionGerants)}</RoleGuard>} />
         <Route path="superadmin/proprietaires" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionProprietaires)}</RoleGuard>} />
         <Route path="superadmin/superadmins" element={<RoleGuard roles={["super_admin"]}>{withSuspense(GestionSuperadmins)}</RoleGuard>} />
@@ -157,6 +160,7 @@ export default function AppRouter() {
         <Route path="proprietaire/revenus" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(MesRevenus)}</RoleGuard>} />
         <Route path="proprietaire/historique" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(HistoriqueProprietaire)}</RoleGuard>} />
         <Route path="proprietaire/sante" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(SanteProprietaire)}</RoleGuard>} />
+        <Route path="proprietaire/audit" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(AuditProprietaire)}</RoleGuard>} />
         <Route path="proprietaire/terrains" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(MesTerrains)}</RoleGuard>} />
         <Route path="proprietaire/profil" element={<Navigate to="/profil" replace />} />
         <Route path="proprietaire/terrain/:id" element={<RoleGuard roles={["proprietaire"]}>{withSuspense(TerrainDetail)}</RoleGuard>} />

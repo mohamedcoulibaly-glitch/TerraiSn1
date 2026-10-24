@@ -1,5 +1,19 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, DollarSign, Hand, Loader2, RefreshCw, Smartphone, Zap, Check, X } from "lucide-react";
+import {
+  ArrowRightLeft,
+  Building2,
+  DollarSign,
+  FileText,
+  Hand,
+  Loader2,
+  MapPin,
+  RefreshCw,
+  Smartphone,
+  Users,
+  Zap,
+  Check,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import PctMontantPair, { montantDepuisPct } from "@/components/PctMontantPair";
 import Select2 from "@/components/Select2";
@@ -88,7 +102,15 @@ function Pill({
   );
 }
 
+const ETAPES = [
+  { id: 1, titre: "Infos du terrain", Icone: MapPin },
+  { id: 2, titre: "Propriétaire & site", Icone: Building2 },
+  { id: 3, titre: "Gérant(s)", Icone: Users },
+  { id: 4, titre: "Contrat & tarifs", Icone: FileText },
+] as const;
+
 export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, onCancel }: Props) {
+  const [etape, setEtape] = useState(1);
   const [saving, setSaving] = useState(false);
   const [nom, setNom] = useState("");
   const [quartier, setQuartier] = useState("");
@@ -96,6 +118,8 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
   const [surface, setSurface] = useState("gazon_synthetique");
   const [taille, setTaille] = useState("11v11");
   const [proprietaireId, setProprietaireId] = useState("");
+  const [siteId, setSiteId] = useState("");
+  const [sites, setSites] = useState<Array<{ id: number; nom: string }>>([]);
   const [gerantId, setGerantId] = useState("");
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
@@ -132,6 +156,18 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    setSiteId("");
+    if (!proprietaireId) {
+      setSites([]);
+      return;
+    }
+    superAdminApi
+      .sites({ proprietaire_id: proprietaireId })
+      .then((payload) => setSites(Array.isArray(payload?.sites) ? payload.sites : []))
+      .catch(() => setSites([]));
+  }, [proprietaireId]);
 
   const gerant = gerants.find((g) => String(g.id) === gerantId) || null;
   const whatsapp = gerant?.telephone || gerant?.whatsapp_number || "";
@@ -170,6 +206,10 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (etape !== 4) {
+      if (canGoNext()) setEtape((step) => Math.min(4, step + 1));
+      return;
+    }
     const entier = Number(grille.semaine.apres.entier || grille.semaine.avant.entier || 0);
     const demi = Number(grille.semaine.apres.demi || grille.semaine.avant.demi || Math.round(entier * 0.6));
     if (!nom.trim() || !proprietaireId) {
@@ -214,11 +254,23 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
         adresse_theorique: adresseTheorique.trim(),
         adresse_nominatim: adresseNominatim,
         proprietaire_id: Number(proprietaireId),
+        site_id: siteId ? Number(siteId) : null,
         commodite_ids: commoditeIds,
         photos: [],
       });
       const terrainId = Number(created?.id);
       if (terrainId) {
+        if (gerantId) {
+          try {
+            await superAdminApi.addTerrainGerant(terrainId, {
+              gerant_id: Number(gerantId),
+              est_principal: 1,
+              note: "Affecté à la création",
+            });
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Gérant non rattaché");
+          }
+        }
         try {
           await superAdminApi.saveGrilleTarifs(terrainId, grille);
         } catch (err) {
@@ -280,117 +332,258 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
 
   const twoNumbers = Boolean(digitsSn(wave) && digitsSn(om));
 
+  function canGoNext(): boolean {
+    if (etape === 1) {
+      if (!nom.trim()) {
+        toast.error("Le nom du terrain est requis");
+        return false;
+      }
+      if (!adresseTheorique.trim() || latitude == null || longitude == null) {
+        setErreurLoc(
+          !adresseTheorique.trim()
+            ? "L'adresse pour les joueurs est obligatoire"
+            : "Veuillez définir la position exacte du terrain sur la carte",
+        );
+        toast.error("Localisation incomplète");
+        return false;
+      }
+      if (!localPhotos.some((p) => p.est_principale)) {
+        toast.error("Ajoute au moins une photo principale");
+        return false;
+      }
+      return true;
+    }
+    if (etape === 2) {
+      if (!proprietaireId) {
+        toast.error("Choisis un propriétaire");
+        return false;
+      }
+      return true;
+    }
+    return true;
+  }
+
   return (
     <form onSubmit={submit} className="space-y-5">
-      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-primary)" }}>
-        <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Identité du terrain</h3>
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Nom">
-            <input className={inputClass} style={inputStyle} value={nom} onChange={(e) => setNom(e.target.value)} required />
-          </Field>
-          <Field label="Quartier">
-            <input className={inputClass} style={inputStyle} value={quartier} onChange={(e) => setQuartier(e.target.value)} />
-          </Field>
-          <Field label="Ville">
-            <input className={inputClass} style={inputStyle} value={ville} onChange={(e) => setVille(e.target.value)} />
-          </Field>
-          <Field label="Taille">
-            <Select2
-              value={taille}
-              onChange={setTaille}
-              options={[
-                { value: "5v5", label: "5v5" },
-                { value: "7v7", label: "7v7" },
-                { value: "11v11", label: "11v11" },
-              ]}
-            />
-          </Field>
-          <Field label="Surface">
-            <Select2
-              value={surface}
-              onChange={setSurface}
-              options={[
-                { value: "gazon_naturel", label: "Gazon naturel" },
-                { value: "gazon_synthetique", label: "Gazon synthétique" },
-                { value: "beton", label: "Béton" },
-              ]}
-            />
-          </Field>
-          <Field label="Propriétaire">
-            <Select2
-              value={proprietaireId}
-              onChange={setProprietaireId}
-              required
-              placeholder="Choisir"
-              options={owners.map((o) => ({ value: String(o.id), label: o.nom }))}
-            />
-          </Field>
-          <Field label="Gérant (référence WhatsApp)" hint="Sert à préremplir Wave / OM. L’affectation compte se fait dans Utilisateurs.">
-            <Select2
-              value={gerantId}
-              placeholder="Aucun / plus tard"
-              options={[
-                { value: "", label: "Aucun / plus tard" },
-                ...gerants.map((g) => ({
-                  value: String(g.id),
-                  label: `${g.nom}${g.terrain_nom ? ` · ${g.terrain_nom}` : ""}`,
-                })),
-              ]}
-              onChange={(next) => {
-                setGerantId(next);
-                const g = gerants.find((x) => String(x.id) === next);
-                if (sameWhatsapp && g?.telephone) {
-                  const formatted = formatTelAffichage(g.telephone);
-                  setWave(formatted);
-                  setOm(formatted);
-                }
-              }}
-            />
-          </Field>
-        </div>
-      </section>
+      {/* Indicateur wizard 4 étapes */}
+      <div className="flex items-start gap-0 mb-2 overflow-x-auto pb-1">
+        {ETAPES.map((e, i) => {
+          const done = etape > e.id;
+          const active = etape === e.id;
+          const Icone = e.Icone;
+          return (
+            <div key={e.id} className="flex items-center flex-1 min-w-[88px]">
+              <button
+                type="button"
+                onClick={() => {
+                  if (e.id < etape) setEtape(e.id);
+                }}
+                className="flex flex-col items-center gap-1 w-full"
+              >
+                <div
+                  className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm"
+                  style={{
+                    background: done || active ? "var(--sa-primary)" : "var(--sa-surface-2)",
+                    color: done || active ? "#fff" : "var(--sa-muted)",
+                  }}
+                >
+                  {done ? <Check className="w-4 h-4" /> : <Icone className="w-4 h-4" />}
+                </div>
+                <span
+                  className="text-[10px] text-center leading-tight"
+                  style={{ color: active ? "var(--sa-primary)" : "var(--sa-muted)" }}
+                >
+                  {e.titre}
+                </span>
+              </button>
+              {i < ETAPES.length - 1 ? (
+                <div
+                  className="h-0.5 flex-1 mx-1 mt-[-18px] min-w-[12px]"
+                  style={{ background: etape > e.id ? "var(--sa-primary)" : "var(--sa-border)" }}
+                />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
 
-      <LocalisationTerrain
-        adresseTheorique={adresseTheorique}
-        adresseNominatim={adresseNominatim}
-        latitude={latitude}
-        longitude={longitude}
-        onChangeAdresseTheorique={(v) => {
-          setAdresseTheorique(v);
-          if (erreurLoc) setErreurLoc(undefined);
-        }}
-        onChangeCoordonnees={(lat, lng, nominatim) => {
-          setLatitude(lat);
-          setLongitude(lng);
-          setAdresseNominatim(nominatim);
-          if (erreurLoc) setErreurLoc(undefined);
-        }}
-        erreur={erreurLoc}
-      />
+      {etape === 1 ? (
+        <>
+          <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-primary)" }}>
+            <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Identité du terrain</h3>
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Nom">
+                <input className={inputClass} style={inputStyle} value={nom} onChange={(e) => setNom(e.target.value)} required={etape === 1} />
+              </Field>
+              <Field label="Quartier">
+                <input className={inputClass} style={inputStyle} value={quartier} onChange={(e) => setQuartier(e.target.value)} />
+              </Field>
+              <Field label="Ville">
+                <input className={inputClass} style={inputStyle} value={ville} onChange={(e) => setVille(e.target.value)} />
+              </Field>
+              <Field label="Taille">
+                <Select2
+                  value={taille}
+                  onChange={setTaille}
+                  options={[
+                    { value: "5v5", label: "5v5" },
+                    { value: "7v7", label: "7v7" },
+                    { value: "11v11", label: "11v11" },
+                  ]}
+                />
+              </Field>
+              <Field label="Surface">
+                <Select2
+                  value={surface}
+                  onChange={setSurface}
+                  options={[
+                    { value: "gazon_naturel", label: "Gazon naturel" },
+                    { value: "gazon_synthetique", label: "Gazon synthétique" },
+                    { value: "beton", label: "Béton" },
+                  ]}
+                />
+              </Field>
+            </div>
+          </section>
 
-      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-info)" }}>
-        <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Équipements</h3>
-        <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
-          Éclairage, vestiaires et autres commodités visibles par les joueurs.
-        </p>
-        <div className="mt-3">
-          <TerrainCommoditesEditor
-            embedded
-            showSave={false}
-            items={catalogCommodites}
-            selectedIds={commoditeIds}
-            onChange={setCommoditeIds}
+          <LocalisationTerrain
+            adresseTheorique={adresseTheorique}
+            adresseNominatim={adresseNominatim}
+            latitude={latitude}
+            longitude={longitude}
+            onChangeAdresseTheorique={(v) => {
+              setAdresseTheorique(v);
+              if (erreurLoc) setErreurLoc(undefined);
+            }}
+            onChangeCoordonnees={(lat, lng, nominatim) => {
+              setLatitude(lat);
+              setLongitude(lng);
+              setAdresseNominatim(nominatim);
+              if (erreurLoc) setErreurLoc(undefined);
+            }}
+            erreur={erreurLoc}
           />
-        </div>
-      </section>
 
-      <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-info)" }}>
-        <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Photos du terrain</h3>
-        <div className="mt-4">
-          <PhotoUploadTerrain localPhotos={localPhotos} onLocalPhotosChange={setLocalPhotos} />
-        </div>
-      </section>
+          <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-info)" }}>
+            <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Équipements</h3>
+            <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+              Éclairage, vestiaires et autres commodités visibles par les joueurs.
+            </p>
+            <div className="mt-3">
+              <TerrainCommoditesEditor
+                embedded
+                showSave={false}
+                items={catalogCommodites}
+                selectedIds={commoditeIds}
+                onChange={setCommoditeIds}
+              />
+            </div>
+          </section>
 
+          <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-info)" }}>
+            <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Photos du terrain</h3>
+            <div className="mt-4">
+              <PhotoUploadTerrain localPhotos={localPhotos} onLocalPhotosChange={setLocalPhotos} />
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {etape === 2 ? (
+        <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-primary)" }}>
+          <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
+            À qui appartient ce terrain ?
+          </h3>
+          <div className="mt-4 space-y-4 max-w-xl">
+            <Field label="Propriétaire">
+              <Select2
+                value={proprietaireId}
+                onChange={setProprietaireId}
+                required
+                placeholder="Choisir"
+                options={owners.map((o) => ({ value: String(o.id), label: o.nom }))}
+              />
+            </Field>
+            <Field
+              label="Complexe (site)"
+              hint="Optionnel — regrouper plusieurs terrains d’un même propriétaire"
+            >
+              <Select2
+                value={siteId}
+                onChange={setSiteId}
+                placeholder="Terrain seul / hors complexe"
+                options={[
+                  { value: "", label: "Terrain seul / hors complexe" },
+                  ...sites.map((s) => ({ value: String(s.id), label: s.nom })),
+                ]}
+              />
+            </Field>
+            {proprietaireId ? (
+              <button
+                type="button"
+                className="text-sm font-semibold"
+                style={{ color: "var(--sa-primary)" }}
+                onClick={async () => {
+                  const nomSite = window.prompt("Nom du nouveau complexe ?");
+                  if (!nomSite?.trim()) return;
+                  try {
+                    const created = await superAdminApi.createSite({
+                      proprietaire_id: Number(proprietaireId),
+                      nom: nomSite.trim(),
+                      ville,
+                    });
+                    setSites((prev) => [...prev, { id: Number(created.id), nom: created.nom }]);
+                    setSiteId(String(created.id));
+                    toast.success("Complexe créé");
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Création site impossible");
+                  }
+                }}
+              >
+                + Créer un nouveau complexe
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {etape === 3 ? (
+        <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-primary)" }}>
+          <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>
+            Qui gère ce terrain ?
+          </h3>
+          <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
+            Le gérant choisi devient principal et sert de référence WhatsApp / Wave / OM. Tu pourras en ajouter d’autres dans Rattachements.
+          </p>
+          <div className="mt-4 max-w-xl">
+            <Field label="Gérant principal">
+              <Select2
+                value={gerantId}
+                placeholder="Aucun / plus tard"
+                options={[
+                  { value: "", label: "Aucun / plus tard" },
+                  ...gerants.map((g) => ({
+                    value: String(g.id),
+                    label: `${g.nom}${g.terrain_nom ? ` · ${g.terrain_nom}` : ""}`,
+                  })),
+                ]}
+                onChange={(next) => {
+                  setGerantId(next);
+                  const g = gerants.find((x) => String(x.id) === next);
+                  if (sameWhatsapp && g?.telephone) {
+                    const formatted = formatTelAffichage(g.telephone);
+                    setWave(formatted);
+                    setOm(formatted);
+                  }
+                }}
+              />
+            </Field>
+          </div>
+        </section>
+      ) : null}
+
+      {etape === 4 ? (
+        <>
       <section className="rounded-xl p-5" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)", borderTop: "3px solid var(--sa-info)" }}>
         <h3 className="text-[15px] font-semibold" style={{ color: "var(--sa-text)" }}>Grille tarifaire</h3>
         <p className="mt-1 text-[12px]" style={{ color: "var(--sa-muted)" }}>
@@ -608,15 +801,52 @@ export default function TerrainCreateForm({ owners, gerants, auteur, onCreated, 
           </p>
         ))}
       </div>
+        </>
+      ) : null}
 
-      <div className="flex flex-wrap gap-2">
-        <button type="submit" disabled={saving} className="min-h-[48px] px-5 rounded-lg text-[13px] font-semibold text-white inline-flex items-center justify-center gap-2" style={{ background: "var(--sa-primary)" }}>
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-          Créer le terrain
-        </button>
-        <button type="button" onClick={onCancel} className="min-h-[48px] px-5 rounded-lg text-[13px] font-semibold" style={{ border: "1px solid var(--sa-border)", color: "var(--sa-text-2)" }}>
+      <div className="flex flex-wrap gap-2 justify-between">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="min-h-[48px] px-5 rounded-lg text-[13px] font-semibold"
+          style={{ border: "1px solid var(--sa-border)", color: "var(--sa-text-2)" }}
+        >
           Annuler
         </button>
+        <div className="flex flex-wrap gap-2">
+          {etape > 1 ? (
+            <button
+              type="button"
+              onClick={() => setEtape((e) => Math.max(1, e - 1))}
+              className="min-h-[48px] px-5 rounded-lg text-[13px] font-semibold"
+              style={{ border: "1px solid var(--sa-border)", color: "var(--sa-text)" }}
+            >
+              Retour
+            </button>
+          ) : null}
+          {etape < 4 ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (canGoNext()) setEtape((e) => Math.min(4, e + 1));
+              }}
+              className="min-h-[48px] px-5 rounded-lg text-[13px] font-semibold text-white"
+              style={{ background: "var(--sa-primary)" }}
+            >
+              Continuer
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={saving}
+              className="min-h-[48px] px-5 rounded-lg text-[13px] font-semibold text-white inline-flex items-center justify-center gap-2"
+              style={{ background: "var(--sa-primary)" }}
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              Créer le terrain
+            </button>
+          )}
+        </div>
       </div>
     </form>
   );

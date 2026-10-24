@@ -220,34 +220,11 @@ export default function FinancesPage() {
         </section>
       ) : null}
 
-      {portefeuille?.payout_mode === "retrait" ? (
-        <section className="rounded-2xl p-4 space-y-2" style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>Solde à retirer</h2>
-              <p className="text-lg font-bold" style={{ color: "var(--g-primary)", fontFamily: "var(--font-display)" }}>
-                {fcfa(portefeuille.solde_net_apres_dette || portefeuille.solde_disponible)}
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={!portefeuille.bouton_retirer || retraitPending}
-              onClick={() => void demanderRetrait()}
-              className="min-h-[44px] px-4 rounded-xl text-sm font-semibold text-white disabled:opacity-50"
-              style={{ background: "var(--g-primary)" }}
-            >
-              {retraitPending ? "Demande en cours…" : portefeuille.solde_demande_retrait ? "Retrait en cours" : "Retirer"}
-            </button>
-          </div>
-          <p className="text-[12px]" style={{ color: "var(--g-muted)" }}>
-            {portefeuille.solde_demande_retrait
-              ? "Une demande est déjà en cours de traitement."
-              : portefeuille.bouton_retirer
-                ? "Le montant est envoyé à l’équipe pour validation et versement."
-                : (portefeuille.message_lisible
-                  || "Le retrait devient disponible après validation du canal Wave ou Orange Money et des revenus.")}
-          </p>
-        </section>
+      {portefeuille?.payout_mode === "retrait" && !portefeuille.bouton_retirer ? (
+        <p className="text-[12px]" style={{ color: "var(--g-muted)" }}>
+          {portefeuille.message_lisible
+            || "Le retrait devient disponible après validation du canal Wave ou Orange Money et des revenus."}
+        </p>
       ) : null}
 
       {loading ? (
@@ -257,7 +234,22 @@ export default function FinancesPage() {
           {error}
         </p>
       ) : data ? (
-        <FinancesView data={data} />
+        <FinancesView
+          data={{
+            ...data,
+            // Affichage concordant : solde = net touché − avances (API).
+            // Le montant réellement retirable Wave reste géré par demanderRetrait().
+            solde_a_retirer: Number(
+              data.solde_a_retirer
+                ?? Math.max(
+                  0,
+                  Number(data.montant_touche || 0) - Number(data.total_avances || data.avances_recues || 0),
+                ),
+            ),
+          }}
+          peutRetirer={Boolean(portefeuille?.payout_mode === "retrait" && portefeuille?.bouton_retirer && !retraitPending)}
+          onRetrait={() => void demanderRetrait()}
+        />
       ) : null}
     </div>
   );

@@ -1,13 +1,14 @@
-import { CalendarDays, Settings, Users, Wallet } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { CalendarDays, CheckCircle, ChevronDown, MapPin, QrCode, Settings, Users, Wallet } from "lucide-react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { profileForUser } from "@/auth/roles";
 import { useAuth } from "@/hooks/use-auth";
-import { gerantApi, getGerantTerrainActif, setGerantTerrainActif } from "@/lib/api";
+import { useTerrainActif } from "@/hooks/useTerrainActif";
+import { gerantApi } from "@/lib/api";
 import { useWhatsappInfra } from "@/hooks/useWhatsappInfra";
 import WhatsAppInfraBanner from "@/espaces/backoffice/components/WhatsAppInfraBanner";
 import WhatsAppGerantSessionBanner from "@/espaces/backoffice/components/WhatsAppGerantSessionBanner";
-import Select2 from "@/components/Select2";
+import { BottomSheet } from "@/components/BottomSheet";
 import { hapticSelection } from "@/lib/haptics";
 
 const TABS = [
@@ -48,18 +49,11 @@ type HeaderUser = {
   role?: string;
   accountType?: string;
 } | null;
-type TerrainOption = { id: number; nom: string; est_principal?: number };
 
 function initials(user: HeaderUser) {
   const p = (user?.prenom || "").trim();
   const n = (user?.nom || "").trim();
   return `${p.charAt(0)}${n.charAt(0)}`.toUpperCase() || "G";
-}
-
-function firstName(user: HeaderUser) {
-  if (user?.prenom?.trim()) return user.prenom.trim();
-  if (user?.nom?.trim()) return user.nom.trim().split(" ")[0];
-  return "Gérant";
 }
 
 function resolveOnglet(pathname: string): (typeof TABS)[number]["id"] {
@@ -88,15 +82,54 @@ function HeaderAvatar({ user }: { user: HeaderUser }) {
     <button
       type="button"
       onClick={() => navigate(profileForUser(user))}
-      className="inline-flex items-center justify-center w-9 h-9 rounded-full overflow-hidden shrink-0"
+      className="inline-flex items-center justify-center w-8 h-8 rounded-full overflow-hidden shrink-0 btn-press"
       style={{ border: "2px solid var(--g-primary)", background: "var(--g-primary-glow)", color: "var(--g-primary)" }}
       aria-label="Profil"
     >
       {user?.photo_url ? (
         <img src={user.photo_url} alt="" className="w-full h-full object-cover" />
       ) : (
-        <span className="text-xs font-semibold">{initials(user)}</span>
+        <span className="text-[10px] font-semibold">{initials(user)}</span>
       )}
+    </button>
+  );
+}
+
+function HeureLive() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const label = now.toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return (
+    <time
+      dateTime={now.toISOString()}
+      className="text-sm font-semibold tabular-nums"
+      style={{ color: "var(--g-text-2)", fontFamily: "var(--font-display)" }}
+    >
+      {label}
+    </time>
+  );
+}
+
+function BoutonScannerUrgent({ count }: { count: number }) {
+  const navigate = useNavigate();
+  if (count <= 0) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => navigate("/backoffice/gerant#scanner")}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-white btn-press animate-pulse"
+      style={{ background: "var(--g-primary)", boxShadow: "0 0 0 2px var(--g-primary-glow)" }}
+      aria-label={`Scanner — ${count} match imminent`}
+    >
+      <QrCode className="w-4 h-4" />
+      <span>⚡ {count}</span>
     </button>
   );
 }
@@ -105,70 +138,24 @@ export default function GerantLayout() {
   const { user } = useAuth();
   const location = useLocation();
   const ongletActif = resolveOnglet(location.pathname);
-  const [terrains, setTerrains] = useState<TerrainOption[]>([]);
-  const [terrainActif, setTerrainActifState] = useState<number | null>(getGerantTerrainActif());
-  const [terrainNom, setTerrainNom] = useState("");
+  const { terrains, terrainActif, setTerrainActif } = useTerrainActif();
+  const [showTerrainPicker, setShowTerrainPicker] = useState(false);
   const { down: waDown } = useWhatsappInfra(true);
 
-  const applyTerrain = useCallback((id: number, list?: TerrainOption[]) => {
-    setGerantTerrainActif(id);
-    setTerrainActifState(id);
-    const source = list || terrains;
-    const found = source.find((t) => Number(t.id) === Number(id));
-    setTerrainNom(found?.nom || "");
-  }, [terrains]);
-
-  useEffect(() => {
-    let cancelled = false;
-    gerantApi
-      .terrains()
-      .then((payload) => {
-        if (cancelled) return;
-        const list = Array.isArray(payload?.terrains) ? payload.terrains : [];
-        setTerrains(list);
-        const saved = getGerantTerrainActif();
-        const ids = list.map((t) => Number(t.id));
-        const initial =
-          (saved && ids.includes(saved) ? saved : null)
-          || (payload.terrain_actif && ids.includes(Number(payload.terrain_actif))
-            ? Number(payload.terrain_actif)
-            : null)
-          || ids[0]
-          || null;
-        if (initial) {
-          setGerantTerrainActif(initial);
-          setTerrainActifState(initial);
-          setTerrainNom(list.find((t) => Number(t.id) === initial)?.nom || "");
-        }
-      })
-      .catch(() => {
-        gerantApi
-          .dashboard()
-          .then((payload) => {
-            const nom = (payload as { terrain?: { nom?: string } } | null)?.terrain?.nom;
-            if (!cancelled) setTerrainNom(nom || "");
-          })
-          .catch(() => undefined);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const terrainActifId = terrainActif?.id ?? null;
+  const multi = terrains.length > 1;
+  const matchImminent = Number(terrainActif?.imminent_count) > 0;
 
   // Heartbeat toutes les 30s
   useEffect(() => {
-    if (!terrainActif) return;
+    if (!terrainActifId) return;
     const tick = () => {
-      gerantApi.heartbeat(terrainActif).catch(() => undefined);
+      gerantApi.heartbeat(terrainActifId).catch(() => undefined);
     };
     tick();
     const id = window.setInterval(tick, 30000);
     return () => window.clearInterval(id);
-  }, [terrainActif]);
-
-  const greeting = `Bonjour ${firstName(user)} 👋`;
-  const subtitle = terrainNom || "Espace gérant";
-  const multi = terrains.length > 1;
+  }, [terrainActifId]);
 
   const Sidebar = (
     <aside
@@ -183,15 +170,23 @@ export default function GerantLayout() {
           Espace gérant
         </p>
         {multi ? (
-          <Select2
-            className="mt-3"
-            size="sm"
-            ariaLabel="Terrain actif"
-            value={String(terrainActif ?? "")}
-            onChange={(v) => applyTerrain(Number(v))}
-            options={terrains.map((t) => ({ value: String(t.id), label: t.nom }))}
-          />
-        ) : null}
+          <button
+            type="button"
+            onClick={() => setShowTerrainPicker(true)}
+            className="mt-3 w-full flex items-center gap-1.5 px-3 py-2 rounded-xl btn-press text-left"
+            style={{ background: "var(--g-surface-2)", border: "1px solid var(--g-border)" }}
+          >
+            <div className="w-2 h-2 rounded-full animate-pulse shrink-0" style={{ background: "var(--g-primary)" }} />
+            <span className="text-sm font-semibold truncate flex-1" style={{ color: "var(--g-text)" }}>
+              {terrainActif?.nom || "Choisir"}
+            </span>
+            <ChevronDown className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--g-muted)" }} />
+          </button>
+        ) : (
+          <p className="mt-3 text-sm font-semibold truncate" style={{ color: "var(--g-text)" }}>
+            {terrainActif?.nom || "—"}
+          </p>
+        )}
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {TABS.map((tab) => {
@@ -223,30 +218,40 @@ export default function GerantLayout() {
 
       <div className="flex-1 flex flex-col min-w-0 pb-[calc(56px+env(safe-area-inset-bottom))] md:pb-0">
         <header
-          className="sticky top-0 z-30 pt-[env(safe-area-inset-top)]"
-          style={{ background: "var(--g-surface)", borderBottom: "1px solid var(--g-border)" }}
+          className="sticky top-0 z-40 pt-[env(safe-area-inset-top)]"
+          style={{ height: "auto", background: "var(--g-surface)", borderBottom: "1px solid var(--g-border)" }}
         >
           <div className="h-14 px-4 flex items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="font-bold text-[16px] truncate leading-tight" style={{ color: "var(--g-text)" }}>
-              {greeting}
-            </p>
-            {multi ? (
-              <Select2
-                className="mt-0.5 max-w-[220px]"
-                size="sm"
-                ariaLabel="Terrain actif"
-                value={String(terrainActif ?? "")}
-                onChange={(v) => applyTerrain(Number(v))}
-                options={terrains.map((t) => ({ value: String(t.id), label: t.nom }))}
-              />
-            ) : (
-              <p className="text-[12px] truncate" style={{ color: "var(--g-muted)" }}>
-                {subtitle}
-              </p>
-            )}
-          </div>
-          <HeaderAvatar user={user} />
+            <div className="flex items-center gap-2 min-w-0">
+              <HeaderAvatar user={user} />
+
+              {multi ? (
+                <button
+                  type="button"
+                  onClick={() => setShowTerrainPicker(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl btn-press min-w-0"
+                  style={{ background: "var(--g-surface-2)", border: "1px solid var(--g-border)" }}
+                  aria-label="Changer de terrain"
+                >
+                  <div className="w-2 h-2 rounded-full animate-pulse shrink-0" style={{ background: "var(--g-primary)" }} />
+                  <span className="text-sm font-semibold max-w-[120px] truncate" style={{ color: "var(--g-text)" }}>
+                    {terrainActif?.nom || "Terrain"}
+                  </span>
+                  <ChevronDown className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--g-muted)" }} />
+                </button>
+              ) : (
+                <span className="text-sm font-semibold truncate" style={{ color: "var(--g-text)" }}>
+                  {terrainActif?.nom}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              <HeureLive />
+              {matchImminent && (
+                <BoutonScannerUrgent count={Number(terrainActif?.imminent_count) || 0} />
+              )}
+            </div>
           </div>
         </header>
 
@@ -254,8 +259,8 @@ export default function GerantLayout() {
         <WhatsAppGerantSessionBanner />
 
         <main className="flex-1 p-3 md:p-6 overflow-auto">
-          <div className="max-w-5xl mx-auto" key={terrainActif ?? "default"}>
-            <Outlet context={{ terrainActif, terrains }} />
+          <div className="max-w-5xl mx-auto" key={terrainActifId ?? "default"}>
+            <Outlet context={{ terrainActif: terrainActifId, terrains, terrain: terrainActif, setTerrainActif }} />
           </div>
         </main>
       </div>
@@ -283,6 +288,77 @@ export default function GerantLayout() {
           })}
         </div>
       </nav>
+
+      <BottomSheet
+        ouvert={showTerrainPicker}
+        onFermer={() => setShowTerrainPicker(false)}
+        titre="Choisir un terrain"
+      >
+        <div className="flex flex-col gap-2 pb-4">
+          {terrains.map((terrain) => {
+            const actif = terrainActif != null && Number(terrain.id) === Number(terrainActif.id);
+            return (
+              <button
+                key={terrain.id}
+                type="button"
+                onClick={() => {
+                  setTerrainActif(terrain);
+                  setShowTerrainPicker(false);
+                  hapticSelection();
+                }}
+                className="flex items-center gap-3 p-4 rounded-xl text-left btn-press"
+                style={{
+                  background: actif ? "var(--g-primary-glow)" : "var(--g-surface-2)",
+                  border: `1px solid ${actif ? "var(--g-primary)" : "var(--g-border)"}`,
+                }}
+              >
+                <div
+                  className="w-12 h-12 rounded-lg overflow-hidden shrink-0 flex items-center justify-center"
+                  style={{ background: "var(--g-surface-3)" }}
+                >
+                  {terrain.photo_principale ? (
+                    <img
+                      src={terrain.photo_principale}
+                      alt={terrain.nom}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <MapPin className="w-5 h-5" style={{ color: "var(--g-muted)" }} />
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm truncate" style={{ color: "var(--g-text)" }}>
+                    {terrain.nom}
+                  </p>
+                  {terrain.quartier ? (
+                    <p className="text-xs truncate" style={{ color: "var(--g-muted)" }}>
+                      {terrain.quartier}
+                    </p>
+                  ) : null}
+                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                    <span className="text-xs" style={{ color: "var(--g-primary)" }}>
+                      {Number(terrain.matchs_aujourd_hui) || 0} match(s) aujourd&apos;hui
+                    </span>
+                    {Number(terrain.imminent_count) > 0 ? (
+                      <span
+                        className="text-xs px-1.5 py-0.5 rounded-full"
+                        style={{ background: "var(--g-warning-bg)", color: "var(--g-warning)" }}
+                      >
+                        ⚡ {terrain.imminent_count} imminent(s)
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+
+                {actif ? (
+                  <CheckCircle className="w-5 h-5 shrink-0" style={{ color: "var(--g-primary)" }} />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </BottomSheet>
     </div>
   );
 }

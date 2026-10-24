@@ -5,20 +5,31 @@ interface OtpCasesProps {
   onChange: (v: string) => void;
   theme: "joueur" | "backoffice";
   disabled?: boolean;
+  /** Nombre de cases (4 par défaut pour joueur — moins intimidant). */
+  length?: number;
 }
 
-export default function OtpCases({ value, onChange, theme, disabled }: OtpCasesProps) {
+export default function OtpCases({
+  value,
+  onChange,
+  theme,
+  disabled,
+  length = 4,
+}: OtpCasesProps) {
   const refs = useRef<(HTMLInputElement | null)[]>([]);
   const primary = theme === "joueur" ? "var(--lj-primary)" : "var(--lb-primary)";
   const glow = theme === "joueur" ? "var(--lj-primary-glow)" : "var(--lb-primary-glow)";
   const border = theme === "joueur" ? "var(--lj-border)" : "var(--lb-border)";
+  const surface = theme === "joueur" ? "var(--lj-surface, var(--surface-2))" : "var(--surface-2)";
+  const n = Math.max(4, Math.min(8, length));
+  const last = n - 1;
 
   const setDigit = (index: number, raw: string) => {
     const digit = raw.replace(/\D/g, "").slice(-1);
-    const arr = Array.from({ length: 6 }, (_, i) => value[i] || "");
+    const arr = Array.from({ length: n }, (_, i) => value[i] || "");
     arr[index] = digit;
     onChange(arr.join(""));
-    if (digit && index < 5) refs.current[index + 1]?.focus();
+    if (digit && index < last) refs.current[index + 1]?.focus();
   };
 
   const onKeyDown = (index: number, e: KeyboardEvent<HTMLInputElement>) => {
@@ -29,15 +40,15 @@ export default function OtpCases({ value, onChange, theme, disabled }: OtpCasesP
 
   const onPaste = (e: ClipboardEvent) => {
     e.preventDefault();
-    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, n);
     if (!pasted) return;
     onChange(pasted);
-    refs.current[Math.min(pasted.length, 5)]?.focus();
+    refs.current[Math.min(pasted.length, last)]?.focus();
   };
 
   return (
-    <div className="login-otp-row" onPaste={onPaste}>
-      {Array.from({ length: 6 }).map((_, i) => {
+    <div className="flex gap-3 justify-center" onPaste={onPaste}>
+      {Array.from({ length: n }).map((_, i) => {
         const filled = !!value[i];
         return (
           <input
@@ -45,6 +56,7 @@ export default function OtpCases({ value, onChange, theme, disabled }: OtpCasesP
             ref={(el) => {
               refs.current[i] = el;
             }}
+            type="tel"
             inputMode="numeric"
             autoComplete={i === 0 ? "one-time-code" : "off"}
             maxLength={1}
@@ -53,11 +65,12 @@ export default function OtpCases({ value, onChange, theme, disabled }: OtpCasesP
             onChange={(e) => setDigit(i, e.target.value)}
             onKeyDown={(e) => onKeyDown(i, e)}
             aria-label={`Chiffre ${i + 1}`}
-            className="login-otp-cell"
+            className="w-14 h-16 text-center text-2xl font-bold rounded-xl border-2 outline-none"
             style={{
-              color: primary,
-              background: filled ? glow : "var(--surface-2)",
-              border: `1px solid ${filled ? primary : border}`,
+              color: "var(--lj-text, var(--color-text-primary))",
+              background: filled ? glow : surface,
+              borderColor: filled ? primary : border,
+              fontSize: 24,
             }}
           />
         );

@@ -154,6 +154,17 @@ function registerGerantMultiRoutes(app) {
     }
   });
 
+  // GET /api/gerant/terrains/alertes — résumé cross-terrain (imminents / scan / libres)
+  app.get('/api/gerant/terrains/alertes', authMiddleware, requireRole('gerant'), async (req, res) => {
+    try {
+      const payload = await gerantService.listAlertesTerrainsGerant(req.user.id);
+      res.json(payload);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
   // GET /api/gerant/planning
   app.get('/api/gerant/planning', authMiddleware, requireRole('gerant'), async (req, res) => {
     try {
@@ -163,17 +174,57 @@ function registerGerantMultiRoutes(app) {
         ? await gerantService.getGerantsTerrain(terrainId)
         : [];
       const garde = terrainId ? await gerantService.getGerantDeGarde(terrainId) : null;
+      const planningEquipe = terrainId
+        ? await gerantService.listPlanningGerant(terrainId)
+        : [];
+      const moi = collegues.find((c) => Number(c.gerant_id) === Number(req.user.id));
+      const estPrincipal = Number(moi?.est_principal) === 1;
       res.json({
         planning,
+        planning_equipe: planningEquipe,
         collegues,
         garde_actuelle: garde,
         multi_gerants: collegues.length > 1,
+        terrain_id: terrainId,
+        nb_gerants: collegues.length,
+        est_principal: estPrincipal,
+        peut_modifier_planning: estPrincipal && collegues.length > 1,
       });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Erreur serveur' });
     }
   });
+
+  // PUT /api/gerant/terrain/:terrain_id/gerants/:gerant_id/planning
+  // Réservé au gérant principal du terrain (réutilise remplacerPlanning).
+  app.put(
+    '/api/gerant/terrain/:terrain_id/gerants/:gerant_id/planning',
+    authMiddleware,
+    requireRole('gerant'),
+    async (req, res) => {
+      try {
+        const terrainId = resolveTerrainGerant(req, req.params.terrain_id);
+        if (!terrainId) {
+          return res.status(403).json({ error: "Tu n'as pas accès à ce terrain." });
+        }
+        const planning = await gerantService.remplacerPlanningParPrincipal(
+          terrainId,
+          Number(req.params.gerant_id),
+          {
+            planning_hebdo: req.body?.planning_hebdo || [],
+            dates_specifiques: req.body?.dates_specifiques || [],
+          },
+          req.user.id,
+        );
+        const planningEquipe = await gerantService.listPlanningGerant(terrainId);
+        res.json({ planning, planning_equipe: planningEquipe, succes: true });
+      } catch (err) {
+        console.error(err);
+        res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+      }
+    },
+  );
 
   // GET /api/gerant/terrain/:terrain_id/gerants-en-ligne
   app.get(

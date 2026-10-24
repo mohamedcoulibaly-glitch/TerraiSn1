@@ -25,8 +25,9 @@ function formatDisplayPhone(telephone) {
   return telephone;
 }
 
+/** Code OTP 4 chiffres — plus rapide à saisir sur mobile. */
 function generateOtpCode() {
-  return String(crypto.randomInt(100000, 999999));
+  return String(crypto.randomInt(1000, 10000));
 }
 
 async function invalidateOtps(db, telephoneDigits) {

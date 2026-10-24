@@ -67,7 +67,7 @@ async function main() {
   );
 
   const code = generateOtpCode();
-  h.assert('OTP 6 digits', /^\d{6}$/.test(code));
+  h.assert('OTP 4 digits', /^\d{4}$/.test(code));
 
   // --- OTP en DB ---
   const db = await getDb();
@@ -83,7 +83,7 @@ async function main() {
     prenom: 'Test',
   });
   h.assertEqual('OTP telephone normalisé', sent.telephone, '221778261225');
-  h.assert('OTP code présent', /^\d{6}$/.test(sent.code));
+  h.assert('OTP code présent', /^\d{4}$/.test(sent.code));
 
   const found = findValidOtp(db, '778261225', sent.code);
   h.assert('findValidOtp OK', Boolean(found.otp) && !found.error);

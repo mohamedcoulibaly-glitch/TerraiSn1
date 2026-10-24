@@ -41,6 +41,7 @@ import ScannerModal from "@/espaces/backoffice/components/ScannerModal";
 import ValidationManuelleModal from "@/espaces/backoffice/components/ValidationManuelleModal";
 import PaymentLockGauge from "@/components/PaymentLockGauge";
 import SilentSyncDot from "@/components/SilentSyncDot";
+import AlertesCrossTerrains from "@/espaces/backoffice/components/AlertesCrossTerrains";
 
 type TodayReservation = {
   id: number;
@@ -1374,6 +1375,8 @@ const ManagerDashboard = () => {
           </span>
         </div>
       ) : null}
+
+      <AlertesCrossTerrains />
 
       {/* ACTIONS RAPIDES */}
       <div className="grid grid-cols-3 gap-2.5">
