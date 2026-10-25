@@ -1,23 +1,25 @@
 /**
  * Seed complet — gérant multi-terrains (3 terrains en parallèle).
  *
+ * Idempotent : appelé à chaque boot serveur (même SKIP_SEED=true) pour survivre
+ * à la DB éphémère Render free — même pattern que ensure-mohamed / ensure-babacar.
+ *
  * Crée / met à jour :
  *  - propriétaire démo
  *  - un site (complexe) partagé par les 3 terrains (site_id)
  *  - gérant principal rattaché aux 3 terrains (gerants_terrains)
  *  - 2e gérant collègue sur le terrain principal (planning multi-gérants)
- *  - horaires, créneaux, résas du jour + à venir, ledger `dus`, planning de garde
+ *  - horaires, créneaux, résas du jour + historique matchs joués, ledger `dus`, planning
  *
  * Usage :
  *   node scripts/seed-gerant-multi-terrains.js
  *   npm run seed:multi-gerant --prefix backend
+ *   require('./scripts/seed-gerant-multi-terrains').ensureMultiGerantDemo({ db, silent: true })
  *
- * Login pro : http://localhost:5174/login
+ * Login pro : /pro/login
  *   Email    : multi.gerant@terrainsn.sn
  *   Password : password123
  */
-require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
-
 const bcrypt = require('bcryptjs');
 const { getDb, queryOne, queryAll, runSql, saveDb, transaction } = require('../database');
 const { enregistrerContrat, chargerContrat } = require('../services/contratService');
@@ -395,8 +397,13 @@ function seedPlanningEquipe(db, terrainId, gerantId, collegueId) {
   }
 }
 
-async function main() {
-  const db = await getDb();
+/**
+ * Upsert démo multi-terrains — safe à chaque démarrage prod.
+ * @param {{ db?: object, silent?: boolean }} [opts]
+ */
+async function ensureMultiGerantDemo(opts = {}) {
+  const db = opts.db || (await getDb());
+  const silent = Boolean(opts.silent);
   const hash = bcrypt.hashSync(DEMO_PASSWORD, 10);
 
   const proprioId = upsertProprio(db, hash);
@@ -618,34 +625,60 @@ async function main() {
     [gerantId],
   );
 
-  console.log('\n=== Seed gérant multi-terrains OK ===\n');
-  console.log('Connexion PRO  →  http://localhost:5174/login');
-  console.log(`  Email     : ${GERANT_EMAIL}`);
-  console.log(`  Mot de passe : ${DEMO_PASSWORD}`);
-  console.log(`  Téléphone : ${PHONE_GERANT}`);
-  console.log(`  Gérant id : ${gerantId}`);
-  console.log(`  Site id   : ${siteId} (${SITE_NOM})`);
-  console.log(`  Proprio   : ${PROPRIO_EMAIL} / ${DEMO_PASSWORD}`);
-  console.log(`  Collègue  : ${COLLEGUE_EMAIL} / ${DEMO_PASSWORD} (terrain principal uniquement)`);
-  console.log('\nTerrains liés :');
-  for (const l of liens) {
-    console.log(`  #${l.terrain_id}  ${l.est_principal ? '★' : '·'}  ${l.nom}  [site=${l.site_id}]  — ${l.note || ''}`);
+  const caTotal = stats.reduce((s, row) => s + row.caJoues, 0);
+  const jouesTotal = stats.reduce((s, row) => s + row.matchsJoues, 0);
+
+  if (!silent) {
+    console.log('\n=== Seed gérant multi-terrains OK ===\n');
+    console.log('Connexion PRO  →  /pro/login (ou http://localhost:5174/login)');
+    console.log(`  Email     : ${GERANT_EMAIL}`);
+    console.log(`  Mot de passe : ${DEMO_PASSWORD}`);
+    console.log(`  Téléphone : ${PHONE_GERANT}`);
+    console.log(`  Gérant id : ${gerantId}`);
+    console.log(`  Site id   : ${siteId} (${SITE_NOM})`);
+    console.log(`  Proprio   : ${PROPRIO_EMAIL} / ${DEMO_PASSWORD}`);
+    console.log(`  Collègue  : ${COLLEGUE_EMAIL} / ${DEMO_PASSWORD} (terrain principal uniquement)`);
+    console.log('\nTerrains liés :');
+    for (const l of liens) {
+      console.log(`  #${l.terrain_id}  ${l.est_principal ? '★' : '·'}  ${l.nom}  [site=${l.site_id}]  — ${l.note || ''}`);
+    }
+    console.log('\nActivité seedée :');
+    for (const s of stats) {
+      console.log(
+        `  ${s.nom} (#${s.terrainId}) → ${s.resasAujourdhui} auj. | ${s.matchsJoues} joués+encaissés | CA ${s.caJoues.toLocaleString('fr-FR')} FCFA`,
+      );
+    }
+    console.log(`\nCA agrégé : ${jouesTotal} matchs → ${caTotal.toLocaleString('fr-FR')} FCFA\n`);
   }
-  console.log('\nActivité seedée :');
-  let caTotal = 0;
-  let jouesTotal = 0;
-  for (const s of stats) {
-    caTotal += s.caJoues;
-    jouesTotal += s.matchsJoues;
-    console.log(
-      `  ${s.nom} (#${s.terrainId}) → ${s.resasAujourdhui} auj. | ${s.matchsJoues} joués+encaissés | CA ${s.caJoues.toLocaleString('fr-FR')} FCFA`,
-    );
-  }
-  console.log(`\nCA agrégé (KPI « Valeur matchs ») : ${jouesTotal} matchs → ${caTotal.toLocaleString('fr-FR')} FCFA`);
-  console.log('Astuce : Finances gérant / proprio → période semaine ou mois pour voir le CA.\n');
+
+  return {
+    gerantId,
+    collegueId,
+    proprioId,
+    siteId,
+    terrainIds,
+    stats,
+    caTotal,
+    jouesTotal,
+    emails: { gerant: GERANT_EMAIL, proprio: PROPRIO_EMAIL, collegue: COLLEGUE_EMAIL },
+    password: DEMO_PASSWORD,
+  };
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = {
+  ensureMultiGerantDemo,
+  GERANT_EMAIL,
+  PROPRIO_EMAIL,
+  COLLEGUE_EMAIL,
+  DEMO_PASSWORD,
+  SITE_NOM,
+  TERRAINS_SPEC,
+};
+
+if (require.main === module) {
+  require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
+  ensureMultiGerantDemo({ silent: false }).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

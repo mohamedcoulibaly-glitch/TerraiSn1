@@ -4846,6 +4846,20 @@ async function start() {
   } catch (error) {
     logger.warn('index.js', `Seed joueur Babacar: ${error.message}`);
   }
+  // Démo multi-terrains (3 terrains + CA/matchs joués) : idempotent à chaque boot,
+  // même SKIP_SEED=true — reconstitue la démo après wipe Render free.
+  try {
+    const { ensureMultiGerantDemo, GERANT_EMAIL } = require('./scripts/seed-gerant-multi-terrains');
+    const multi = await ensureMultiGerantDemo({ db, silent: true });
+    logger.info(
+      'index.js',
+      `Multi-terrains assuré : gérant ${GERANT_EMAIL} (#${multi.gerantId}), `
+        + `${multi.terrainIds.length} terrains, site #${multi.siteId}, `
+        + `${multi.jouesTotal} matchs joués / CA ${Number(multi.caTotal || 0).toLocaleString('fr-FR')} FCFA`,
+    );
+  } catch (error) {
+    logger.warn('index.js', `Seed multi-terrains: ${error.message}`);
+  }
   programmerResumeHebdomadaire();
   programmerSurveillanceConfiance();
   programmerRappelsReservations();

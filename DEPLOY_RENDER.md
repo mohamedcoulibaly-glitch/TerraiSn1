@@ -22,8 +22,12 @@ Puis **Environment** → variables de base :
 | `NODE_ENV` | `production` |
 | `JWT_SECRET` | une longue chaîne aléatoire |
 | `JWT_REFRESH_SECRET` | une autre chaîne aléatoire |
-| `SKIP_SEED` | `true` (**obligatoire** en prod — évite de réécrire / polluer la DB) |
+| `SKIP_SEED` | `true` (**obligatoire** en prod — évite le `seed.js` bulk) |
 | `FORCE_SEED` | `false` (ne jamais mettre `true` en prod) |
+
+> **DB Render free = éphémère.** Même avec `SKIP_SEED=true`, le boot rejoue toujours les ensures idempotents :
+> Mohamed, joueur Babacar, **et le seed multi-terrains** (`multi.gerant@terrainsn.sn` / `password123`).
+> La démo CA / 3 terrains revient donc après chaque machine neuve / redeploy.
 | `COOKIE_SAMESITE` | `lax` |
 | `APP_DOMAIN` | `https://terraisn1-1.onrender.com` (domaine prod canonique) |
 | `APP_DOMAIN_JOUEUR` | `https://terraisn1-1.onrender.com` |
