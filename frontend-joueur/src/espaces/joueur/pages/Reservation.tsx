@@ -153,15 +153,13 @@ const Payment = () => {
               ? ` [${error.code}]`
               : "";
       toast.error(`${error.message || "Erreur lors du paiement"}${codeHint}`);
-    } finally {
-      setProcessing(false);
     }
     });
   };
 
   if (isInitialLoading && !terrain) {
     return (
-      <div className="page-container page-enter pb-32">
+      <div className="page-container page-enter pb-[calc(14rem+env(safe-area-inset-bottom))] md:pb-40">
         <div className="responsive-padding space-y-4 pt-4" aria-busy="true" aria-label="Chargement">
           <div className="h-12 w-48 rounded-xl skeleton-line" />
           <div className="h-24 rounded-2xl skeleton-image" />
@@ -173,7 +171,7 @@ const Payment = () => {
   }
 
   return (
-    <div className="page-container page-enter pb-40">
+    <div className="page-container page-enter pb-[calc(14rem+env(safe-area-inset-bottom))] md:pb-40">
       <SilentSyncDot active={isRefetching && Boolean(terrain)} label="Mise à jour" />
       <div className="flex items-center gap-3 responsive-padding py-4">
         <button
@@ -327,45 +325,46 @@ const Payment = () => {
           </div>
         </div>
 
-        {!sansAvance && !enLigneIndispo ? (
-          <div className="space-y-2">
-            <p className="text-[12px] text-[var(--color-text-muted)]">Moyen de paiement</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setCanal("wave")}
-                className={`min-h-[52px] rounded-[var(--radius-md)] border px-3 text-sm font-semibold inline-flex items-center justify-center gap-2 ${
-                  canal === "wave"
-                    ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
-                    : "border-[var(--color-border)] bg-[var(--surface)]"
-                }`}
-              >
-                <WaveIcon className="w-6 h-6 shrink-0 rounded-md" />
-                Wave
-              </button>
-              <button
-                type="button"
-                onClick={() => setCanal("orange_money")}
-                className={`min-h-[52px] rounded-[var(--radius-md)] border px-3 text-sm font-semibold inline-flex items-center justify-center gap-2 ${
-                  canal === "orange_money"
-                    ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
-                    : "border-[var(--color-border)] bg-[var(--surface)]"
-                }`}
-              >
-                <OrangeMoneyIcon className="w-6 h-6 shrink-0 rounded-md" />
-                Orange Money
-              </button>
-            </div>
-          </div>
-        ) : null}
       </div>
 
-      <div className="fixed bottom-16 inset-x-0 z-30 border-t border-[var(--color-border)] bg-[var(--surface)] px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+      {/* Bandeau fixe : canaux toujours visibles (plus de recouvrement par le CTA). */}
+      <div className="fixed bottom-16 md:bottom-0 inset-x-0 z-30 border-t border-[var(--color-border)] bg-[var(--surface)] px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
         <div className="max-w-lg mx-auto space-y-2">
           <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] justify-center">
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--color-primary)]" />
             {sansAvance ? "Confirmation directe" : "Paiement sécurisé"}
           </div>
+          {!sansAvance && !enLigneIndispo ? (
+            <div className="space-y-1.5">
+              <p className="text-[12px] text-[var(--color-text-muted)] text-center">Moyen de paiement</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCanal("wave")}
+                  className={`min-h-[52px] rounded-[var(--radius-md)] border px-3 text-sm font-semibold inline-flex items-center justify-center gap-2 ${
+                    canal === "wave"
+                      ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
+                      : "border-[var(--color-border)] bg-[var(--surface)] text-[var(--color-text-primary)]"
+                  }`}
+                >
+                  <WaveIcon className="w-7 h-7 rounded-[8px]" />
+                  Wave
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCanal("orange_money")}
+                  className={`min-h-[52px] rounded-[var(--radius-md)] border px-3 text-sm font-semibold inline-flex items-center justify-center gap-2 ${
+                    canal === "orange_money"
+                      ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
+                      : "border-[var(--color-border)] bg-[var(--surface)] text-[var(--color-text-primary)]"
+                  }`}
+                >
+                  <OrangeMoneyIcon className="w-7 h-7 rounded-[8px]" />
+                  Orange Money
+                </button>
+              </div>
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={handlePay}
@@ -389,8 +388,8 @@ const Payment = () => {
           </button>
           {!sansAvance ? (
             <p className="flex items-center justify-center gap-2 text-[12px] text-[var(--color-text-muted)] text-center pointer-events-none select-none">
-              <WaveIcon className="w-4 h-4 rounded opacity-70" decorative />
-              <OrangeMoneyIcon className="w-4 h-4 rounded opacity-70" decorative />
+              <WaveIcon className="w-5 h-5 rounded-[6px]" decorative />
+              <OrangeMoneyIcon className="w-5 h-5 rounded-[6px]" decorative />
               <span>Paiement sécurisé via Wave ou Orange Money</span>
             </p>
           ) : null}

@@ -1,4 +1,4 @@
-/** Icônes Wave / Orange Money — carrés lisibles (évite le crop des logos panoramiques). */
+/** Icônes Wave / Orange Money — carrés lisibles à petite taille (évite crop + collapse SVG). */
 
 type IconProps = {
   className?: string;
@@ -7,46 +7,38 @@ type IconProps = {
   decorative?: boolean;
 };
 
-/** Marque Wave : fond bleu + pingouin simplifié (icône app). */
+const iconClass = (className: string) =>
+  ["max-w-none shrink-0 block", className].filter(Boolean).join(" ");
+
+/** Marque Wave : fond bleu + W blanc (lisible dès 16px). */
 export function WaveIcon({ className = "w-5 h-5", title = "Wave", decorative }: IconProps) {
   return (
     <svg
       viewBox="0 0 40 40"
-      className={className}
+      width={20}
+      height={20}
+      className={iconClass(className)}
       role={decorative ? "presentation" : "img"}
       aria-hidden={decorative || undefined}
       aria-label={decorative ? undefined : title}
       xmlns="http://www.w3.org/2000/svg"
     >
       {!decorative ? <title>{title}</title> : null}
-      <rect width="40" height="40" rx="8" fill="#1DC8FF" />
-      <ellipse cx="20" cy="23" rx="9" ry="10" fill="#111827" />
-      <ellipse cx="20" cy="25" rx="5.5" ry="6.5" fill="#F8FAFC" />
+      <rect width="40" height="40" rx="10" fill="#1DC8FF" />
       <path
-        d="M11 20c-2.5 1-3.5 4-2.5 6.5"
-        stroke="#111827"
-        strokeWidth="2.4"
-        strokeLinecap="round"
+        d="M9 26c2.2-6.5 5.2-10 9-10 2.4 0 3.8 1.6 5 4.2 1.2 2.6 2.2 3.8 4 3.8 1.6 0 2.8-.8 4-2.4"
         fill="none"
-      />
-      <path
-        d="M29 18c2.2-.2 3.8 1.8 3.2 4.2"
-        stroke="#111827"
-        strokeWidth="2.4"
+        stroke="#FFFFFF"
+        strokeWidth="3.2"
         strokeLinecap="round"
-        fill="none"
+        strokeLinejoin="round"
       />
-      <circle cx="20" cy="14" r="6.5" fill="#111827" />
-      <circle cx="17.5" cy="13.5" r="1.35" fill="#F8FAFC" />
-      <circle cx="22.5" cy="13.5" r="1.35" fill="#F8FAFC" />
-      <path d="M18.5 16.2 L20 18.2 L21.5 16.2 Z" fill="#F97316" />
-      <ellipse cx="16.5" cy="33.2" rx="2.4" ry="1.3" fill="#F97316" />
-      <ellipse cx="23.5" cy="33.2" rx="2.4" ry="1.3" fill="#F97316" />
+      <circle cx="20" cy="12" r="3.2" fill="#FFFFFF" />
     </svg>
   );
 }
 
-/** Marque Orange Money : flèches croisées (symbole officiel simplifié). */
+/** Marque Orange Money : fond orange + flèches croisées blanches/noires. */
 export function OrangeMoneyIcon({
   className = "w-5 h-5",
   title = "Orange Money",
@@ -55,24 +47,20 @@ export function OrangeMoneyIcon({
   return (
     <svg
       viewBox="0 0 40 40"
-      className={className}
+      width={20}
+      height={20}
+      className={iconClass(className)}
       role={decorative ? "presentation" : "img"}
       aria-hidden={decorative || undefined}
       aria-label={decorative ? undefined : title}
       xmlns="http://www.w3.org/2000/svg"
     >
       {!decorative ? <title>{title}</title> : null}
-      <rect width="40" height="40" rx="8" fill="#FFFFFF" stroke="#E5E7EB" strokeWidth="1" />
-      {/* Flèche noire (haut-droite) */}
-      <path
-        d="M12 14h10v3.2H17.8L26 25.4l-2.3 2.3L15.5 19.5V24H12V14z"
-        fill="#111827"
-      />
-      {/* Flèche orange (bas-gauche) */}
-      <path
-        d="M28 26H18v-3.2h4.2L14 14.6l2.3-2.3 8.2 8.2V16H28v10z"
-        fill="#FF7900"
-      />
+      <rect width="40" height="40" rx="10" fill="#FF7900" />
+      {/* Flèche noire ↗ */}
+      <path d="M14 12h12v4H21l7 7-2.8 2.8-7-7V24h-4V12z" fill="#111827" />
+      {/* Flèche blanche ↙ */}
+      <path d="M26 28H14v-4h5l-7-7 2.8-2.8 7 7V16h4v12z" fill="#FFFFFF" />
     </svg>
   );
 }

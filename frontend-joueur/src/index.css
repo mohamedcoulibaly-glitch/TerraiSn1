@@ -300,7 +300,8 @@
     overflow-x: clip;
   }
 
-  img, video, canvas, svg {
+  /* svg exclus : max-width:100% + *{min-width:0} écrasait les icônes inline (Wave/OM). */
+  img, video, canvas {
     max-width: 100%;
   }
 
