@@ -15,7 +15,8 @@ import { clearDraft, usePersistedState } from "@/hooks/usePersistedState";
 import { useSubmitGuard } from "@/hooks/useSubmitGuard";
 import { useSwipeBack } from "@/hooks/useSwipeBack";
 
-import { OrangeMoneyIcon, WaveIcon } from "@/components/PaymentCanalIcons";
+import omIcon from "@/assets/images.png";
+import waveIcon from "@/assets/wave-banque-en-ligne-au-senegal-pour-paiement-transfert-argents.jpg";
 
 type PaymentDraft = {
   name: string;
@@ -159,7 +160,7 @@ const Payment = () => {
 
   if (isInitialLoading && !terrain) {
     return (
-      <div className="page-container page-enter pb-[calc(14rem+env(safe-area-inset-bottom))] md:pb-40">
+      <div className="page-container page-enter pb-[calc(11rem+env(safe-area-inset-bottom))] md:pb-36">
         <div className="responsive-padding space-y-4 pt-4" aria-busy="true" aria-label="Chargement">
           <div className="h-12 w-48 rounded-xl skeleton-line" />
           <div className="h-24 rounded-2xl skeleton-image" />
@@ -171,7 +172,7 @@ const Payment = () => {
   }
 
   return (
-    <div className="page-container page-enter pb-[calc(14rem+env(safe-area-inset-bottom))] md:pb-40">
+    <div className="page-container page-enter pb-[calc(11rem+env(safe-area-inset-bottom))] md:pb-36">
       <SilentSyncDot active={isRefetching && Boolean(terrain)} label="Mise à jour" />
       <div className="flex items-center gap-3 responsive-padding py-4">
         <button
@@ -317,7 +318,7 @@ const Payment = () => {
                 placeholder="77 000 00 00"
                 value={phone}
                 onChange={(e) => setPhone(formatPhoneDisplay(e.target.value))}
-                className="flex-1 min-w-[8rem] bg-transparent outline-none text-sm min-h-[48px]"
+                className="flex-1 min-w-[8rem] bg-transparent outline-none text-sm min-h-[48px] text-[var(--color-text-primary)]"
                 id="payment-phone"
                 aria-label="Numéro de téléphone"
               />
@@ -325,46 +326,59 @@ const Payment = () => {
           </div>
         </div>
 
+        {!sansAvance && !enLigneIndispo ? (
+          <div className="space-y-2">
+            <p className="text-[12px] text-[var(--color-text-muted)]">Moyen de paiement</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setCanal("wave")}
+                className={`min-h-[64px] rounded-[var(--radius-md)] border px-3 py-2 text-sm font-semibold inline-flex flex-col items-center justify-center gap-1.5 ${
+                  canal === "wave"
+                    ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
+                    : "border-[var(--color-border)] bg-[var(--surface)] text-[var(--color-text-primary)]"
+                }`}
+              >
+                <img
+                  src={waveIcon}
+                  alt=""
+                  width={120}
+                  height={40}
+                  className="h-9 w-auto max-w-[120px] object-contain"
+                  aria-hidden
+                />
+                <span>Wave</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCanal("orange_money")}
+                className={`min-h-[64px] rounded-[var(--radius-md)] border px-3 py-2 text-sm font-semibold inline-flex flex-col items-center justify-center gap-1.5 ${
+                  canal === "orange_money"
+                    ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
+                    : "border-[var(--color-border)] bg-[var(--surface)] text-[var(--color-text-primary)]"
+                }`}
+              >
+                <img
+                  src={omIcon}
+                  alt=""
+                  width={120}
+                  height={40}
+                  className="h-9 w-auto max-w-[120px] object-contain bg-white rounded-sm"
+                  aria-hidden
+                />
+                <span>Orange Money</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      {/* Bandeau fixe : canaux toujours visibles (plus de recouvrement par le CTA). */}
       <div className="fixed bottom-16 md:bottom-0 inset-x-0 z-30 border-t border-[var(--color-border)] bg-[var(--surface)] px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
         <div className="max-w-lg mx-auto space-y-2">
           <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] justify-center">
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--color-primary)]" />
             {sansAvance ? "Confirmation directe" : "Paiement sécurisé"}
           </div>
-          {!sansAvance && !enLigneIndispo ? (
-            <div className="space-y-1.5">
-              <p className="text-[12px] text-[var(--color-text-muted)] text-center">Moyen de paiement</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setCanal("wave")}
-                  className={`min-h-[52px] rounded-[var(--radius-md)] border px-3 text-sm font-semibold inline-flex items-center justify-center gap-2 ${
-                    canal === "wave"
-                      ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
-                      : "border-[var(--color-border)] bg-[var(--surface)] text-[var(--color-text-primary)]"
-                  }`}
-                >
-                  <WaveIcon className="w-7 h-7 rounded-[8px]" />
-                  Wave
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCanal("orange_money")}
-                  className={`min-h-[52px] rounded-[var(--radius-md)] border px-3 text-sm font-semibold inline-flex items-center justify-center gap-2 ${
-                    canal === "orange_money"
-                      ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
-                      : "border-[var(--color-border)] bg-[var(--surface)] text-[var(--color-text-primary)]"
-                  }`}
-                >
-                  <OrangeMoneyIcon className="w-7 h-7 rounded-[8px]" />
-                  Orange Money
-                </button>
-              </div>
-            </div>
-          ) : null}
           <button
             type="button"
             onClick={handlePay}
@@ -388,8 +402,22 @@ const Payment = () => {
           </button>
           {!sansAvance ? (
             <p className="flex items-center justify-center gap-2 text-[12px] text-[var(--color-text-muted)] text-center pointer-events-none select-none">
-              <WaveIcon className="w-5 h-5 rounded-[6px]" decorative />
-              <OrangeMoneyIcon className="w-5 h-5 rounded-[6px]" decorative />
+              <img
+                src={waveIcon}
+                alt=""
+                width={48}
+                height={20}
+                className="h-5 w-auto max-w-[56px] object-contain"
+                aria-hidden
+              />
+              <img
+                src={omIcon}
+                alt=""
+                width={48}
+                height={20}
+                className="h-5 w-auto max-w-[56px] object-contain bg-white rounded-sm"
+                aria-hidden
+              />
               <span>Paiement sécurisé via Wave ou Orange Money</span>
             </p>
           ) : null}
