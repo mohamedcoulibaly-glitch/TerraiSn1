@@ -251,7 +251,7 @@ export default function BackofficeLoginPage() {
           theme="backoffice"
           label="Téléphone ou email"
           type={looksEmail ? "email" : "text"}
-          inputMode={looksEmail ? "email" : "tel"}
+          inputMode={looksEmail ? "email" : "text"}
           autoComplete="username"
           value={identifier}
           onChange={onIdentifierChange}

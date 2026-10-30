@@ -241,11 +241,10 @@ export default function LoginPage() {
 
   const loginIsEmail = loginForm.identifier.includes("@");
   const loginHasLetter = /[a-zA-Z]/.test(loginForm.identifier);
+  // Champ dual téléphone/email : jamais inputMode="tel" (clavier chiffres seulement).
   const loginInputMode: HTMLAttributes<HTMLInputElement>["inputMode"] = loginIsEmail
     ? "email"
-    : loginHasLetter
-      ? "text"
-      : "tel";
+    : "text";
   const phoneValid = !!registerForm.telephone && isValidSenegalMobile(registerForm.telephone);
 
   return (

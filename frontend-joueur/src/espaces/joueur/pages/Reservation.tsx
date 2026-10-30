@@ -1,5 +1,5 @@
 import { calculerMontantAvance } from "@/lib/avance";
-import { ArrowLeft, ShieldCheck, Handshake, Phone, CreditCard, Loader2 } from "lucide-react";
+import { ArrowLeft, ShieldCheck, Handshake, Phone, Loader2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { reservationsApi } from "@/lib/api";
@@ -50,7 +50,7 @@ const Payment = () => {
   const setName = (v: string) => setPayDraft((d) => ({ ...d, name: v }));
   const setPhone = (v: string) => setPayDraft((d) => ({ ...d, phone: v }));
   const { busy: processing, run: runPay } = useSubmitGuard({ debounceMs: 800 });
-  const [canal, setCanal] = useState<"wave" | "orange_money" | "">("");
+  const [processingCanal, setProcessingCanal] = useState<"wave" | "orange_money" | "">("");
   const deposit = calculerMontantAvance(montant, terrain?.pourcentage_avance);
   const reste = Math.max(0, montant - deposit);
   // Politique sans avance OU avance inexigible (0 FCFA) : confirmation directe,
@@ -83,7 +83,7 @@ const Payment = () => {
       })()
     : "";
 
-  const handlePay = async () => {
+  const handlePay = async (canal: "wave" | "orange_money" = "wave") => {
     if (enLigneIndispo) {
       toast.error(
         terrain?.booking_message ||
@@ -96,10 +96,7 @@ const Payment = () => {
       toast.error(phoneErr || "Veuillez saisir votre nom et numéro de téléphone");
       return;
     }
-    if (!sansAvance && !canal) {
-      toast.error("Choisis Wave ou Orange Money pour payer");
-      return;
-    }
+    setProcessingCanal(sansAvance ? "" : canal);
     await runPay(async () => {
     try {
       const reservation = await reservationsApi.create({
@@ -154,6 +151,8 @@ const Payment = () => {
               ? ` [${error.code}]`
               : "";
       toast.error(`${error.message || "Erreur lors du paiement"}${codeHint}`);
+    } finally {
+      setProcessingCanal("");
     }
     });
   };
@@ -325,100 +324,80 @@ const Payment = () => {
             </div>
           </div>
         </div>
-
-        {!sansAvance && !enLigneIndispo ? (
-          <div className="space-y-2">
-            <p className="text-[12px] text-[var(--color-text-muted)]">Moyen de paiement</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setCanal("wave")}
-                className={`min-h-[64px] rounded-[var(--radius-md)] border px-3 py-2 text-sm font-semibold inline-flex flex-col items-center justify-center gap-1.5 ${
-                  canal === "wave"
-                    ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
-                    : "border-[var(--color-border)] bg-[var(--surface)] text-[var(--color-text-primary)]"
-                }`}
-              >
-                <img
-                  src={waveIcon}
-                  alt=""
-                  width={120}
-                  height={40}
-                  className="h-9 w-auto max-w-[120px] object-contain"
-                  aria-hidden
-                />
-                <span>Wave</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setCanal("orange_money")}
-                className={`min-h-[64px] rounded-[var(--radius-md)] border px-3 py-2 text-sm font-semibold inline-flex flex-col items-center justify-center gap-1.5 ${
-                  canal === "orange_money"
-                    ? "border-[var(--color-primary)] bg-[var(--color-primary-glow)] text-[var(--color-primary)]"
-                    : "border-[var(--color-border)] bg-[var(--surface)] text-[var(--color-text-primary)]"
-                }`}
-              >
-                <img
-                  src={omIcon}
-                  alt=""
-                  width={120}
-                  height={40}
-                  className="h-9 w-auto max-w-[120px] object-contain bg-white rounded-sm"
-                  aria-hidden
-                />
-                <span>Orange Money</span>
-              </button>
-            </div>
-          </div>
-        ) : null}
       </div>
 
       <div className="fixed bottom-16 md:bottom-0 inset-x-0 z-30 border-t border-[var(--color-border)] bg-[var(--surface)] px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
         <div className="max-w-lg mx-auto space-y-2">
           <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] justify-center">
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--color-primary)]" />
-            {sansAvance ? "Confirmation directe" : "Paiement sécurisé"}
+            {sansAvance ? "Confirmation directe" : `Avance ${deposit.toLocaleString()} FCFA`}
           </div>
-          <button
-            type="button"
-            onClick={handlePay}
-            disabled={processing || enLigneIndispo || (!sansAvance && !canal)}
-            className="w-full h-[52px] rounded-[14px] bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
-            style={{ fontFamily: "var(--font-display)" }}
-          >
-            {processing ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin text-white" />
-                {sansAvance ? "Confirmation en cours..." : "Redirection en cours..."}
-              </>
-            ) : sansAvance ? (
-              "Confirmer ma réservation"
-            ) : (
-              <>
-                <CreditCard className="w-5 h-5" />
-                {`Payer ${deposit.toLocaleString()} FCFA`}
-              </>
-            )}
-          </button>
+          {sansAvance ? (
+            <button
+              type="button"
+              onClick={() => void handlePay("wave")}
+              disabled={processing || enLigneIndispo}
+              className="w-full h-[52px] rounded-[14px] bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
+              style={{ fontFamily: "var(--font-display)" }}
+            >
+              {processing ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin text-white" />
+                  Confirmation en cours...
+                </>
+              ) : (
+                "Confirmer ma réservation"
+              )}
+            </button>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => void handlePay("wave")}
+                disabled={processing || enLigneIndispo}
+                className="min-h-[64px] rounded-[14px] border border-[var(--color-border)] bg-[var(--surface)] text-sm font-semibold inline-flex flex-col items-center justify-center gap-1.5 disabled:opacity-50 hover:border-[var(--color-primary)]"
+                style={{ fontFamily: "var(--font-display)" }}
+              >
+                {processing && processingCanal === "wave" ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-[var(--color-primary)]" />
+                ) : (
+                  <img
+                    src={waveIcon}
+                    alt=""
+                    width={120}
+                    height={40}
+                    className="h-9 w-auto max-w-[120px] object-contain"
+                    aria-hidden
+                  />
+                )}
+                <span>Wave</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handlePay("orange_money")}
+                disabled={processing || enLigneIndispo}
+                className="min-h-[64px] rounded-[14px] border border-[var(--color-border)] bg-[var(--surface)] text-sm font-semibold inline-flex flex-col items-center justify-center gap-1.5 disabled:opacity-50 hover:border-[var(--color-primary)]"
+                style={{ fontFamily: "var(--font-display)" }}
+              >
+                {processing && processingCanal === "orange_money" ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-[var(--color-primary)]" />
+                ) : (
+                  <img
+                    src={omIcon}
+                    alt=""
+                    width={120}
+                    height={40}
+                    className="h-9 w-auto max-w-[120px] object-contain bg-white rounded-sm"
+                    aria-hidden
+                  />
+                )}
+                <span>Orange Money</span>
+              </button>
+            </div>
+          )}
           {!sansAvance ? (
-            <p className="flex items-center justify-center gap-2 text-[12px] text-[var(--color-text-muted)] text-center pointer-events-none select-none">
-              <img
-                src={waveIcon}
-                alt=""
-                width={48}
-                height={20}
-                className="h-5 w-auto max-w-[56px] object-contain"
-                aria-hidden
-              />
-              <img
-                src={omIcon}
-                alt=""
-                width={48}
-                height={20}
-                className="h-5 w-auto max-w-[56px] object-contain bg-white rounded-sm"
-                aria-hidden
-              />
-              <span>Paiement sécurisé via Wave ou Orange Money</span>
+            <p className="text-[12px] text-[var(--color-text-muted)] text-center">
+              Redirection vers le portefeuille choisi
             </p>
           ) : null}
         </div>
