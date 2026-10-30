@@ -132,8 +132,12 @@ export default function ProprietaireChrome() {
 
       <div className="flex-1 flex flex-col min-w-0 pb-[calc(56px+env(safe-area-inset-bottom))] md:pb-0">
         <header
-          className="sticky top-0 z-30 h-14 px-4 flex items-center justify-between gap-3"
-          style={{ background: "var(--p-surface)", borderBottom: "1px solid var(--p-border)" }}
+          className="sticky top-0 z-30 px-4 flex items-center justify-between gap-3 pt-[env(safe-area-inset-top)]"
+          style={{
+            height: "calc(56px + env(safe-area-inset-top))",
+            background: "var(--p-surface)",
+            borderBottom: "1px solid var(--p-border)",
+          }}
         >
           <div className="min-w-0">
             <p className="font-bold text-[16px] truncate leading-tight" style={{ color: "var(--p-text)" }}>

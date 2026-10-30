@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { Download } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { useTerrainEvents } from "@/hooks/useTerrainEvents";
@@ -12,6 +13,7 @@ import FinancesView, {
 } from "@/espaces/backoffice/components/FinancesView";
 import CommissionDueCard from "@/espaces/backoffice/components/CommissionDueCard";
 import { featureEnabled } from "@/lib/terrainFeatures";
+import { exportFinancesPdf } from "@/lib/exportFinancesPdf";
 
 type Portefeuille = {
   payout_mode?: "auto" | "retrait";
@@ -132,11 +134,52 @@ export default function FinancesPage() {
     };
   }, []);
 
+  const periodeLabel = PERIODES_FINANCES.find((p) => p.id === periode)?.label || periode;
+
+  const exporterPdf = () => {
+    if (!data) {
+      toast.message("Aucune donnée à exporter");
+      return;
+    }
+    try {
+      exportFinancesPdf({
+        titre: "Bilan financier",
+        roleLabel: "Espace gérant",
+        terrainLabel: data.historique?.[0]?.terrain_nom || "Terrain actif",
+        periodeLabel,
+        from: data.from,
+        to: data.to,
+        total_encaisse: data.total_encaisse,
+        avances_recues: data.avances_recues,
+        matchs_joues: data.matchs_joues,
+        a_venir: data.a_venir,
+        historique: data.historique || [],
+        par_terrain: data.par_terrain,
+        filename: `bilan-gerant-${periode}-${new Date().toISOString().slice(0, 10)}.pdf`,
+      });
+      toast.success("PDF téléchargé");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export PDF impossible");
+    }
+  };
+
   return (
     <div className="space-y-5">
-      <h1 className="text-lg font-semibold leading-tight" style={{ fontFamily: "var(--font-display)", color: "var(--g-text)" }}>
-        Finances
-      </h1>
+      <div className="flex items-start justify-between gap-3">
+        <h1 className="text-lg font-semibold leading-tight" style={{ fontFamily: "var(--font-display)", color: "var(--g-text)" }}>
+          Finances
+        </h1>
+        <button
+          type="button"
+          onClick={exporterPdf}
+          disabled={!data}
+          className="inline-flex items-center gap-1.5 min-h-[44px] px-3.5 rounded-xl text-sm font-semibold text-white disabled:opacity-50"
+          style={{ background: "var(--g-primary)" }}
+        >
+          <Download className="w-4 h-4" />
+          PDF
+        </button>
+      </div>
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
         {PERIODES_FINANCES.map((p) => {
           const actif = periode === p.id;
@@ -177,34 +220,11 @@ export default function FinancesPage() {
         </section>
       ) : null}
 
-      {portefeuille?.payout_mode === "retrait" ? (
-        <section className="rounded-2xl p-4 space-y-2" style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>Solde à retirer</h2>
-              <p className="text-lg font-bold" style={{ color: "var(--g-primary)", fontFamily: "var(--font-display)" }}>
-                {fcfa(portefeuille.solde_net_apres_dette || portefeuille.solde_disponible)}
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={!portefeuille.bouton_retirer || retraitPending}
-              onClick={() => void demanderRetrait()}
-              className="min-h-[44px] px-4 rounded-xl text-sm font-semibold text-white disabled:opacity-50"
-              style={{ background: "var(--g-primary)" }}
-            >
-              {retraitPending ? "Demande en cours…" : portefeuille.solde_demande_retrait ? "Retrait en cours" : "Retirer"}
-            </button>
-          </div>
-          <p className="text-[12px]" style={{ color: "var(--g-muted)" }}>
-            {portefeuille.solde_demande_retrait
-              ? "Une demande est déjà en cours de traitement."
-              : portefeuille.bouton_retirer
-                ? "Le montant est envoyé à l’équipe pour validation et versement."
-                : (portefeuille.message_lisible
-                  || "Le retrait devient disponible après validation du canal Wave ou Orange Money et des revenus.")}
-          </p>
-        </section>
+      {portefeuille?.payout_mode === "retrait" && !portefeuille.bouton_retirer ? (
+        <p className="text-[12px]" style={{ color: "var(--g-muted)" }}>
+          {portefeuille.message_lisible
+            || "Le retrait devient disponible après validation du canal Wave ou Orange Money et des revenus."}
+        </p>
       ) : null}
 
       {loading ? (
@@ -214,7 +234,22 @@ export default function FinancesPage() {
           {error}
         </p>
       ) : data ? (
-        <FinancesView data={data} />
+        <FinancesView
+          data={{
+            ...data,
+            // Affichage concordant : solde = net touché − avances (API).
+            // Le montant réellement retirable Wave reste géré par demanderRetrait().
+            solde_a_retirer: Number(
+              data.solde_a_retirer
+                ?? Math.max(
+                  0,
+                  Number(data.montant_touche || 0) - Number(data.total_avances || data.avances_recues || 0),
+                ),
+            ),
+          }}
+          peutRetirer={Boolean(portefeuille?.payout_mode === "retrait" && portefeuille?.bouton_retirer && !retraitPending)}
+          onRetrait={() => void demanderRetrait()}
+        />
       ) : null}
     </div>
   );

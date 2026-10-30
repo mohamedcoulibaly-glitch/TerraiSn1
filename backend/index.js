@@ -469,6 +469,8 @@ const allowedOrigins = expandLoopbackOrigins((
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
+  // Autorise le chargement des assets /uploads depuis le front (dev cross-origin).
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 app.use(cors({
   origin(origin, callback) {
@@ -568,7 +570,11 @@ app.get(['/health', '/api/health'], async (_req, res) => {
 });
 
 fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
-app.use('/uploads', express.static(UPLOAD_ROOT));
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  next();
+}, express.static(UPLOAD_ROOT));
 
 /** En-têtes de cache pour soutenir la stratégie PWA / Service Worker */
 app.use((req, res, next) => {
@@ -2901,6 +2907,45 @@ app.put('/api/reservations/:id/annuler', optionalAuth, async (req, res) => {
     }
     const result = await executerAnnulation(db, reservation);
     res.json({ message: 'Réservation annulée', rembourse: result.rembourse, politique: result.politique });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
+/** Libère un verrou paiement (abandon saisie / Annuler) — uniquement en_attente*. */
+app.delete('/api/reservations/:id(\\d+)/verrou', optionalAuth, async (req, res) => {
+  try {
+    const db = await getDb();
+    const id = Number(req.params.id);
+    let reservation;
+    if (req.user) {
+      reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ? AND joueur_id = ?', [id, req.user.id]);
+    } else {
+      reservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [id]);
+    }
+    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
+    if (!['en_attente', 'en_attente_paiement'].includes(String(reservation.statut || ''))) {
+      return res.status(400).json({ error: 'Aucun verrou actif à libérer', code: 'VERROU_ABSENT' });
+    }
+    runSql(
+      db,
+      `UPDATE reservations SET statut = 'expire', verrou_expire_at = NULL
+       WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')`,
+      [id],
+    );
+    libererCreneauxReservation(db, reservation, ['en_attente_paiement', 'reserve']);
+    try {
+      require('./services/sseManager').emettrePourTerrain(reservation.terrain_id, 'creneau_libere', {
+        reservation_id: reservation.id,
+        creneau_id: reservation.creneau_id || null,
+        statut: 'libre',
+        raison: 'verrou_annule',
+      });
+    } catch {
+      // best-effort
+    }
+    res.json({ message: 'Verrou libéré', id: reservation.id, statut: 'expire' });
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });

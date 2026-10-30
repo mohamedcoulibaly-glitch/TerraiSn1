@@ -1,7 +1,7 @@
 import { calculerMontantAvance } from "@/lib/avance";
-import { ArrowLeft, ShieldCheck, Handshake, Phone, Loader2 } from "lucide-react";
+import { ArrowLeft, ShieldCheck, Handshake, Phone, CreditCard, Loader2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { reservationsApi } from "@/lib/api";
 import { hapticSuccess, hapticError } from "@/lib/haptics";
 import { registerBackgroundSync } from "@/lib/pwaRegister";
@@ -15,13 +15,12 @@ import { clearDraft, usePersistedState } from "@/hooks/usePersistedState";
 import { useSubmitGuard } from "@/hooks/useSubmitGuard";
 import { useSwipeBack } from "@/hooks/useSwipeBack";
 
-import omIcon from "@/assets/images.png";
-import waveIcon from "@/assets/wave-banque-en-ligne-au-senegal-pour-paiement-transfert-argents.jpg";
-
 type PaymentDraft = {
   name: string;
   phone: string;
 };
+
+const PENDING_PAYMENT_KEY = "terrainsn_pending_payment_id";
 
 const Payment = () => {
   const navigate = useNavigate();
@@ -35,6 +34,7 @@ const Payment = () => {
   const date = searchParams.get("date") || new Date().toISOString().split("T")[0];
   const fieldFormat = searchParams.get("format") === "moitie" ? "moitie" : "entier";
   const dureeHours = Number.parseFloat(duree) || 2;
+  const redirectingRef = useRef(false);
 
   const { terrain, isInitialLoading, isRefetching } = useTerrainFullDetails(id, {
     date,
@@ -50,7 +50,6 @@ const Payment = () => {
   const setName = (v: string) => setPayDraft((d) => ({ ...d, name: v }));
   const setPhone = (v: string) => setPayDraft((d) => ({ ...d, phone: v }));
   const { busy: processing, run: runPay } = useSubmitGuard({ debounceMs: 800 });
-  const [processingCanal, setProcessingCanal] = useState<"wave" | "orange_money" | "">("");
   const deposit = calculerMontantAvance(montant, terrain?.pourcentage_avance);
   const reste = Math.max(0, montant - deposit);
   // Politique sans avance OU avance inexigible (0 FCFA) : confirmation directe,
@@ -76,6 +75,37 @@ const Payment = () => {
     }));
   }, [isAuthenticated, user, setPayDraft]);
 
+  /** Retour navigateur / abandon : libère le créneau (verrou en_attente). */
+  useEffect(() => {
+    const abandonPending = async () => {
+      if (redirectingRef.current) return;
+      const pendingId = sessionStorage.getItem(PENDING_PAYMENT_KEY);
+      if (!pendingId) return;
+      sessionStorage.removeItem(PENDING_PAYMENT_KEY);
+      try {
+        await reservationsApi.libererVerrou(pendingId);
+        toast.message("Paiement non terminé — créneau libéré");
+      } catch {
+        try {
+          const resa = (await reservationsApi.get(pendingId)) as { statut?: string };
+          if (resa?.statut === "en_attente" || resa?.statut === "en_attente_paiement") {
+            await reservationsApi.annuler(pendingId);
+            toast.message("Paiement non terminé — créneau libéré");
+          }
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void abandonPending();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    void abandonPending();
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   const endTime = slot
     ? (() => {
         const h = parseInt(slot.split(":")[0]) + parseInt(duree);
@@ -83,7 +113,7 @@ const Payment = () => {
       })()
     : "";
 
-  const handlePay = async (canal: "wave" | "orange_money" = "wave") => {
+  const handlePay = async () => {
     if (enLigneIndispo) {
       toast.error(
         terrain?.booking_message ||
@@ -96,9 +126,9 @@ const Payment = () => {
       toast.error(phoneErr || "Veuillez saisir votre nom et numéro de téléphone");
       return;
     }
-    setProcessingCanal(sansAvance ? "" : canal);
     await runPay(async () => {
     try {
+      // Canal silencieux : le choix Wave/OM se fait sur PayTech, pas avant.
       const reservation = await reservationsApi.create({
         terrain_id: parseInt(id!),
         date,
@@ -109,7 +139,7 @@ const Payment = () => {
         format_terrain: fieldFormat,
         ...(sansAvance
           ? { sans_avance: true }
-          : { canal_paiement: canal, methode_paiement: canal }),
+          : { canal_paiement: "wave", methode_paiement: "wave" }),
       });
 
       localStorage.setItem("terrainsn_last_reservation_id", String(reservation.id));
@@ -117,6 +147,7 @@ const Payment = () => {
       clearDraft(`joueur:fiche:${user?.id || "guest"}:${id || "x"}`);
 
       if (sansAvance || reservation.sans_avance || reservation.mode_paiement === "sans_avance") {
+        sessionStorage.removeItem(PENDING_PAYMENT_KEY);
         hapticSuccess();
         navigate(`/reservation/succes?id=${reservation.id}&sans_avance=1`);
         return;
@@ -126,6 +157,8 @@ const Payment = () => {
       if (!/^https:\/\//i.test(payUrl)) {
         throw new Error("Lien de paiement indisponible. La réservation n'est pas payée.");
       }
+      sessionStorage.setItem(PENDING_PAYMENT_KEY, String(reservation.id));
+      redirectingRef.current = true;
       hapticSuccess();
       window.location.assign(payUrl);
     } catch (err: unknown) {
@@ -145,14 +178,10 @@ const Payment = () => {
       const codeHint =
         error.code === "PAYTECH_CHECKOUT_FAILED"
           ? " (paiement en ligne indisponible — réessaie)"
-          : error.code === "CANAL_PAIEMENT_REQUIS"
-            ? " — choisis Wave ou Orange Money"
-            : error.code
-              ? ` [${error.code}]`
-              : "";
+          : error.code
+            ? ` [${error.code}]`
+            : "";
       toast.error(`${error.message || "Erreur lors du paiement"}${codeHint}`);
-    } finally {
-      setProcessingCanal("");
     }
     });
   };
@@ -330,76 +359,29 @@ const Payment = () => {
         <div className="max-w-lg mx-auto space-y-2">
           <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] justify-center">
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--color-primary)]" />
-            {sansAvance ? "Confirmation directe" : `Avance ${deposit.toLocaleString()} FCFA`}
+            {sansAvance ? "Confirmation directe" : "Paiement sécurisé via Wave ou Orange Money"}
           </div>
-          {sansAvance ? (
-            <button
-              type="button"
-              onClick={() => void handlePay("wave")}
-              disabled={processing || enLigneIndispo}
-              className="w-full h-[52px] rounded-[14px] bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
-              style={{ fontFamily: "var(--font-display)" }}
-            >
-              {processing ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin text-white" />
-                  Confirmation en cours...
-                </>
-              ) : (
-                "Confirmer ma réservation"
-              )}
-            </button>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => void handlePay("wave")}
-                disabled={processing || enLigneIndispo}
-                className="min-h-[64px] rounded-[14px] border border-[var(--color-border)] bg-[var(--surface)] text-sm font-semibold inline-flex flex-col items-center justify-center gap-1.5 disabled:opacity-50 hover:border-[var(--color-primary)]"
-                style={{ fontFamily: "var(--font-display)" }}
-              >
-                {processing && processingCanal === "wave" ? (
-                  <Loader2 className="w-5 h-5 animate-spin text-[var(--color-primary)]" />
-                ) : (
-                  <img
-                    src={waveIcon}
-                    alt=""
-                    width={120}
-                    height={40}
-                    className="h-9 w-auto max-w-[120px] object-contain"
-                    aria-hidden
-                  />
-                )}
-                <span>Wave</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void handlePay("orange_money")}
-                disabled={processing || enLigneIndispo}
-                className="min-h-[64px] rounded-[14px] border border-[var(--color-border)] bg-[var(--surface)] text-sm font-semibold inline-flex flex-col items-center justify-center gap-1.5 disabled:opacity-50 hover:border-[var(--color-primary)]"
-                style={{ fontFamily: "var(--font-display)" }}
-              >
-                {processing && processingCanal === "orange_money" ? (
-                  <Loader2 className="w-5 h-5 animate-spin text-[var(--color-primary)]" />
-                ) : (
-                  <img
-                    src={omIcon}
-                    alt=""
-                    width={120}
-                    height={40}
-                    className="h-9 w-auto max-w-[120px] object-contain bg-white rounded-sm"
-                    aria-hidden
-                  />
-                )}
-                <span>Orange Money</span>
-              </button>
-            </div>
-          )}
-          {!sansAvance ? (
-            <p className="text-[12px] text-[var(--color-text-muted)] text-center">
-              Redirection vers le portefeuille choisi
-            </p>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => void handlePay()}
+            disabled={processing || enLigneIndispo}
+            className="w-full h-[52px] rounded-[14px] bg-[var(--color-primary)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            {processing ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin text-white" />
+                {sansAvance ? "Confirmation en cours..." : "Redirection en cours..."}
+              </>
+            ) : sansAvance ? (
+              "Confirmer ma réservation"
+            ) : (
+              <>
+                <CreditCard className="w-5 h-5" />
+                {`Payer ${deposit.toLocaleString()} FCFA`}
+              </>
+            )}
+          </button>
         </div>
       </div>
     </div>

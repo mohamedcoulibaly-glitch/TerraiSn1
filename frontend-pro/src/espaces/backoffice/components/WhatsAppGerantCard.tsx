@@ -61,6 +61,12 @@ function openWhatsAppApp() {
   }, 600);
 }
 
+type WaConnectPayload = WaStatus & {
+  success?: boolean;
+  pairingCodeRaw?: string;
+  dataUrl?: string | null;
+};
+
 export default function WhatsAppGerantCard() {
   const [status, setStatus] = useState<WaStatus | null>(null);
   const [phoneInput, setPhoneInput] = useState("");
@@ -69,6 +75,8 @@ export default function WhatsAppGerantCard() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [qrModal, setQrModal] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const wasConnected = useRef(false);
 
   const connected = Boolean(status?.connected || status?.status === "CONNECTED");
@@ -136,6 +144,10 @@ export default function WhatsAppGerantCard() {
   useEffect(() => {
     if (connected && !wasConnected.current) {
       toast.success("WhatsApp connecté et actif");
+      setQrModal(false);
+      setQrDataUrl(null);
+      setPairingCode(null);
+      setExpiresAt(null);
     }
     wasConnected.current = connected;
   }, [connected]);
@@ -151,7 +163,7 @@ export default function WhatsAppGerantCard() {
       const data = (await gerantApi.whatsappRequestPairing({
         telephone: normalized,
         force,
-      })) as WaStatus & { success?: boolean; pairingCodeRaw?: string };
+      })) as WaConnectPayload;
       setStatus((prev) => ({ ...prev, ...data }));
       if (data.mock) {
         setPairingCode(null);
@@ -161,17 +173,72 @@ export default function WhatsAppGerantCard() {
       if (data.connected || data.status === "CONNECTED") {
         setPairingCode(null);
         setExpiresAt(null);
+        setQrModal(false);
         toast.success("WhatsApp déjà connecté");
         return;
       }
+      if (data.dataUrl) {
+        setQrDataUrl(data.dataUrl);
+        setQrModal(true);
+        setExpiresAt(data.pairingExpiresAt ? Number(data.pairingExpiresAt) : Date.now() + 110_000);
+      }
       const code = data.pairingCodeDisplay || data.pairingCode;
-      if (!code) {
-        toast.error(data.error || "Impossible de générer le code. Réessayez.");
+      if (code) {
+        setPairingCode(formatPairingCode(code));
+        setExpiresAt(data.pairingExpiresAt ? Number(data.pairingExpiresAt) : Date.now() + 110_000);
+        toast.success("Code généré — valable environ 2 minutes");
+      } else if (data.dataUrl) {
+        toast.success("QR généré — scanne-le avec WhatsApp");
+      } else {
+        toast.error(data.error || "Impossible de générer le QR / code. Réessayez.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : WHATSAPP_INFRA_MESSAGE);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requestQr = async (force = true) => {
+    const normalized = phoneInput.trim() ? normalizeInputPhone(phoneInput) : undefined;
+    if (normalized && !/^2217\d{8}$/.test(normalized)) {
+      toast.error("Numéro invalide. Exemple : 77 123 45 67");
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = (await gerantApi.whatsappConnect({
+        force,
+        telephone: normalized,
+        mode: "qr",
+      })) as WaConnectPayload;
+      setStatus((prev) => ({ ...prev, ...data }));
+      if (data.mock) {
+        toast.error(WHATSAPP_INFRA_MESSAGE);
         return;
       }
-      setPairingCode(formatPairingCode(code));
+      if (data.connected || data.status === "CONNECTED") {
+        setQrModal(false);
+        toast.success("WhatsApp déjà connecté");
+        return;
+      }
+      if (!data.dataUrl) {
+        // Fallback : endpoint QR dédié
+        const q = (await gerantApi.whatsappQr()) as WaConnectPayload;
+        if (q.dataUrl) {
+          setQrDataUrl(q.dataUrl);
+          setQrModal(true);
+          setExpiresAt(Date.now() + 110_000);
+          toast.success("QR généré — scanne-le avec WhatsApp");
+          return;
+        }
+        toast.error(data.error || q.error || "QR indisponible. Réessaie.");
+        return;
+      }
+      setQrDataUrl(data.dataUrl);
+      setQrModal(true);
       setExpiresAt(data.pairingExpiresAt ? Number(data.pairingExpiresAt) : Date.now() + 110_000);
-      toast.success("Code généré — valable environ 2 minutes");
+      toast.success("QR généré — scanne-le avec WhatsApp");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : WHATSAPP_INFRA_MESSAGE);
     } finally {
@@ -309,9 +376,10 @@ export default function WhatsAppGerantCard() {
 
               <button
                 type="button"
-                onClick={() => requestPairing(true)}
+                onClick={() => void requestPairing(true)}
                 disabled={busy || mock}
-                className="w-full min-h-[56px] px-4 rounded-xl bg-[#25D366] text-white text-base font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
+                className="w-full min-h-[56px] px-4 rounded-xl text-white text-base font-bold inline-flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ background: "var(--g-whatsapp, #25D366)" }}
               >
                 {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <MessageCircle className="w-5 h-5" />}
                 {busy
@@ -319,6 +387,16 @@ export default function WhatsAppGerantCard() {
                   : codeExpired
                     ? "Générer un nouveau code"
                     : "Générer mon Code de Connexion"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void requestQr(true)}
+                disabled={busy || mock}
+                className="w-full min-h-[48px] px-4 rounded-xl text-base font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ border: "1px solid var(--g-border)", color: "var(--g-text)" }}
+              >
+                {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
+                Lier via QR code
               </button>
             </>
           ) : null}
@@ -435,9 +513,60 @@ export default function WhatsAppGerantCard() {
       ) : null}
 
       {status?.error && !mock && !connected ? (
-        <p className="rounded-xl p-3 text-sm" style={{ background: "rgba(220,38,38,0.08)", color: "#dc2626" }}>
+        <p className="rounded-xl p-3 text-sm" style={{ background: "rgba(220,38,38,0.08)", color: "var(--g-danger)" }}>
           {status.error}
         </p>
+      ) : null}
+
+      {qrModal && qrDataUrl ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center px-4">
+          <button
+            type="button"
+            className="absolute inset-0"
+            style={{ background: "rgba(10,22,40,0.5)" }}
+            aria-label="Fermer"
+            onClick={() => setQrModal(false)}
+          />
+          <div
+            className="relative w-full max-w-sm rounded-2xl p-5 text-center space-y-3"
+            style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow-md)" }}
+          >
+            <h3 className="font-semibold" style={{ color: "var(--g-text)" }}>
+              Scanner le QR WhatsApp
+            </h3>
+            <p className="text-[12px]" style={{ color: "var(--g-muted)" }}>
+              Paramètres → Appareils liés → Scanner ce QR
+            </p>
+            {secondsLeft != null ? (
+              <p className="text-sm font-medium" style={{ color: secondsLeft < 30 ? "var(--g-danger)" : "var(--g-muted)" }}>
+                Expire dans {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, "0")}
+              </p>
+            ) : null}
+            <img
+              src={qrDataUrl}
+              alt="QR WhatsApp gérant"
+              className="w-[200px] h-[200px] mx-auto rounded-xl p-4"
+              style={{ background: "var(--g-surface-2)" }}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void requestQr(true)}
+              className="text-[12px] font-semibold disabled:opacity-60"
+              style={{ color: "var(--g-primary)" }}
+            >
+              Rafraîchir le QR
+            </button>
+            <button
+              type="button"
+              onClick={() => setQrModal(false)}
+              className="block mx-auto text-sm font-medium underline underline-offset-2"
+              style={{ color: "var(--g-muted)" }}
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
       ) : null}
     </section>
   );

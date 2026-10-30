@@ -930,15 +930,31 @@ export default function ReservationExpressModal({
     }
   };
 
+  /** Annuler / fermer : purge brouillon + sélection pour éviter un créneau « coincé ». */
+  const handleAbort = () => {
+    if (busy) return;
+    clearDraft(expressDraftKey(terrainId));
+    setSelectedSlot(null);
+    setStep(1);
+    setNoteManuel("");
+    setPayChoice("lien");
+    setDoneMsg(null);
+    setJoueurTel("");
+    setJoueurPrenom("");
+    setJoueurNomFamille("");
+    setJoueurId(null);
+    setJoueurConnu(null);
+    setLookupState("idle");
+    onClose();
+  };
+
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center md:items-center">
       <button
         type="button"
         className="absolute inset-0 bg-black/40"
         aria-label="Fermer"
-        onClick={() => {
-          if (!busy) onClose();
-        }}
+        onClick={handleAbort}
       />
       <div className="relative flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-white pb-[max(1rem,env(safe-area-inset-bottom))] shadow-xl dark:bg-[var(--surface)] md:rounded-2xl">
         <div className="flex justify-center pb-1 pt-3 md:hidden">
@@ -975,9 +991,7 @@ export default function ReservationExpressModal({
           </div>
           <button
             type="button"
-            onClick={() => {
-              if (!busy) onClose();
-            }}
+            onClick={handleAbort}
             className="flex min-h-[44px] min-w-[44px] items-center justify-center"
             aria-label="Fermer"
           >
@@ -1505,24 +1519,46 @@ export default function ReservationExpressModal({
 
             <div className="space-y-2 border-t border-gray-100 px-4 pt-3">
               {step === 1 && (
-                <button
-                  type="button"
-                  disabled={!canGoStep2}
-                  onClick={() => setStep(2)}
-                  className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[var(--g-primary)] text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  Continuer
-                </button>
+                <>
+                  <button
+                    type="button"
+                    disabled={!canGoStep2}
+                    onClick={() => setStep(2)}
+                    className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[var(--g-primary)] text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    Continuer
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={handleAbort}
+                    className="flex min-h-[48px] w-full items-center justify-center rounded-xl border text-sm font-semibold disabled:opacity-50"
+                    style={{ borderColor: "var(--g-border)", color: "var(--g-muted)" }}
+                  >
+                    Annuler
+                  </button>
+                </>
               )}
               {step === 2 && (
-                <button
-                  type="button"
-                  disabled={!canGoStep3}
-                  onClick={() => setStep(3)}
-                  className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[var(--g-primary)] text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  Continuer
-                </button>
+                <>
+                  <button
+                    type="button"
+                    disabled={!canGoStep3}
+                    onClick={() => setStep(3)}
+                    className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[var(--g-primary)] text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    Continuer
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={handleAbort}
+                    className="flex min-h-[48px] w-full items-center justify-center rounded-xl border text-sm font-semibold disabled:opacity-50"
+                    style={{ borderColor: "var(--g-border)", color: "var(--g-muted)" }}
+                  >
+                    Annuler
+                  </button>
+                </>
               )}
               {step === 3 && (
                 <>
@@ -1627,10 +1663,9 @@ export default function ReservationExpressModal({
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => {
-                      if (!busy) onClose();
-                    }}
-                    className="flex min-h-[48px] w-full items-center justify-center rounded-xl border border-gray-300 text-sm font-semibold text-neutral-600 disabled:opacity-50"
+                    onClick={handleAbort}
+                    className="flex min-h-[48px] w-full items-center justify-center rounded-xl border text-sm font-semibold disabled:opacity-50"
+                    style={{ borderColor: "var(--g-border)", color: "var(--g-muted)" }}
                   >
                     Annuler
                   </button>

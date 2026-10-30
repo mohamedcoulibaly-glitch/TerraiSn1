@@ -687,6 +687,11 @@ export const reservationsApi = {
     return await request(`/reservations/${id}/annuler`, { method: 'PUT' });
   },
 
+  /** Libère le verrou paiement (créneau) sans parcours remboursement confirmé. */
+  async libererVerrou(id: number | string) {
+    return await request(`/reservations/${id}/verrou`, { method: 'DELETE' });
+  },
+
   async politiqueAnnulation(id: number | string) {
     return await request(`/reservations/${id}/politique-annulation`);
   },

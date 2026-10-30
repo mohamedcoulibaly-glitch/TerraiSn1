@@ -8,7 +8,8 @@ import {
 describe("offlineStore — accès terrain", () => {
   it("autorise les statuts confirmés", () => {
     expect(reservationHasStadiumAccess("confirme")).toBe(true);
-    expect(reservationHasStadiumAccess("acceptee")).toBe(true);
+    // QR in-app uniquement si statut === confirme (pas acceptee / en_attente)
+    expect(reservationHasStadiumAccess("acceptee")).toBe(false);
     expect(reservationHasStadiumAccess("en_attente")).toBe(false);
     expect(reservationHasStadiumAccess("annule")).toBe(false);
   });

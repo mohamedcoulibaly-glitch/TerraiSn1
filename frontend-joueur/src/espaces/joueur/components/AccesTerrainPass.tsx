@@ -8,6 +8,7 @@ import {
 import { useEffect, useState } from "react";
 import { fetchReservationQrDataUrl } from "@/lib/api";
 import { reservationAfficheQr } from "@/lib/reservationVisibilite";
+import { urlMedia } from "@/lib/urlMedia";
 
 export type AccesTerrainReservation = {
   id: number;
@@ -56,7 +57,10 @@ export default function AccesTerrainPass({ reservation, open, onOpenChange, offl
 
   if (!reservation) return null;
 
-  const qrSrc = reservation.qr_code_data_url || fetchedQr || reservation.qr_code_url || null;
+  const qrSrc =
+    reservation.qr_code_data_url ||
+    fetchedQr ||
+    (reservation.qr_code_url ? urlMedia(reservation.qr_code_url) : null);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -64,7 +68,7 @@ export default function AccesTerrainPass({ reservation, open, onOpenChange, offl
         <DialogHeader>
           <DialogTitle style={{ fontFamily: "var(--font-display)" }}>Accès terrain</DialogTitle>
           <DialogDescription>
-            Montre ce code au gérant à l’entrée
+            Montre ce QR au gérant à l’entrée
             {offline ? " — disponible hors-ligne" : ""}
           </DialogDescription>
         </DialogHeader>
@@ -85,37 +89,25 @@ export default function AccesTerrainPass({ reservation, open, onOpenChange, offl
               </p>
             </div>
 
-            {reservation.code_reservation ? (
-              <div className="rounded-[var(--radius-md)] bg-[var(--color-primary-glow)] py-3 px-3">
-                <p className="text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">
-                  Code réservation
-                </p>
-                <p
-                  className="text-[26px] font-bold text-[var(--color-primary)] mt-0.5 tracking-wide"
-                  style={{ fontFamily: "var(--font-display)" }}
-                >
-                  {reservation.code_reservation}
-                </p>
-              </div>
-            ) : null}
-
-            {qrSrc ? (
+            {qrSrc && !qrFailed ? (
               <div className="inline-block p-3 border-2 border-[var(--color-primary)] rounded-[var(--radius-lg)] bg-[var(--surface)]">
                 <img
                   src={qrSrc}
-                  alt={`QR ${reservation.code_reservation || reservation.id}`}
+                  alt="QR d'accès terrain"
                   className="w-[min(200px,calc(100vw-7rem))] h-[min(200px,calc(100vw-7rem))] object-contain mx-auto"
                   onError={() => setQrFailed(true)}
                 />
               </div>
             ) : (
-              <p className="text-sm text-[var(--color-text-muted)] px-2">
-                {offline
-                  ? "QR non synchronisé. Reconnecte-toi une fois pour le télécharger, le code ci-dessus reste valable."
-                  : qrFailed
-                    ? "Impossible de charger le QR pour le moment. Réessaie dans quelques secondes ; le code ci-dessus reste valable."
-                    : "QR en cours de préparation…"}
-              </p>
+              <div className="rounded-[var(--radius-md)] bg-[var(--color-primary-glow)] py-6 px-3">
+                <p className="text-sm text-[var(--color-text-muted)] px-2">
+                  {offline
+                    ? "QR non synchronisé. Reconnecte-toi une fois pour le télécharger."
+                    : qrFailed
+                      ? "Impossible de charger le QR pour le moment. Réessaie dans quelques secondes."
+                      : "QR en cours de préparation…"}
+                </p>
+              </div>
             )}
           </div>
         )}

@@ -8,6 +8,9 @@ import { toast } from "sonner";
 import SkeletonMesReservations from "@/components/skeletons/SkeletonMesReservations";
 import SilentSyncDot from "@/components/SilentSyncDot";
 import ReservationDatesBlock from "@/components/ReservationDatesBlock";
+import AccesTerrainPass, {
+  type AccesTerrainReservation,
+} from "@/espaces/joueur/components/AccesTerrainPass";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
 import { useMesReservations, joueurKeys } from "@/hooks/useJoueurData";
 import { writeSwrCache } from "@/lib/swrCache";
@@ -147,6 +150,8 @@ const Reservations = () => {
   const [reviewReservation, setReviewReservation] = useState<any>(null);
   const [reviewNote, setReviewNote] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
+  const [passReservation, setPassReservation] = useState<AccesTerrainReservation | null>(null);
+  const [passOpen, setPassOpen] = useState(false);
   const [submittingReview, setSubmittingReview] = useState(false);
 
   const patchReservationsCache = useCallback(
@@ -375,21 +380,20 @@ const Reservations = () => {
                         heureDebut={r.heure_debut}
                         heureFin={r.heure_fin}
                       />
-                      {r.code_reservation && reservationAfficheQr(r.statut) && (
-                        <p className="text-[12px] text-[var(--color-text-muted)]">Code {r.code_reservation}</p>
-                      )}
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-3">
-                          {reservationAfficheQr(r.statut) && r.qr_code_url && (
-                            <a
-                              href={r.qr_code_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                          {reservationAfficheQr(r.statut) ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPassReservation(r);
+                                setPassOpen(true);
+                              }}
                               className="text-[12px] font-medium text-[var(--color-primary)] border border-[var(--color-primary)] rounded-[var(--radius-md)] px-3 min-h-10 inline-flex items-center"
                             >
                               Voir le QR code
-                            </a>
-                          )}
+                            </button>
+                          ) : null}
                           {canCancel && (
                             <button
                               type="button"
@@ -524,6 +528,15 @@ const Reservations = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AccesTerrainPass
+        reservation={passReservation}
+        open={passOpen}
+        onOpenChange={(open) => {
+          setPassOpen(open);
+          if (!open) setPassReservation(null);
+        }}
+      />
     </div>
   );
 };

@@ -1,10 +1,11 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Camera } from "lucide-react";
+import { ArrowLeft, Camera, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { profilApi } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAuth } from "@/hooks/use-auth";
+import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
 
 type Account = {
   prenom?: string;
@@ -51,7 +52,7 @@ function InfoRow({ label, value }: { label: string; value?: string | null }) {
 
 export default function ProfilGerant() {
   const navigate = useNavigate();
-  const { refreshUser } = useAuth();
+  const { refreshUser, logout } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
   const [data, setData] = useState<GerantProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +60,7 @@ export default function ProfilGerant() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -292,9 +294,35 @@ export default function ProfilGerant() {
           <ThemeToggle />
         </section>
 
-        <p className="text-center text-xs pb-2" style={{ color: "var(--g-muted)" }}>
-          Pour te déconnecter, ouvre Paramètres dans le menu gérant.
-        </p>
+        <div className="pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <button
+            type="button"
+            onClick={() => setLogoutOpen(true)}
+            className="w-full min-h-[48px] rounded-xl text-base font-semibold inline-flex items-center justify-center gap-2"
+            style={{
+              border: "1.5px solid var(--g-danger)",
+              color: "var(--g-danger)",
+              background: "transparent",
+            }}
+          >
+            <LogOut className="w-5 h-5" />
+            Se déconnecter
+          </button>
+        </div>
+
+        <ConfirmationModal
+          ouvert={logoutOpen}
+          titre="Tu pars déjà ?"
+          texte="Tu seras déconnecté. Tes données sont sauvegardées."
+          labelAnnuler="Rester"
+          labelConfirmer="Me déconnecter"
+          variante="danger"
+          onAnnuler={() => setLogoutOpen(false)}
+          onConfirmer={() => {
+            setLogoutOpen(false);
+            void logout({ redirect: true });
+          }}
+        />
       </div>
     </div>
   );

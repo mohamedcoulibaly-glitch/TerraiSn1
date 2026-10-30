@@ -168,7 +168,13 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
         boxShadow: "1px 0 0 rgba(255,255,255,0.04)",
       }}
     >
-      <div className="h-14 px-4 flex items-center gap-2 min-w-0" style={{ borderBottom: "1px solid var(--sa-sidebar-border)" }}>
+      <div
+        className="px-4 flex items-center gap-2 min-w-0 pt-[env(safe-area-inset-top)]"
+        style={{
+          height: "calc(56px + env(safe-area-inset-top))",
+          borderBottom: "1px solid var(--sa-sidebar-border)",
+        }}
+      >
         <CircleDot size={18} className="shrink-0" style={{ color: "var(--sa-sidebar-logo)" }} />
         <p className="text-[15px] font-black tracking-tight truncate min-w-0" style={{ fontFamily: "var(--sa-font-display)", color: "var(--sa-sidebar-logo)" }}>
           TerrainSN
@@ -382,7 +388,7 @@ export default function SuperadminLayout() {
         </div>
 
         {mobileOpen ? (
-          <div className="fixed inset-0 z-50 md:hidden">
+          <div className="fixed inset-0 z-50 md:hidden pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <button type="button" className="absolute inset-0" style={{ background: "rgba(10,22,40,0.45)" }} onClick={() => setMobileOpen(false)} aria-label="Fermer" />
             <div className="relative h-full" style={{ width: "var(--sa-sidebar-width)" }}>
               <SidebarNav onNavigate={() => setMobileOpen(false)} />
@@ -391,11 +397,11 @@ export default function SuperadminLayout() {
         ) : null}
 
         {/* Scroll page naturel (body) — pas de nested overflow : trackpad 2 doigts OK */}
-        <div className="sa-shell-main min-h-screen flex flex-col">
+        <div className="sa-shell-main min-h-screen flex flex-col pb-[env(safe-area-inset-bottom)]">
           <header
-            className="sticky top-0 shrink-0 z-30 flex items-center justify-between gap-3 px-5 md:px-8"
+            className="sticky top-0 shrink-0 z-30 flex items-center justify-between gap-3 px-5 md:px-8 pt-[env(safe-area-inset-top)]"
             style={{
-              height: "var(--sa-header-height)",
+              height: "calc(56px + env(safe-area-inset-top))",
               background: "var(--sa-surface)",
               borderBottom: "1px solid var(--sa-border)",
             }}

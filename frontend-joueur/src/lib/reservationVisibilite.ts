@@ -10,9 +10,7 @@ export function reservationVisibleJoueur(reservation: { statut?: string | null }
   return !STATUTS_INVISIBLES.has(String(reservation?.statut || ""));
 }
 
-const STATUTS_QR = new Set(["confirme", "acceptee"]);
-
-/** QR et code d'accès seulement quand la réservation est confirmée (US-17). */
+/** QR in-app uniquement si statut === confirme (pas pendant en_attente). */
 export function reservationAfficheQr(statut?: string | null): boolean {
-  return STATUTS_QR.has(String(statut || ""));
+  return String(statut || "") === "confirme";
 }

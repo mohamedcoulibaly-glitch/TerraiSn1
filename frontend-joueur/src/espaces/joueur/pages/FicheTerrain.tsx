@@ -587,6 +587,17 @@ const FieldDetails = () => {
     navigate(path);
   };
 
+  /** Annule la saisie créneau/brouillon — aucun état résiduel. */
+  const annulerSaisie = () => {
+    clearFicheDraft();
+    setDraft((d) => ({
+      ...d,
+      selectedSlot: null,
+      selectedDuration: d.selectedDuration || 1,
+    }));
+    setSelectedSlot(null);
+  };
+
   const toggleFav = () => {
     if (!terrain?.id) return;
     const next = !fav;
@@ -975,7 +986,12 @@ const FieldDetails = () => {
                         disabled={!available}
                         onClick={() => {
                           hapticSelection();
-                          setSelectedSlot(heure);
+                          // Changement de créneau : pas d'état résiduel du précédent.
+                          if (selectedSlot && selectedSlot !== heure) {
+                            setDraft((d) => ({ ...d, selectedSlot: heure }));
+                          } else {
+                            setSelectedSlot(heure);
+                          }
                           window.setTimeout(() => {
                             document
                               .getElementById("cta-reserver-inline")
@@ -1069,6 +1085,13 @@ const FieldDetails = () => {
                         </a>
                       </div>
                     ) : null}
+                    <button
+                      type="button"
+                      onClick={annulerSaisie}
+                      className="mt-2 w-full min-h-[44px] rounded-xl border border-[var(--color-border)] text-sm font-medium text-[var(--color-text-secondary)]"
+                    >
+                      Annuler la saisie
+                    </button>
                   </div>
                 ) : null}
               </>

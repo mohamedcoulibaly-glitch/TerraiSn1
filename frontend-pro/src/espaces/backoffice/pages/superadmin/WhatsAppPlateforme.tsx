@@ -70,7 +70,10 @@ export default function WhatsAppPlateformePage() {
 
   return (
     <div className="max-w-xl space-y-4">
-      <SaPageHeader titre="WhatsApp plateforme" sousTitre="Numéro dédié aux notifications joueurs et gérants" />
+      <SaPageHeader
+        titre="WhatsApp plateforme"
+        sousTitre="Réservé aux OTP, récupération de mot de passe et accès créés — aucun message terrain / réservation"
+      />
       <section className="rounded-xl p-5 space-y-3" style={{ background: "var(--sa-surface)", borderTop: "3px solid #25D366", boxShadow: "var(--sa-shadow)" }}>
         <div className="flex items-center gap-2">
           <MessageCircle size={18} style={{ color: "#25D366" }} />
@@ -101,8 +104,10 @@ export default function WhatsAppPlateformePage() {
       </section>
 
       <section className="rounded-xl p-5 space-y-2" style={{ background: "var(--sa-surface)", boxShadow: "var(--sa-shadow)" }}>
-        <h2 className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Numéro dédié</h2>
-        <p className="text-[12px]" style={{ color: "var(--sa-muted)" }}>Utilisez un numéro WhatsApp dédié à la plateforme, séparé de votre numéro personnel.</p>
+        <h2 className="text-[14px] font-semibold" style={{ color: "var(--sa-text)" }}>Numéro dédié (OTP / accès)</h2>
+        <p className="text-[12px]" style={{ color: "var(--sa-muted)" }}>
+          OTP, mot de passe oublié et accès créés uniquement. Les confirmations de réservation partent du WhatsApp du gérant de garde.
+        </p>
         <p className="text-sm font-medium" style={{ color: "var(--sa-text)" }}>{status?.phone ? `+${status.phone}` : "Aucun"}</p>
         <button type="button" onClick={() => connect(true)} className="text-[12px] font-semibold" style={{ color: "var(--sa-primary)" }}>Changer de numéro</button>
       </section>

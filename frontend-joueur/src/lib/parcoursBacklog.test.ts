@@ -15,7 +15,7 @@ describe("parcours front backlog", () => {
   it("US-17 n'affiche le QR / pass qu'une fois confirmé", () => {
     expect(reservationAfficheQr("en_attente_paiement")).toBe(false);
     expect(reservationAfficheQr("confirme")).toBe(true);
-    expect(reservationAfficheQr("acceptee")).toBe(true);
+    expect(reservationAfficheQr("acceptee")).toBe(false);
     expect(reservationHasStadiumAccess("en_attente")).toBe(false);
     expect(reservationHasStadiumAccess("confirme")).toBe(true);
   });
