@@ -15,6 +15,11 @@ export interface FloatingInputProps {
   disabled?: boolean;
   theme: "joueur" | "backoffice";
   autoComplete?: string;
+  name?: string;
+  autoCapitalize?: HTMLAttributes<HTMLInputElement>["autoCapitalize"];
+  autoCorrect?: string;
+  spellCheck?: boolean;
+  enterKeyHint?: HTMLAttributes<HTMLInputElement>["enterKeyHint"];
   maxLength?: number;
   onFocus?: () => void;
   onBlur?: () => void;
@@ -37,6 +42,11 @@ export default function FloatingInput({
   disabled,
   theme,
   autoComplete,
+  name,
+  autoCapitalize,
+  autoCorrect,
+  spellCheck,
+  enterKeyHint,
   maxLength,
   onFocus,
   onBlur,
@@ -64,9 +74,14 @@ export default function FloatingInput({
         {iconeGauche ? <span className="input-float-prefix">{iconeGauche}</span> : null}
         <input
           id={id}
+          name={name}
           type={type}
           inputMode={inputMode}
           autoComplete={autoComplete}
+          autoCapitalize={autoCapitalize}
+          autoCorrect={autoCorrect}
+          spellCheck={spellCheck}
+          enterKeyHint={enterKeyHint}
           maxLength={maxLength}
           disabled={disabled}
           value={value}

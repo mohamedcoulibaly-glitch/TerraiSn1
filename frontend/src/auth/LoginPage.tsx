@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, type HTMLAttributes } from "react";
+﻿import { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AlertCircle, Check, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
@@ -219,10 +219,8 @@ export default function LoginPage() {
 
   const loginIsEmail = loginForm.identifier.includes("@");
   const loginHasLetter = /[a-zA-Z]/.test(loginForm.identifier);
-  // Champ dual téléphone/email : jamais inputMode="tel" (clavier chiffres seulement).
-  const loginInputMode: HTMLAttributes<HTMLInputElement>["inputMode"] = loginIsEmail
-    ? "email"
-    : "text";
+  const loginLooksPhone =
+    !!loginForm.identifier.trim() && !loginIsEmail && !loginHasLetter;
   const phoneValid = !!registerForm.telephone && isValidSenegalMobile(registerForm.telephone);
   const passwordsMatch =
     !!registerForm.confirm && registerForm.password === registerForm.confirm;
@@ -332,27 +330,36 @@ export default function LoginPage() {
                 <form onSubmit={handleLogin} className="login-form" noValidate>
                   <FloatingInput
                     id="login-id"
+                    name="username"
                     theme="joueur"
-                    label="Téléphone ou email"
-                    type={loginIsEmail ? "email" : "text"}
-                    inputMode={loginInputMode}
+                    label="Email ou numéro"
+                    type="text"
+                    inputMode="text"
                     autoComplete="username"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    enterKeyHint="next"
                     value={loginForm.identifier}
                     onChange={onLoginIdentifierChange}
                     erreur={errors.identifier}
                     iconeGauche={
-                      loginIsEmail || loginHasLetter ? undefined : (
-                        <span className="text-sm">+221</span>
-                      )
+                      loginLooksPhone ? <span className="text-sm">+221</span> : undefined
                     }
                   />
 
                   <FloatingInput
                     id="login-pass"
+                    name="password"
                     theme="joueur"
                     label="Ton mot de passe"
                     type={showPassword ? "text" : "password"}
+                    inputMode="text"
                     autoComplete="current-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    enterKeyHint="go"
                     value={loginForm.password}
                     onChange={(v) => {
                       setLoginForm((f) => ({ ...f, password: v }));

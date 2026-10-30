@@ -15,9 +15,15 @@ export interface FloatingInputProps {
   disabled?: boolean;
   theme: "joueur" | "backoffice";
   autoComplete?: string;
+  name?: string;
+  autoCapitalize?: HTMLAttributes<HTMLInputElement>["autoCapitalize"];
+  autoCorrect?: string;
+  spellCheck?: boolean;
+  enterKeyHint?: HTMLAttributes<HTMLInputElement>["enterKeyHint"];
   maxLength?: number;
   onFocus?: () => void;
   onBlur?: () => void;
+  aide?: string;
 }
 
 export default function FloatingInput({
@@ -35,9 +41,15 @@ export default function FloatingInput({
   disabled,
   theme,
   autoComplete,
+  name,
+  autoCapitalize,
+  autoCorrect,
+  spellCheck,
+  enterKeyHint,
   maxLength,
   onFocus,
   onBlur,
+  aide,
 }: FloatingInputProps) {
   const [focused, setFocused] = useState(false);
   const errorColor = theme === "joueur" ? "var(--lj-error)" : "var(--lb-error)";
@@ -61,9 +73,14 @@ export default function FloatingInput({
         {iconeGauche ? <span className="input-float-prefix">{iconeGauche}</span> : null}
         <input
           id={id}
+          name={name}
           type={type}
           inputMode={inputMode}
           autoComplete={autoComplete}
+          autoCapitalize={autoCapitalize}
+          autoCorrect={autoCorrect}
+          spellCheck={spellCheck}
+          enterKeyHint={enterKeyHint}
           maxLength={maxLength}
           disabled={disabled}
           value={value}
@@ -94,6 +111,10 @@ export default function FloatingInput({
       {erreur ? (
         <p className="mt-1.5 text-[13px] animate-[login-fade-in_0.2s_ease]" style={{ color: errorColor }}>
           {erreur}
+        </p>
+      ) : aide ? (
+        <p className="mt-1.5 text-[12px]" style={{ color: theme === "joueur" ? "var(--lj-muted)" : "var(--lb-muted)" }}>
+          {aide}
         </p>
       ) : null}
     </div>

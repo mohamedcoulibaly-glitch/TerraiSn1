@@ -264,7 +264,11 @@ export default function MotDePasseOublie({
               label="Nouveau mot de passe"
               theme={theme}
               type={showPassword ? "text" : "password"}
+              inputMode="text"
               autoComplete="new-password"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={password}
               onChange={(v) => {
                 setPassword(v);
@@ -279,7 +283,11 @@ export default function MotDePasseOublie({
               label="Confirmer le mot de passe"
               theme={theme}
               type={showPassword ? "text" : "password"}
+              inputMode="text"
               autoComplete="new-password"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={confirm}
               onChange={(v) => {
                 setConfirm(v);

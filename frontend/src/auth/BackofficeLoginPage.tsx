@@ -239,11 +239,16 @@ export default function BackofficeLoginPage() {
       <form onSubmit={handleSubmit} className="login-form" noValidate>
         <FloatingInput
           id="bo-id"
+          name="username"
           theme="backoffice"
-          label="Téléphone ou email"
-          type={looksEmail ? "email" : "text"}
-          inputMode={looksEmail ? "email" : "text"}
+          label="Email ou numéro"
+          type="text"
+          inputMode="text"
           autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="next"
           value={identifier}
           onChange={onIdentifierChange}
           erreur={fieldErrors.identifier || ((looksEmail || looksPhone) && idLiveError ? idLiveError : undefined)}
@@ -255,10 +260,16 @@ export default function BackofficeLoginPage() {
 
         <FloatingInput
           id="bo-pass"
+          name="password"
           theme="backoffice"
           label="Mot de passe"
           type={showPassword ? "text" : "password"}
+          inputMode="text"
           autoComplete="current-password"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="go"
           value={password}
           onChange={(v) => {
             setPassword(v);

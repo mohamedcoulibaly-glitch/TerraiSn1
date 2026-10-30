@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState, type HTMLAttributes } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AlertCircle, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
@@ -241,10 +241,9 @@ export default function LoginPage() {
 
   const loginIsEmail = loginForm.identifier.includes("@");
   const loginHasLetter = /[a-zA-Z]/.test(loginForm.identifier);
-  // Champ dual téléphone/email : jamais inputMode="tel" (clavier chiffres seulement).
-  const loginInputMode: HTMLAttributes<HTMLInputElement>["inputMode"] = loginIsEmail
-    ? "email"
-    : "text";
+  // Prefixe +221 uniquement si la saisie ressemble clairement à un numéro (évite le clavier tel iOS/Android).
+  const loginLooksPhone =
+    !!loginForm.identifier.trim() && !loginIsEmail && !loginHasLetter;
   const phoneValid = !!registerForm.telephone && isValidSenegalMobile(registerForm.telephone);
 
   return (
@@ -353,27 +352,36 @@ export default function LoginPage() {
               <form onSubmit={handleLogin} className="login-form" noValidate>
                 <FloatingInput
                   id="login-id"
+                  name="username"
                   theme="joueur"
-                  label="Téléphone ou email"
-                  type={loginIsEmail ? "email" : "text"}
-                  inputMode={loginInputMode}
+                  label="Email ou numéro"
+                  type="text"
+                  inputMode="text"
                   autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  enterKeyHint="next"
                   value={loginForm.identifier}
                   onChange={onLoginIdentifierChange}
                   erreur={errors.identifier}
                   iconeGauche={
-                    loginIsEmail || loginHasLetter ? undefined : (
-                      <span className="text-sm">+221</span>
-                    )
+                    loginLooksPhone ? <span className="text-sm">+221</span> : undefined
                   }
                 />
 
                 <FloatingInput
                   id="login-pass"
+                  name="password"
                   theme="joueur"
                   label="Ton mot de passe"
                   type={showPassword ? "text" : "password"}
+                  inputMode="text"
                   autoComplete="current-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  enterKeyHint="go"
                   value={loginForm.password}
                   onChange={(v) => {
                     setLoginForm((f) => ({ ...f, password: v }));
@@ -455,9 +463,14 @@ export default function LoginPage() {
 
                   <FloatingInput
                     id="prenom"
+                    name="given-name"
                     theme="joueur"
                     label="Ton prénom"
+                    type="text"
+                    inputMode="text"
                     autoComplete="given-name"
+                    autoCapitalize="words"
+                    spellCheck={false}
                     value={registerForm.prenom}
                     onChange={(v) => {
                       setRegisterForm((f) => ({ ...f, prenom: v }));
@@ -469,10 +482,15 @@ export default function LoginPage() {
                   <div>
                     <FloatingInput
                       id="reg-pass"
+                      name="new-password"
                       theme="joueur"
                       label="Mot de passe"
                       type={showPassword ? "text" : "password"}
+                      inputMode="text"
                       autoComplete="new-password"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
                       value={registerForm.password}
                       onChange={(v) => {
                         setRegisterForm((f) => ({ ...f, password: v }));
