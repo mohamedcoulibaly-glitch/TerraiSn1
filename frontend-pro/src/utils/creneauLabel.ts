@@ -77,7 +77,7 @@ export function getJourPercu(
  * Formate l'affichage complet d'un créneau pour l'UI
  * Exemples :
  *   "Lundi 18h00 - 19h00"
- *   "Nuit du lundi 01h00 - 02h00 ✦"
+ *   "Nuit du lundi 01h00 - 02h00"
  *   "Vendredi soir 22h00 - 23h00"
  */
 export function formaterCreneau(
@@ -86,15 +86,15 @@ export function formaterCreneau(
   heure_fin: string,
   options: { avecDate?: boolean; avecIcone?: boolean } = {},
 ): string {
-  const { avecDate = false, avecIcone = true } = options;
-  const { labelComplet, estNuitProlongee: nuit } = getJourPercu(date, heure_debut);
-  const icone = nuit && avecIcone ? " ✦" : "";
+  // L'icône nuit (Moon, lucide-react) est rendue par les composants UI, pas dans la string.
+  const { avecDate = false } = options;
+  const { labelComplet } = getJourPercu(date, heure_debut);
   const heures = `${String(heure_debut).substring(0, 5)} → ${String(heure_fin).substring(0, 5)}`;
 
   if (avecDate) {
-    return `${labelComplet} · ${heures}${icone}`;
+    return `${labelComplet} · ${heures}`;
   }
-  return `${heures}${icone}`;
+  return heures;
 }
 
 /**

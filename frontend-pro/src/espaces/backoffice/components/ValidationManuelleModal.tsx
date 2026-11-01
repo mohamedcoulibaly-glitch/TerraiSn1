@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Clock3, Info, Search, X, XCircle } from "lucide-react";
+import { Banknote, Check, CheckCircle2, Clock3, Info, Search, X, XCircle } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { gerantApi } from "@/lib/api";
 
@@ -151,7 +152,7 @@ export default function ValidationManuelleModal({
 
       setResult({
         state: "success",
-        title: "✅ Entrée validée !",
+        title: "Entrée validée !",
         reservation: payload.reservation,
       });
       onSuccess?.(payload.reservation);
@@ -168,7 +169,7 @@ export default function ValidationManuelleModal({
       if (error.code === "QR_SCAN_TOO_EARLY") {
         setResult({
           state: "too_early",
-          title: "⏰ C'est un peu tôt",
+          title: "C'est un peu tôt",
           text: error.scannable_at
             ? `Tu pourras valider à partir de ${new Date(error.scannable_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}.`
             : error.message,
@@ -177,31 +178,31 @@ export default function ValidationManuelleModal({
       } else if (error.code === "QR_SCAN_EXPIRED") {
         setResult({
           state: "expired",
-          title: "⌛ Fenêtre dépassée",
+          title: "Fenêtre dépassée",
           text: `Ce match était prévu à ${formatTime(error.match_time)}. Le délai de validation est dépassé.`,
         });
       } else if (error.code === "QR_SCAN_PRIORITY") {
         setResult({
           state: "invalid",
-          title: "⏳ Un créneau à la fois",
+          title: "Un créneau à la fois",
           text: error.message || "Valide d'abord le créneau prioritaire.",
         });
       } else if (error.code === "QR_ALREADY_SCANNED" || error.status === 403) {
         setResult({
           state: "already_scanned",
-          title: "ℹ️ Ce joueur est déjà entré",
+          title: "Ce joueur est déjà entré",
           text: `QR validé le ${formatDateTime(error.qr_code_scanne_at)}`,
         });
       } else if (error.code === "QR_WRONG_TERRAIN") {
         setResult({
           state: "wrong_terrain",
-          title: "❌ Ce QR code ne correspond pas à ton terrain",
+          title: "Ce QR code ne correspond pas à ton terrain",
           text: error.message,
         });
       } else {
         setResult({
           state: "invalid",
-          title: "❌ Validation refusée",
+          title: "Validation refusée",
           text: error.message || "Impossible de valider cette entrée.",
         });
       }
@@ -221,13 +222,17 @@ export default function ValidationManuelleModal({
       const payload = (await gerantApi.encaisserRestant(resaId, methode)) as {
         reservation?: ScanResult["reservation"];
       };
+      const maj = { ...result.reservation, ...(payload.reservation || {}), montant_restant: 0 };
       setResult((prev) => ({
         ...prev,
-        reservation: { ...prev.reservation, ...(payload.reservation || {}), montant_restant: 0 },
+        reservation: maj,
       }));
-      if (payload.reservation) onSuccess?.(payload.reservation);
-    } catch {
-      // Le solde reste dû — le gérant pourra réessayer depuis la file
+      onSuccess?.(maj);
+      toast.success("Solde encaissé");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Encaissement impossible — le solde reste dû",
+      );
     } finally {
       setBusy(false);
     }
@@ -381,13 +386,14 @@ export default function ValidationManuelleModal({
                 {reste > 0 ? (
                   <div className="space-y-2">
                     <p
-                      className="rounded-xl px-3 py-2.5 text-sm font-semibold"
+                      className="rounded-xl px-3 py-2.5 text-sm font-semibold inline-flex w-full items-center justify-center gap-1.5"
                       style={{
                         background: "color-mix(in srgb, var(--color-warning) 16%, white)",
                         color: "var(--color-warning)",
                       }}
                     >
-                      💵 Reste à encaisser : {formatMoney(reste)} FCFA
+                      <Banknote className="w-4 h-4" />
+                      Reste à encaisser : {formatMoney(reste)} FCFA
                     </p>
                     <div className="grid grid-cols-3 gap-2">
                       {(
@@ -414,8 +420,9 @@ export default function ValidationManuelleModal({
                     </p>
                   </div>
                 ) : (
-                  <p className="text-sm font-medium text-[var(--color-success)]">
-                    ✓ Totalement payé — rien à encaisser
+                  <p className="text-sm font-medium text-[var(--color-success)] inline-flex items-center gap-1.5">
+                    <Check className="w-4 h-4" />
+                    Totalement payé — rien à encaisser
                   </p>
                 )}
               </div>

@@ -1,4 +1,4 @@
-import { Activity, CheckCircle, CreditCard, Wallet } from "lucide-react";
+import { Activity, Banknote, CheckCircle, CreditCard, Wallet } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { KpiMontantWave } from "./KpiMontantWave";
 
@@ -10,6 +10,8 @@ export type LigneEncaissement = {
   heure_debut: string;
   joueur_nom: string;
   montant_avance: number;
+  montant_solde_encaisse?: number;
+  montant_restant?: number;
   source?: string;
   terrain_nom?: string | null;
 };
@@ -102,15 +104,16 @@ export default function FinancesView({
   const totalCommission = Number(data.total_commission || 0);
   const fraisPayout = Number(data.frais_payout_gerant || 0);
   const soldesEncaissees = Number(data.soldes_encaissees || 0);
-  // CA = reste encaissé + avances − commission (− frais)
+  // CA = reste réellement encaissé + avances − commission (− frais)
   const montantTouche = Number(
     data.montant_touche
       ?? Math.max(0, totalAvances + soldesEncaissees - totalCommission - fraisPayout),
   );
-  // Solde à retirer = CA − avances en ligne
+  // Solde Wave/OM retirable (ledger dus) — pas le cash sur place.
   const solde = Number(
     data.solde_a_retirer
-      ?? Math.max(0, montantTouche - totalAvances),
+      ?? data.solde_disponible
+      ?? 0,
   );
   const matchsJoues = Number(data.matchs_joues || 0);
   const deltaNet =
@@ -125,13 +128,12 @@ export default function FinancesView({
   const hasChart = graphique.some((p) => Number(p.montant) > 0);
 
   const souslabelTouche = [
-    `Reste encaissé + avances − commission`,
+    `Avances + reste encaissé − commission`,
     fraisPayout > 0 ? ` − frais` : "",
   ].join("");
 
   return (
     <div className="space-y-3">
-      {/* 3 KPI — chiffre d'affaires, avances, matchs (nombre) */}
       <KpiMontantWave
         label="Chiffre d'affaires"
         montant={montantTouche}
@@ -149,19 +151,27 @@ export default function FinancesView({
           icone={CreditCard}
           couleur="var(--g-info)"
           taille="normal"
-          souslabel="Payé en ligne"
+          souslabel="Ligne + cash guichet"
         />
         <KpiMontantWave
-          label="Matchs joués"
-          montant={matchsJoues}
-          icone={Activity}
-          couleur="var(--g-accent)"
+          label="Reste encaissé"
+          montant={soldesEncaissees}
+          icone={Banknote}
+          couleur="var(--g-warning)"
           taille="normal"
-          format="nombre"
+          souslabel="Sur place (hors Wave)"
         />
       </div>
 
-      {/* Solde = net touché − avances en ligne */}
+      <KpiMontantWave
+        label="Matchs joués"
+        montant={matchsJoues}
+        icone={Activity}
+        couleur="var(--g-accent)"
+        taille="normal"
+        format="nombre"
+      />
+
       {(solde > 0 || peutRetirer) && (
         <button
           type="button"
@@ -179,13 +189,13 @@ export default function FinancesView({
             <Wallet className="w-4 h-4 shrink-0" style={{ color: "var(--g-primary)" }} />
             <div className="min-w-0">
               <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--g-muted)" }}>
-                Solde à retirer
+                Solde Wave / OM à retirer
               </p>
               <p className="text-sm font-bold tabular-nums" style={{ color: "var(--g-text)" }}>
                 {formatFcfa(solde)}
               </p>
               <p className="text-[11px] mt-0.5" style={{ color: "var(--g-muted)" }}>
-                Chiffre d'affaires − avances en ligne
+                Avances en ligne nettes (hors cash sur place)
               </p>
             </div>
           </div>
@@ -287,9 +297,22 @@ export default function FinancesView({
                     {showTerrainName && item.terrain_nom ? ` · ${item.terrain_nom}` : ""}
                   </p>
                 </div>
-                <p className="text-sm font-bold shrink-0" style={{ color: "var(--g-primary)" }}>
-                  {formatFcfa(item.montant_avance)}
-                </p>
+                <div className="text-right shrink-0">
+                  <p className="text-sm font-bold" style={{ color: "var(--g-primary)" }}>
+                    {formatFcfa(
+                      Number(item.montant_avance || 0) + Number(item.montant_solde_encaisse || 0),
+                    )}
+                  </p>
+                  {Number(item.montant_solde_encaisse || 0) > 0 ? (
+                    <p className="text-[10px]" style={{ color: "var(--g-muted)" }}>
+                      dont solde {formatFcfa(item.montant_solde_encaisse)}
+                    </p>
+                  ) : Number(item.montant_restant || 0) > 0 ? (
+                    <p className="text-[10px]" style={{ color: "var(--g-warning)" }}>
+                      reste dû {formatFcfa(item.montant_restant)}
+                    </p>
+                  ) : null}
+                </div>
               </li>
             ))}
           </ul>

@@ -1046,6 +1046,34 @@ export const gerantApi = {
     });
   },
 
+  /**
+   * Clôture opérationnelle : match → checkout → closed (ou checkout → closed).
+   * Après scan, le stage est déjà `match`. Jamais closed direct depuis match.
+   */
+  async cloturerMatch(
+    id: number | string,
+    opts?: {
+      currentStage?: string | null;
+      encaisserRestant?: boolean;
+      waiverEncaissement?: boolean;
+      methode?: 'especes' | 'wave' | 'orange_money';
+    },
+  ) {
+    const stage = String(opts?.currentStage || '').trim();
+    if (stage === 'closed') {
+      return { alreadyClosed: true as const };
+    }
+    if (stage !== 'checkout') {
+      await gerantApi.patchReservationStage(id, { stage: 'checkout' });
+    }
+    return await gerantApi.patchReservationStage(id, {
+      stage: 'closed',
+      encaisserRestant: opts?.encaisserRestant,
+      waiverEncaissement: opts?.waiverEncaissement,
+      methode: opts?.methode,
+    });
+  },
+
   async joueurs(params?: { q?: string; filter?: string }) {
     const sp = new URLSearchParams();
     if (params?.q) sp.set('q', params.q);

@@ -9,12 +9,13 @@ const CONFIRMABLES = new Set(['en_attente', 'en_attente_paiement']);
 const TRANSITIONS = {
   en_attente_paiement: new Set(['confirme', 'expire', 'annule']),
   en_attente: new Set(['confirme', 'expire', 'annule']),
-  confirme: new Set(['match_joue', 'annule']),
-  acceptee: new Set(['match_joue', 'annule']),
+  confirme: new Set(['match_joue', 'annule', 'no_show']),
+  acceptee: new Set(['match_joue', 'annule', 'no_show']),
   match_joue: new Set(),
   joue: new Set(),
   annule: new Set(),
   expire: new Set(),
+  no_show: new Set(),
 };
 
 function peutConfirmer(statut) {

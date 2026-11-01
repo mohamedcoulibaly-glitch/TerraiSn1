@@ -27,10 +27,26 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { BoutonRetour } from "@/components/BoutonRetour";
 import { useSwipeBack } from "@/hooks/useSwipeBack";
+import PaymentLockGauge from "@/components/PaymentLockGauge";
 
 const statusConfig: Record<string, { label: string; border: string; badge: string }> = {
   en_attente: {
     label: "Paiement en cours",
+    border: "border-l-[var(--color-warning)]",
+    badge: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
+  },
+  en_attente_paiement: {
+    label: "Paiement en cours",
+    border: "border-l-[var(--color-warning)]",
+    badge: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
+  },
+  expire: {
+    label: "Expirée",
+    border: "border-l-[var(--color-text-muted)]",
+    badge: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
+  },
+  no_show: {
+    label: "Absence",
     border: "border-l-[var(--color-warning)]",
     badge: "bg-[color-mix(in_srgb,var(--color-warning)_16%,white)] text-[var(--color-warning)]",
   },
@@ -179,7 +195,7 @@ const Reservations = () => {
     if (!reservationVisibleJoueur(r)) return false;
     const day = reservationDay(r.date);
     const isPastDay = day < today;
-    const isClosed = ["joue", "match_joue", "annule", "annulee", "refusee"].includes(r.statut);
+    const isClosed = ["joue", "match_joue", "annule", "annulee", "refusee", "expire", "no_show"].includes(r.statut);
     if (activeTab === "Acceptées") {
       return !isPastDay && !isClosed;
     }
@@ -380,6 +396,16 @@ const Reservations = () => {
                         heureDebut={r.heure_debut}
                         heureFin={r.heure_fin}
                       />
+                      {["en_attente", "en_attente_paiement"].includes(String(r.statut)) &&
+                        Number(r.verrou_expire_at) > 0 && (
+                          <PaymentLockGauge
+                            expiresAt={Number(r.verrou_expire_at)}
+                            startedAt={r.created_at}
+                          />
+                        )}
+                      {r.code_reservation && reservationAfficheQr(r.statut) && (
+                        <p className="text-[12px] text-[var(--color-text-muted)]">Code {r.code_reservation}</p>
+                      )}
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-3">
                           {reservationAfficheQr(r.statut) ? (
@@ -407,12 +433,9 @@ const Reservations = () => {
                             const isPastReservation = reservationDay(r.date) < startOfToday();
                             const canReview =
                               r.statut === "joue" ||
+                              r.statut === "match_joue" ||
                               (isPastReservation &&
-                                (r.statut === "acceptee" ||
-                                  r.statut === "confirme" ||
-                                  r.statut === "refusee" ||
-                                  r.statut === "annulee" ||
-                                  r.statut === "annule"));
+                                (r.statut === "acceptee" || r.statut === "confirme"));
                             return canReview ? (
                               <button
                                 type="button"
@@ -429,11 +452,17 @@ const Reservations = () => {
                           <span className="text-sm font-semibold text-[var(--color-primary)]">
                             {(r.prix_total || r.montant || 0).toLocaleString()} FCFA
                           </span>
-                          {(r.montant_avance != null || r.acompte != null) && (
+                          {Number(r.montant_avance ?? r.acompte) > 0 && (
                             <p className="text-[11px] text-[var(--color-text-muted)]">
                               Avance {(Number(r.montant_avance ?? r.acompte) || 0).toLocaleString()} FCFA
                             </p>
                           )}
+                          {Number(r.montant_restant ?? r.reste_a_payer) > 0 &&
+                            ["confirme", "acceptee", "match_joue", "joue"].includes(String(r.statut)) && (
+                              <p className="text-[11px] text-[var(--color-warning)]">
+                                Reste {(Number(r.montant_restant ?? r.reste_a_payer) || 0).toLocaleString()} FCFA
+                              </p>
+                            )}
                         </div>
                       </div>
                     </div>

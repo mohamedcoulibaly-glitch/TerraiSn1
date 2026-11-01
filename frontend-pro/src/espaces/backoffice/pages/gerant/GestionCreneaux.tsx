@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ChevronLeft, ChevronRight, User, XCircle, Phone, Calendar } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, User, XCircle, Phone, Calendar, type LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { gerantApi, reservationsApi } from "@/lib/api";
@@ -16,25 +16,29 @@ import { hoursRangeFromHoraires, labelHeureSenegal, formatHour } from "@/lib/sch
 import { localYmd } from "@/lib/localDate";
 import EnAttentePaiementActions from "@/espaces/backoffice/components/EnAttentePaiementActions";
 
-const statusConfig: Record<string, { label: string; className: string }> = {
+const statusConfig: Record<string, { label: string; Icon?: LucideIcon; className: string }> = {
   en_attente: {
     label: "En attente de paiement",
     className: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
   },
   confirme: {
-    label: "Réservé ✓",
+    label: "Réservé",
+    Icon: Check,
     className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   joue: {
-    label: "Terminé ✓",
+    label: "Terminé",
+    Icon: Check,
     className: "bg-[var(--color-primary)] text-white",
   },
   match_joue: {
-    label: "Terminé ✓",
+    label: "Terminé",
+    Icon: Check,
     className: "bg-[var(--color-primary)] text-white",
   },
   acceptee: {
-    label: "Réservé ✓",
+    label: "Réservé",
+    Icon: Check,
     className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   refusee: {
@@ -395,11 +399,15 @@ const ManagerCalendar = () => {
                 <div>
                   <p className="text-[10px] text-[var(--color-text-muted)]">Statut</p>
                   <span
-                    className={`inline-flex text-[10px] font-medium px-2 py-0.5 rounded-full mt-0.5 ${
+                    className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full mt-0.5 ${
                       statusConfig[selectedReservation.statut]?.className || ""
                     }`}
                   >
                     {statusConfig[selectedReservation.statut]?.label || selectedReservation.statut}
+                    {(() => {
+                      const StatusIcon = statusConfig[selectedReservation.statut]?.Icon;
+                      return StatusIcon ? <StatusIcon className="w-3 h-3" /> : null;
+                    })()}
                   </span>
                 </div>
               </div>

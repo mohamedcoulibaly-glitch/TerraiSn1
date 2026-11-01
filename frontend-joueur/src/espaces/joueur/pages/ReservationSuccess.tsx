@@ -18,10 +18,11 @@ const ReservationSuccess = () => {
   const queryClient = useQueryClient();
   const [reservation, setReservation] = useState<any>(null);
   const [error, setError] = useState("");
-  const [showAnim, setShowAnim] = useState(true);
+  const [showAnim, setShowAnim] = useState(false);
   const [polling, setPolling] = useState(false);
   const [pollTimedOut, setPollTimedOut] = useState(false);
   const pollsRef = useRef(0);
+  const animPlayedRef = useRef(false);
 
   const reservationId =
     params.get("id") || localStorage.getItem("terrainsn_last_reservation_id") || "";
@@ -45,18 +46,21 @@ const ReservationSuccess = () => {
     };
   }, [reservationId]);
 
-  useEffect(() => {
-    const t = setTimeout(() => setShowAnim(false), 1500);
-    return () => clearTimeout(t);
-  }, []);
-
   // Dès que la réservation est confirmée, invalider la liste « Mes réservations »
   // pour qu'elle s'affiche immédiatement (avant, le cache local pouvait la masquer).
   const statutReservation = String(reservation?.statut || "");
   useEffect(() => {
     if (STATUTS_CONFIRMES.has(statutReservation)) {
       void queryClient.invalidateQueries({ queryKey: joueurKeys.mesReservations() });
+      // Anim succès uniquement après confirmation réelle (jamais pendant IPN).
+      if (!animPlayedRef.current) {
+        animPlayedRef.current = true;
+        setShowAnim(true);
+        const t = setTimeout(() => setShowAnim(false), 1500);
+        return () => clearTimeout(t);
+      }
     }
+    return undefined;
   }, [statutReservation, queryClient]);
 
   // Polling borné tant que le webhook PayTech n'a pas confirmé
@@ -200,12 +204,16 @@ const ReservationSuccess = () => {
           ) : null}
 
           {confirme ? (
-            <div className="rounded-[var(--radius-md)] bg-[var(--color-primary-glow)] py-4 px-3">
+            <div className="rounded-[var(--radius-md)] bg-[var(--color-primary-glow)] py-4 px-3 space-y-2">
               <p className="text-[14px] font-medium text-[var(--color-primary)]">
                 Ton QR code arrive par WhatsApp
               </p>
-              <p className="text-[12px] text-[var(--color-text-muted)] mt-1">
-                Le code de réservation t&apos;est envoyé uniquement par WhatsApp.
+              <p className="text-[12px] text-[var(--color-text-muted)]">
+                Présente le QR (ou le code) au gérant pour entrer.
+              </p>
+              <p className="text-[12px] text-[var(--color-text-muted)]">
+                Scannable à partir d&apos;1 h avant le match, jusqu&apos;à environ 2 h après la fin
+                (tolérance retard du terrain).
               </p>
             </div>
           ) : null}

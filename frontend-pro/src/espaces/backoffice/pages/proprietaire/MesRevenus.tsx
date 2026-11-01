@@ -112,7 +112,7 @@ function formatLigneDate(date?: string, heure?: string) {
 
 function statutBadge(item: Ligne) {
   const s = String(item.statut || item.source || "").toLowerCase();
-  if (s.includes("joue") || s === "match_joue") return { label: "Joué ✓", color: "var(--p-optimal)", bg: "var(--p-optimal-bg)" };
+  if (s.includes("joue") || s === "match_joue") return { label: "Joué", Icon: CheckCircle, color: "var(--p-optimal)", bg: "var(--p-optimal-bg)" };
   if (s.includes("attente")) return { label: "En attente", color: "var(--p-attention)", bg: "var(--p-attention-bg)" };
   if (s === "tournoi") return { label: "Tournoi", color: "var(--p-primary)", bg: "var(--p-primary-glow)" };
   if (s === "abonnement") return { label: "Abonnement", color: "var(--p-primary)", bg: "var(--p-primary-glow)" };
@@ -622,7 +622,8 @@ export default function OwnerReports() {
                       </div>
                       <div className="text-right shrink-0">
                         <p className="text-sm font-bold" style={{ color: "var(--p-optimal)" }}>{formatFcfa(item.montant_avance)}</p>
-                        <span className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: badge.bg, color: badge.color }}>
+                        <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: badge.bg, color: badge.color }}>
+                          {"Icon" in badge && badge.Icon ? <badge.Icon className="w-3 h-3" aria-hidden="true" /> : null}
                           {badge.label}
                         </span>
                       </div>

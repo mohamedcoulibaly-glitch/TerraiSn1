@@ -2,15 +2,18 @@
  * Ventilation financière — formules concordantes (période).
  *
  * total_avances          = Σ avances ledger `dus` (payé en ligne)
- * soldes_encaissees      = Σ (prix − avance) des matchs joués (reste encaissé)
- * total_commission       = Σ commission dus
+ *                          + Σ paiements avance cash (MANUEL-GERANT-*)
+ * soldes_encaissees      = Σ paiements `SOLDE-*` réellement encaissés
+ *                          (jamais prix−avance aveugle sur match_joue)
+ * total_commission       = Σ commission dus (plateforme)
  * frais_payout_gerant    = Σ frais dus
  *
  * montant_touche (« Chiffre d'affaires »)
  *   = total_avances + soldes_encaissees − total_commission − frais
  *
- * solde_a_retirer
- *   = montant_touche − total_avances
+ * solde_a_retirer (indicatif KPI « reste cash »)
+ *   = soldes_encaissees
+ *   NB : le montant Wave réellement retirable = portefeuilleTerrain.solde_disponible
  *
  * matchs_joues = nombre de résas match_joue / joue (pas un montant)
  *
@@ -63,16 +66,39 @@ function agregatsNetTerrains(db, terrainIds, sinceYmd, untilYmd = null) {
     [...ids, ...dateParams],
   );
 
+  // Avances cash guichet (hors dus) — commission suivie via dettes_commissions, pas ici.
+  const cashAvancesRow = queryOne(
+    db,
+    `SELECT COALESCE(SUM(p.montant), 0) AS total
+     FROM paiements p
+     JOIN reservations r ON r.id = p.reservation_id
+     WHERE r.terrain_id IN (${placeholders})
+       ${dateFilterResa}
+       AND LOWER(COALESCE(p.statut, '')) = 'paye'
+       AND (
+         COALESCE(p.reference_externe, '') LIKE 'MANUEL-GERANT-%'
+         OR LOWER(COALESCE(p.methode, '')) = 'manuel'
+       )`,
+    [...ids, ...dateParams],
+  );
+
+  // Soldes réellement encaissés (événement SOLDE-*), jamais prix−avance sur match non soldé.
+  const soldesRow = queryOne(
+    db,
+    `SELECT COALESCE(SUM(p.montant), 0) AS soldes_encaissees
+     FROM paiements p
+     JOIN reservations r ON r.id = p.reservation_id
+     WHERE r.terrain_id IN (${placeholders})
+       ${dateFilterResa}
+       AND LOWER(COALESCE(p.statut, '')) = 'paye'
+       AND COALESCE(p.reference_externe, '') LIKE 'SOLDE-%'`,
+    [...ids, ...dateParams],
+  );
+
   const jouesRow = queryOne(
     db,
     `SELECT
        COALESCE(SUM(COALESCE(r.prix_total, r.montant, 0)), 0) AS valeur_totale_matchs,
-       COALESCE(SUM(
-         max(0,
-           COALESCE(r.prix_total, r.montant, 0)
-           - COALESCE(r.montant_avance, r.acompte, 0)
-         )
-       ), 0) AS soldes_encaissees,
        COUNT(*) AS matchs_joues
      FROM reservations r
      WHERE r.terrain_id IN (${placeholders})
@@ -81,15 +107,18 @@ function agregatsNetTerrains(db, terrainIds, sinceYmd, untilYmd = null) {
     [...ids, ...dateParams],
   );
 
-  const totalAvances = Number(row?.total_avances || 0);
+  const avancesOnline = Number(row?.total_avances || 0);
+  const avancesCash = Number(cashAvancesRow?.total || 0);
+  const totalAvances = avancesOnline + avancesCash;
   const totalCommission = Number(row?.total_commission || 0);
   const frais = Number(row?.frais_payout_gerant || 0);
   const montantNetLedger = Number(row?.montant_net || 0);
-  const montantNet = Math.max(0, montantNetLedger || (totalAvances - totalCommission - frais));
-  const soldesEncaissees = Number(jouesRow?.soldes_encaissees || 0);
+  const montantNet = Math.max(0, montantNetLedger || (avancesOnline - totalCommission - frais));
+  const soldesEncaissees = Number(soldesRow?.soldes_encaissees || 0);
 
   const montantTouche = Math.max(0, totalAvances + soldesEncaissees - totalCommission - frais);
-  const soldeARetirer = Math.max(0, montantTouche - totalAvances);
+  // KPI « reste encaissé sur place » (hors payout Wave) — distinct de solde_disponible dus.
+  const soldeARetirer = soldesEncaissees;
 
   return {
     total_avances: totalAvances,

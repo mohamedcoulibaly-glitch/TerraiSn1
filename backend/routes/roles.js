@@ -353,12 +353,18 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       `SELECT r.id, r.date, r.heure_debut, r.heure_fin, r.joueur_nom, r.joueur_telephone, r.statut,
               r.montant_avance, r.acompte, r.montant_restant, r.reste_a_payer, r.montant, r.prix_total,
               r.format_terrain, r.code_reservation, r.mode_paiement, r.canal_paiement,
-              t.nom AS terrain_nom, t.id AS terrain_id
+              t.nom AS terrain_nom, t.id AS terrain_id,
+              COALESCE((
+                SELECT SUM(p.montant) FROM paiements p
+                WHERE p.reservation_id = r.id
+                  AND LOWER(COALESCE(p.statut, '')) = 'paye'
+                  AND COALESCE(p.reference_externe, '') LIKE 'SOLDE-%'
+              ), 0) AS montant_solde_encaisse
        FROM reservations r
        JOIN terrains t ON t.id = r.terrain_id
        WHERE r.terrain_id = ?
          AND r.date >= ?
-         AND r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'en_attente')
+         AND r.statut IN ('confirme', 'acceptee', 'match_joue', 'joue', 'en_attente', 'en_attente_paiement')
        ORDER BY r.date DESC, r.heure_debut DESC
        LIMIT 2000`,
       [terrainId, from],
@@ -374,6 +380,7 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       montant_avance: Number(r.montant_avance ?? r.acompte ?? 0),
       montant_total: Number(r.prix_total ?? r.montant ?? 0),
       montant_restant: Number(r.montant_restant ?? r.reste_a_payer ?? 0),
+      montant_solde_encaisse: Number(r.montant_solde_encaisse || 0),
       format_terrain: r.format_terrain || 'entier',
       code_reservation: r.code_reservation || null,
       mode_paiement: r.mode_paiement || null,
@@ -388,10 +395,11 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
         ? Number(r.montant_avance ?? r.acompte ?? 0)
         : 0;
 
-    const totalEncaisse = historique.reduce(
-      (s, r) => s + (['confirme', 'acceptee', 'match_joue', 'joue'].includes(String(r.statut)) ? Number(r.montant_avance || 0) : 0),
-      0,
-    );
+    const until = periode === 'aujourd_hui' ? today : null;
+    const net = agregatsNetTerrains(db, [terrainId], from, until);
+
+    // Avances + soldes réellement encaissés (évite de sous-estimer vs KPI CA).
+    const totalEncaisse = Number(net.total_avances || 0) + Number(net.soldes_encaissees || 0);
     const aVenir = reservations.filter(
       (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
     ).length;
@@ -408,8 +416,6 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
     const graphique = [...byDay.values()].sort((a, b) => String(a.label).localeCompare(String(b.label)));
 
     const terrainNom = reservations[0]?.terrain_nom || null;
-    const until = periode === 'aujourd_hui' ? today : null;
-    const net = agregatsNetTerrains(db, [terrainId], from, until);
     const terrain = queryOne(
       db,
       'SELECT commission_pourcentage, delai_paiement_dette_jours FROM terrains WHERE id = ?',
@@ -417,6 +423,9 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
     );
     const wallet = portefeuilleTerrain(db, terrainId, req.user.id);
     const dette = detteService.detteOuverteTerrain(db, terrainId);
+    const soldeWave = Number(wallet?.solde_disponible || 0);
+    const detteOuverte = Number(dette?.total || 0);
+    const soldeNetApresDette = Math.max(0, soldeWave - detteOuverte);
     const deltaPct = deltaPctVsPrecedent(db, [terrainId], from, today, net.total_avances || totalEncaisse);
 
     res.json({
@@ -424,8 +433,8 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       from,
       to: today,
       total_encaisse: totalEncaisse,
-      total_avances: net.total_avances || totalEncaisse,
-      avances_recues: totalEncaisse,
+      total_avances: net.total_avances,
+      avances_recues: net.total_avances,
       matchs_joues: net.matchs_joues,
       a_venir: aVenir,
       historique,
@@ -434,7 +443,7 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
         id: terrainId,
         nom: terrainNom || `Terrain #${terrainId}`,
         total_encaisse: totalEncaisse,
-        avances_recues: totalEncaisse,
+        avances_recues: net.total_avances,
         matchs_joues: net.matchs_joues,
         a_venir: aVenir,
         nb_reservations: reservations.length,
@@ -443,16 +452,19 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       encaisse_abonnements: 0,
       encaisse_tournois: 0,
       encaisse_blocages: 0,
-      solde_disponible: Number(wallet?.solde_disponible || 0),
-      solde_a_retirer: net.solde_a_retirer,
+      // Solde Wave/OM réellement retirable (ledger dus) — source de vérité retrait.
+      solde_disponible: soldeWave,
+      solde_net_apres_dette: soldeNetApresDette,
+      // Reste cash encaissé sur place (hors payout plateforme).
+      soldes_encaissees: net.soldes_encaissees,
+      solde_a_retirer: soldeNetApresDette,
       total_commission: net.total_commission,
       frais_payout_gerant: net.frais_payout_gerant,
       montant_net: net.montant_net,
-      soldes_encaissees: net.soldes_encaissees,
       montant_touche: net.montant_touche,
       net_recu: net.net_recu,
       valeur_totale_matchs: net.valeur_totale_matchs,
-      dette_commission: Number(dette?.total || 0),
+      dette_commission: detteOuverte,
       date_echeance: dette?.date_echeance || null,
       delai_paiement_jours: Number(terrain?.delai_paiement_dette_jours || 0) || null,
       commission_pct: Number(terrain?.commission_pourcentage || 0),
@@ -505,8 +517,9 @@ router.get('/gerant/dettes', authMiddleware, requireRole('gerant'), async (req, 
 router.post('/gerant/reservations/:id/confirmer-manuellement', authMiddleware, requireRole('gerant'), async (req, res) => {
   const db = await getDb();
   try {
+    const reservationId = Number(req.params.id);
     const result = transaction(db, () => detteService.confirmerManuellement(db, {
-      reservationId: Number(req.params.id),
+      reservationId,
       gerantId: req.user.id,
       note: req.body?.note,
     }));
@@ -515,9 +528,28 @@ router.post('/gerant/reservations/:id/confirmer-manuellement', authMiddleware, r
       gerant_id: req.user.id,
       terrain_id: result.terrainId,
       action: 'confirmation_manuelle',
-      reservation_id: Number(req.params.id),
+      reservation_id: reservationId,
       details: { commission: result.commission },
     }).catch(() => {});
+
+    // Même parcours notif que PayTech / sans-avance : QR + code WhatsApp au joueur.
+    const notificationService = require('../notificationService');
+    const pushService = require('../pushService');
+    await notificationService.envoyerConfirmation(reservationId).catch((error) => {
+      console.warn(`[confirmation_manuelle] WhatsApp résa #${reservationId}:`, error?.message || error);
+    });
+    await pushService.envoyerConfirmationPush(reservationId).catch((error) => {
+      console.warn(`[confirmation_manuelle] Push résa #${reservationId}:`, error?.message || error);
+    });
+    try {
+      require('../services/sseManager').emettrePourTerrain(result.terrainId, 'reservation_confirmee', {
+        reservation_id: reservationId,
+        code: result.code || null,
+        statut: 'confirme',
+        source: 'confirmation_manuelle',
+      });
+    } catch { /* SSE best-effort */ }
+
     res.status(201).json({
       success: true,
       code_reservation: result.code,

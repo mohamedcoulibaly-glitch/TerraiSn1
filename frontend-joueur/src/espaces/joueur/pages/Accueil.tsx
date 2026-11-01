@@ -1,4 +1,4 @@
-import { MapPin } from "lucide-react";
+import { CircleDot, MapPin } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSilentRefresh } from "@/hooks/useSilentRefresh";
@@ -396,7 +396,7 @@ const Accueil = () => {
             ) : terrainsFiltres.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <div className="w-16 h-16 rounded-full bg-[var(--surface-2)] flex items-center justify-center mb-3">
-                  <span className="text-3xl">⚽</span>
+                  <CircleDot className="w-8 h-8 text-[var(--text-muted)]" aria-hidden="true" />
                 </div>
                 <h3 className="text-[var(--text-primary)] font-bold text-base">Aucun terrain trouvé</h3>
                 <p className="text-[var(--text-muted)] text-sm mt-1.5 max-w-xs">{emptyMessage}</p>

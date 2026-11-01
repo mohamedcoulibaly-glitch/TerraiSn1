@@ -79,7 +79,8 @@ export default function FluxCardSheet({ card, advancing, onClose, onScan, onLink
             </button>
           )}
 
-          {next && !blocked && next !== "closed" && (
+          {/* checkin = scan uniquement ; pas d'avancée manuelle « Valider l'arrivée » */}
+          {next && !blocked && next !== "closed" && next !== "checkin" && (
             <button
               type="button"
               disabled={advancing}

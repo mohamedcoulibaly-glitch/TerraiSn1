@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Link2, MessageCircle, Phone } from "lucide-react";
+import {
+  AlarmClock,
+  ArrowLeft,
+  Banknote,
+  Check,
+  CheckCircle2,
+  Link2,
+  MessageCircle,
+  Phone,
+  QrCode,
+  type LucideIcon,
+} from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { gerantApi, reservationsApi } from "@/lib/api";
 import ScannerModal from "@/espaces/backoffice/components/ScannerModal";
@@ -49,29 +60,46 @@ type GerantReservation = {
   priorite_heure?: string | null;
   priorite_joueur?: string | null;
   operational_stage?: string;
+  checkout_at?: string | null;
   politique_remboursement?: PolitiqueRemboursement;
 };
 
-const STATUS_BADGE: Record<string, { label: string; className: string }> = {
+const STATUS_BADGE: Record<string, { label: string; Icon?: LucideIcon; className: string }> = {
   confirme: {
-    label: "Réservé ✓",
+    label: "Confirmée",
+    Icon: Check,
     className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   match_joue: {
-    label: "Terminé ✓",
+    label: "Jouée",
+    Icon: CheckCircle2,
     className: "bg-[var(--color-primary)] text-white",
   },
   joue: {
-    label: "Terminé ✓",
+    label: "Jouée",
+    Icon: CheckCircle2,
     className: "bg-[var(--color-primary)] text-white",
   },
   en_attente: {
     label: "Paiement en cours",
     className: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
   },
+  en_attente_paiement: {
+    label: "Paiement en cours",
+    className: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
+  },
   acceptee: {
-    label: "Réservé ✓",
+    label: "Confirmée",
+    Icon: Check,
     className: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
+  },
+  no_show: {
+    label: "Absence",
+    className: "bg-[color-mix(in_srgb,var(--color-warning)_14%,white)] text-[var(--color-warning)]",
+  },
+  expire: {
+    label: "Expirée",
+    className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
   },
   annule: {
     label: "Annulée",
@@ -94,17 +122,17 @@ function formatLongDate(value?: string) {
 }
 
 function formatEntreeValidee(value?: string | null) {
-  if (!value) return "✅ Entrée validée";
+  if (!value) return "Entrée validée";
   const raw = String(value).trim();
   const date = new Date(raw.includes("T") ? raw : raw.replace(" ", "T"));
-  if (Number.isNaN(date.getTime())) return "✅ Entrée validée";
+  if (Number.isNaN(date.getTime())) return "Entrée validée";
   const jour = date.toLocaleDateString("fr-FR", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   });
   const heure = date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-  return `✅ Entrée validée le ${jour} à ${heure}`;
+  return `Entrée validée le ${jour} à ${heure}`;
 }
 
 function formatFcfa(value?: number) {
@@ -135,9 +163,11 @@ export default function DetailReservation() {
   const [lierOpen, setLierOpen] = useState(false);
   const [sendingQr, setSendingQr] = useState(false);
   const [encaissing, setEncaissing] = useState(false);
+  const [cloturing, setCloturing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmEncaisser, setConfirmEncaisser] = useState(false);
+  const [confirmCloture, setConfirmCloture] = useState<"close" | "encaisser" | "waiver" | null>(null);
   const [methode, setMethode] = useState<"especes" | "wave" | "orange_money">("especes");
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
   const { down: waDown } = useWhatsappInfra(true);
@@ -195,13 +225,28 @@ export default function DetailReservation() {
     );
   }
 
-  const badge = STATUS_BADGE[reservation.statut] || {
+  const stage = String(reservation.operational_stage || "");
+  const estClos = stage === "closed" || Boolean(reservation.checkout_at);
+  const badgeBase: { label: string; Icon?: LucideIcon; className: string } = STATUS_BADGE[reservation.statut] || {
     label: reservation.statut,
     className: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
   };
+  const badge: { label: string; Icon?: LucideIcon; className: string } = estClos
+    ? {
+        label: "Terminé",
+        Icon: Check,
+        className: "bg-[var(--color-primary)] text-white",
+      }
+    : badgeBase;
   const dejaScanne = Boolean(reservation.qr_code_scanne_at);
   const hideScanner = dejaScanne || ["match_joue", "joue"].includes(reservation.statut);
   const reste = Number(reservation.montant_restant || 0);
+  const canCloturer =
+    !estClos &&
+    (dejaScanne ||
+      ["match_joue", "joue"].includes(reservation.statut) ||
+      stage === "match" ||
+      stage === "checkout");
 
   const dansFenetre = estDansLaFenetreCheckIn({
     date: reservation.date,
@@ -222,9 +267,10 @@ export default function DetailReservation() {
     ["confirme", "acceptee"].includes(reservation.statut) &&
     nowMs >= heureDebutMs &&
     nowMs <= heureFinMs + retardMin * 60 * 1000;
-  const badgeAffiche = enRetardLive
+  const badgeAffiche: { label: string; Icon?: LucideIcon; className: string } = enRetardLive
     ? {
-        label: "En retard ⏰",
+        label: "En retard",
+        Icon: AlarmClock,
         className: "bg-[color-mix(in_srgb,var(--color-warning)_14%,white)] text-[var(--color-warning)]",
       }
     : badge;
@@ -285,6 +331,7 @@ export default function DetailReservation() {
   };
 
   const handleEncaisser = async () => {
+    if (!reservation) return;
     setEncaissing(true);
     try {
       await gerantApi.encaisserRestant(reservation.id, methode);
@@ -295,6 +342,37 @@ export default function DetailReservation() {
       toast.error(err instanceof Error ? err.message : "Encaissement impossible");
     } finally {
       setEncaissing(false);
+    }
+  };
+
+  const handleCloturer = async () => {
+    if (!reservation || !confirmCloture) return;
+    setCloturing(true);
+    try {
+      await gerantApi.cloturerMatch(reservation.id, {
+        currentStage: reservation.operational_stage,
+        encaisserRestant: confirmCloture === "encaisser",
+        waiverEncaissement: confirmCloture === "waiver",
+        methode,
+      });
+      toast.success(
+        confirmCloture === "waiver"
+          ? "Match clôturé (impayé enregistré)"
+          : confirmCloture === "encaisser"
+            ? "Reste encaissé — match clôturé"
+            : "Match clôturé",
+      );
+      setConfirmCloture(null);
+      await load();
+    } catch (err) {
+      const code = (err as Error & { code?: string })?.code;
+      if (code === "BALANCE_OPEN") {
+        toast.error("Encaisser le reste (ou clôturer en impayé) avant de terminer.");
+      } else {
+        toast.error(err instanceof Error ? err.message : "Clôture impossible");
+      }
+    } finally {
+      setCloturing(false);
     }
   };
 
@@ -347,8 +425,9 @@ export default function DetailReservation() {
         >
           <ArrowLeft className="w-4 h-4" /> Retour
         </button>
-        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${badgeAffiche.className}`}>
+        <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${badgeAffiche.className}`}>
           {badgeAffiche.label}
+          {badgeAffiche.Icon ? <badgeAffiche.Icon className="w-3.5 h-3.5" /> : null}
         </span>
       </div>
 
@@ -464,25 +543,70 @@ export default function DetailReservation() {
       {dejaScanne ? (
         <section className="space-y-2">
           <span
-            className="inline-flex text-sm font-semibold px-3 py-1.5 rounded-full"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full"
             style={{ background: "var(--g-libre-bg)", color: "var(--g-libre)" }}
           >
+            <CheckCircle2 className="w-4 h-4" />
             {formatEntreeValidee(reservation.qr_code_scanne_at)}
           </span>
-          {reste > 0 ? (
+          {estClos ? (
             <span
-              className="flex text-sm font-semibold px-3 py-1.5 rounded-full w-fit"
+              className="flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full w-fit"
+              style={{ background: "var(--g-termine-bg)", color: "var(--g-termine)" }}
+            >
+              <Check className="w-4 h-4" />
+              Match clôturé
+            </span>
+          ) : reste > 0 ? (
+            <span
+              className="flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full w-fit"
               style={{ background: "var(--g-en-cours-bg)", color: "var(--g-warning)" }}
             >
-              💵 Encaisser {reste.toLocaleString("fr-FR")} FCFA sur place
+              <Banknote className="w-4 h-4" />
+              Encaisser {reste.toLocaleString("fr-FR")} FCFA sur place
             </span>
           ) : (
             <span
-              className="flex text-sm font-semibold px-3 py-1.5 rounded-full w-fit"
+              className="flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full w-fit"
               style={{ background: "var(--g-libre-bg)", color: "var(--g-libre)" }}
             >
-              ✓ Aucun paiement sur place
+              <Check className="w-4 h-4" />
+              Aucun paiement sur place
             </span>
+          )}
+        </section>
+      ) : null}
+
+      {canCloturer ? (
+        <section className="space-y-2">
+          {reste > 0 ? (
+            <>
+              <button
+                type="button"
+                disabled={cloturing}
+                onClick={() => setConfirmCloture("encaisser")}
+                className="w-full min-h-[48px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium disabled:opacity-60"
+              >
+                {cloturing ? "Clôture…" : `Encaisser ${formatFcfa(reste)} et clôturer`}
+              </button>
+              <button
+                type="button"
+                disabled={cloturing}
+                onClick={() => setConfirmCloture("waiver")}
+                className="w-full min-h-[44px] rounded-[var(--radius-md)] border border-[var(--color-border)] text-sm font-medium disabled:opacity-60"
+              >
+                Clôturer en impayé
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              disabled={cloturing}
+              onClick={() => setConfirmCloture("close")}
+              className="w-full min-h-[48px] rounded-[var(--radius-md)] bg-[var(--color-primary)] text-white text-sm font-medium disabled:opacity-60"
+            >
+              {cloturing ? "Clôture…" : "Clôturer le match"}
+            </button>
           )}
         </section>
       ) : null}
@@ -538,10 +662,11 @@ export default function DetailReservation() {
             <button
               type="button"
               onClick={() => setScannerOpen(true)}
-              className="w-full min-h-[52px] rounded-xl text-white text-sm font-semibold animate-pulse"
+              className="w-full min-h-[52px] rounded-xl text-white text-sm font-semibold animate-pulse inline-flex items-center justify-center gap-2"
               style={{ background: "var(--g-primary)" }}
             >
-              📷 Valider l&apos;entrée — Scanner QR
+              <QrCode className="w-4 h-4" />
+              Valider l&apos;entrée — Scanner QR
             </button>
           ) : null}
           <button
@@ -576,9 +701,12 @@ export default function DetailReservation() {
         onClose={() => setScannerOpen(false)}
         expectedReservationId={reservation.id}
         expectedCodeReservation={reservation.code_reservation}
-        onSuccess={() => {
-          setScannerOpen(false);
-          load();
+        onSuccess={(resa) => {
+          void load();
+          // Garder le modal ouvert tant qu'il reste à encaisser.
+          if (Number(resa?.montant_restant ?? 0) <= 0) {
+            setScannerOpen(false);
+          }
         }}
         onManualValidation={() => {
           setScannerOpen(false);
@@ -603,8 +731,11 @@ export default function DetailReservation() {
           },
         ]}
         preselectedId={reservation.id}
-        onSuccess={() => {
-          load();
+        onSuccess={(resa) => {
+          void load();
+          if (Number(resa?.montant_restant ?? 0) <= 0) {
+            setManualOpen(false);
+          }
         }}
       />
 
@@ -655,6 +786,37 @@ export default function DetailReservation() {
         variante="warning"
         onAnnuler={() => setConfirmEncaisser(false)}
         onConfirmer={() => void handleEncaisser()}
+      />
+
+      <ConfirmationModal
+        ouvert={confirmCloture != null}
+        titre={
+          confirmCloture === "waiver"
+            ? "Clôturer en impayé ?"
+            : confirmCloture === "encaisser"
+              ? "Encaisser et clôturer ?"
+              : "Clôturer ce match ?"
+        }
+        texte={
+          confirmCloture === "waiver"
+            ? `Le reste de ${formatFcfa(reste)} restera dû. Le créneau sera libéré.`
+            : confirmCloture === "encaisser"
+              ? `Encaissement de ${formatFcfa(reste)} (${methode.replace("_", " ")}) puis clôture du match.`
+              : "Le match sera marqué terminé et le créneau libéré."
+        }
+        labelAnnuler="Annuler"
+        labelConfirmer={
+          cloturing
+            ? "Clôture…"
+            : confirmCloture === "waiver"
+              ? "Oui, clôturer en impayé"
+              : confirmCloture === "encaisser"
+                ? `Encaisser ${formatFcfa(reste)} et clôturer`
+                : "Oui, clôturer"
+        }
+        variante={confirmCloture === "waiver" ? "danger" : "warning"}
+        onAnnuler={() => setConfirmCloture(null)}
+        onConfirmer={() => void handleCloturer()}
       />
     </div>
   );

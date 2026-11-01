@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Activity, LayoutDashboard, TrendingUp, MapPin, ShieldCheck } from "lucide-react";
+import { Activity, Hand, LayoutDashboard, TrendingUp, MapPin, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { profileForUser } from "@/auth/roles";
@@ -83,7 +83,7 @@ export default function ProprietaireChrome() {
   }, []);
 
   const live = useOwnerRealtime(terrainIds, () => {});
-  const greeting = `Bonjour ${firstName(user)} 👋`;
+  const greeting = `Bonjour ${firstName(user)}`;
   const subtitle =
     terrainCount === 0
       ? "Aucun terrain"
@@ -140,8 +140,9 @@ export default function ProprietaireChrome() {
           }}
         >
           <div className="min-w-0">
-            <p className="font-bold text-[16px] truncate leading-tight" style={{ color: "var(--p-text)" }}>
-              {greeting}
+            <p className="font-bold text-[16px] truncate leading-tight flex items-center gap-1.5" style={{ color: "var(--p-text)" }}>
+              <span className="truncate">{greeting}</span>
+              <Hand className="w-4 h-4 shrink-0" style={{ color: "var(--p-primary)" }} aria-hidden="true" />
             </p>
             <p className="text-[12px] truncate" style={{ color: "var(--p-muted)" }}>
               {subtitle}

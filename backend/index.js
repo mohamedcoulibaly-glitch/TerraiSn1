@@ -88,9 +88,11 @@ const {
   lockCreneauxAtomique,
   libererCreneauxReservation,
   libererVerrousExpires,
+  cloturerJourExpires,
   confirmerCreneauxReservation,
   rowsModified,
   normalizeHourString,
+  hourlySlots,
   normaliserDelaiVerrouPaiementMin,
 } = require('./reservationLockService');
 const {
@@ -1961,10 +1963,10 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     if (!date || !heure_debut || !heure_fin) return res.status(400).json({ error: 'Créneau invalide' });
     const heureDebutNorm = normalizeHourString(heure_debut);
     const heureFinNorm = normalizeHourString(heure_fin);
-    const startH = parseInt(heureDebutNorm.split(':')[0], 10);
-    const endH = parseInt(heureFinNorm.split(':')[0], 10);
-    const duree = endH - startH;
-    if (duree <= 0) return res.status(400).json({ error: 'Créneau invalide' });
+    // Overnight OK (ex. 23:00→01:00) — hourlySlots gère le wrap minuit.
+    if (!hourlySlots(heureDebutNorm, heureFinNorm).length) {
+      return res.status(400).json({ error: 'Créneau invalide' });
+    }
     if (!['moitie', 'entier'].includes(format_terrain)) return res.status(400).json({ error: 'Format de terrain invalide' });
     const montant = calculerPrixReservation(db, terrain, date, heureDebutNorm, heureFinNorm, format_terrain);
     // Sans avance (contrat) : pas de PayTech joueur — confirmation directe + dette commission.
@@ -2602,20 +2604,26 @@ app.post('/api/reservations/:id(\\d+)/relancer-paiement', authMiddleware, requir
     if (!['en_attente', 'en_attente_paiement'].includes(String(reservation.statut))) {
       return res.status(400).json({ error: 'Cette réservation n’est plus en attente de paiement' });
     }
+    const terrainRow = queryOne(db, 'SELECT delai_verrou_paiement_min FROM terrains WHERE id = ?', [
+      reservation.terrain_id,
+    ]);
+    const delaiMin = normaliserDelaiVerrouPaiementMin(terrainRow?.delai_verrou_paiement_min);
+    const nouveauVerrou = Date.now() + delaiMin * 60 * 1000;
     const payment = await paytechService.creerLienPaiement(reservation, {
       preferredChannel: req.body?.methode_paiement || req.body?.canal_paiement || reservation.canal_paiement,
     });
-    runSql(db, 'UPDATE reservations SET lien_paiement = ?, reference_paytech = ? WHERE id = ?', [
-      payment.redirectUrl,
-      payment.reference,
-      reservation.id,
-    ]);
+    runSql(
+      db,
+      'UPDATE reservations SET lien_paiement = ?, reference_paytech = ?, verrou_expire_at = ? WHERE id = ?',
+      [payment.redirectUrl, payment.reference, nouveauVerrou, reservation.id],
+    );
     return res.json({
       id: reservation.id,
       redirect_url: payment.redirectUrl,
       lien_paiement: payment.redirectUrl,
       reference_paytech: payment.reference,
       canal_paiement: payment.canal_paiement || null,
+      verrou_expire_at: nouveauVerrou,
     });
   } catch (error) {
     logger.error('index.js', 'Relancer paiement joueur', error);
@@ -3378,7 +3386,8 @@ app.get('/api/proprietaire/reservations', authMiddleware, requireRole('proprieta
     } else if (statutFilter === 'joue') {
       where += " AND r.statut IN ('match_joue', 'joue')";
     } else if (statutFilter === 'annulee') {
-      where += " AND r.statut IN ('annulee', 'refusee', 'expiree')";
+      // Canonique: annule/expire ; legacy: annulee/expiree/refusee
+      where += " AND r.statut IN ('annule', 'annulee', 'expire', 'expiree', 'refusee')";
     }
 
     if (q) {
@@ -3648,8 +3657,10 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
     if (!date || !heure_debut || !heure_fin) {
       return res.status(400).json({ error: 'date, heure_debut et heure_fin requis' });
     }
-    if (String(heure_fin) <= String(heure_debut)) {
-      return res.status(400).json({ error: 'L\'heure de fin doit être après l\'heure de début' });
+    const debutNorm = normalizeHourString(heure_debut);
+    const finNorm = normalizeHourString(heure_fin);
+    if (!hourlySlots(debutNorm, finNorm).length) {
+      return res.status(400).json({ error: 'Créneau invalide' });
     }
 
     const terrainId = req.user.terrain_id;
@@ -3659,7 +3670,7 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
         WHERE terrain_id = ? AND date = ?
           AND statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'acceptee')
           AND heure_debut < ? AND heure_fin > ?`,
-      [terrainId, date, heure_fin, heure_debut],
+      [terrainId, date, finNorm, debutNorm],
     );
     if (chevauchementResa.length) {
       return res.status(409).json({
@@ -3673,7 +3684,7 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
       `SELECT id FROM blocages_creneaux
         WHERE terrain_id = ? AND date = ?
           AND heure_debut < ? AND heure_fin > ?`,
-      [terrainId, date, heure_fin, heure_debut],
+      [terrainId, date, finNorm, debutNorm],
     );
     if (chevauchementBlocage.length) {
       return res.status(409).json({
@@ -3683,15 +3694,17 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
     }
 
     const result = runSql(db, 'INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)',
-      [terrainId, req.user.id, date, heure_debut, heure_fin, motif || null]);
-    // Aligne la table creneaux pour l’app joueur / file gérant
-    runSql(
-      db,
-      `UPDATE creneaux SET statut = 'bloque'
-        WHERE terrain_id = ? AND date = ?
-          AND heure_debut >= ? AND heure_debut < ?`,
-      [terrainId, date, heure_debut, heure_fin],
-    );
+      [terrainId, req.user.id, date, debutNorm, finNorm, motif || null]);
+    // Aligne la table creneaux pour l'app joueur / file gérant (overnight inclus via slots).
+    for (const slot of hourlySlots(debutNorm, finNorm)) {
+      runSql(
+        db,
+        `UPDATE creneaux SET statut = 'bloque'
+          WHERE terrain_id = ? AND date = ?
+            AND heure_debut = ? AND heure_fin = ?`,
+        [terrainId, date, slot.heure_debut, slot.heure_fin],
+      );
+    }
     const blocage = queryOne(db, 'SELECT * FROM blocages_creneaux WHERE id = ?', [result.lastInsertRowid]);
     res.status(201).json(blocage);
   } catch (err) {
@@ -3718,7 +3731,7 @@ app.post('/api/gerant/blocages/batch', authMiddleware, requireRole('gerant'), as
     for (const raw of slots) {
       const heure_debut = String(raw?.heure_debut || '').slice(0, 5);
       const heure_fin = String(raw?.heure_fin || '').slice(0, 5);
-      if (!heure_debut || !heure_fin || heure_fin <= heure_debut) {
+      if (!heure_debut || !heure_fin || !hourlySlots(heure_debut, heure_fin).length) {
         errors.push({ heure_debut, error: 'Créneau invalide' });
         continue;
       }
@@ -4971,9 +4984,10 @@ async function start() {
       const dbInterval = await getDb();
       transaction(dbInterval, () => {
         libererVerrousExpires(dbInterval, Date.now());
+        cloturerJourExpires(dbInterval, Date.now());
       });
     } catch (error) {
-      logger.error('index.js', 'Nettoyage des verrous', error);
+      logger.error('index.js', 'Nettoyage des verrous / clôture jour', error);
     }
   }, 5 * 60 * 1000);
 

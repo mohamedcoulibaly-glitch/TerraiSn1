@@ -50,7 +50,7 @@ export function activityMeta(action: string): { label: string; Icon: LucideIcon;
     return { label: "Réservation annulée", Icon: XCircle, color: "var(--p-attention)" };
   }
   if (action === "qr_scanne") {
-    return { label: "Match validé ✅", Icon: CheckCircle2, color: "var(--p-optimal)" };
+    return { label: "Match validé", Icon: CheckCircle2, color: "var(--p-optimal)" };
   }
   if (action === "kanban_stage") {
     return { label: "Étape Kanban mise à jour", Icon: ShieldCheck, color: "var(--p-primary-light)" };
@@ -103,8 +103,8 @@ export function scoreTone(score: number): "vert" | "orange" | "rouge" {
 }
 
 export function scorePhrase(score: number) {
-  if (score > 75) return "Tout va bien 👍";
-  if (score >= 50) return "Pense à en parler avec ton gérant 😊";
+  if (score > 75) return "Tout va bien";
+  if (score >= 50) return "Pense à en parler avec ton gérant";
   return "On te conseille de contacter ton gérant";
 }
 

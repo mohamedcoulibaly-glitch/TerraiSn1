@@ -171,7 +171,11 @@ export default function FluxMobile({ cards, advancingId, onMove, onScan, onLink 
                       <QrCode className="w-4 h-4" /> Scanner
                     </button>
                   )}
-                  {next && !blocked && !(next === "closed" && restant > 0) && (
+                  {/* reserved → checkin : uniquement via Scanner (pas de bouton Arrivée fantôme) */}
+                  {next &&
+                    next !== "checkin" &&
+                    !blocked &&
+                    !(next === "closed" && restant > 0) && (
                     <button
                       type="button"
                       disabled={advancingId === card.id}
@@ -188,7 +192,7 @@ export default function FluxMobile({ cards, advancingId, onMove, onScan, onLink 
                           : "bg-[var(--color-primary)] text-white"
                       }`}
                     >
-                      {next === "checkin" ? "Arrivée" : next === "match" ? "Match" : next === "checkout" ? "Terminer" : "Clôturer"}
+                      {next === "match" ? "Match" : next === "checkout" ? "Terminer" : "Clôturer"}
                     </button>
                   )}
                   {next === "closed" && restant > 0 && !blocked && (

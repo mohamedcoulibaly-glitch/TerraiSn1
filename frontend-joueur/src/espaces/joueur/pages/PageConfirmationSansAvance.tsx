@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { CheckCircle } from "lucide-react";
+import { Banknote, CheckCircle, CircleDot } from "lucide-react";
 
 type PageConfirmationSansAvanceProps = {
   reservation: {
@@ -43,7 +43,10 @@ export const PageConfirmationSansAvance = ({ reservation }: PageConfirmationSans
         className="text-2xl font-bold text-center mb-2"
         style={{ fontFamily: "var(--font-display)", color: "var(--color-text-primary)" }}
       >
-        C'est réservé ! ⚽
+        <span className="inline-flex items-center justify-center gap-2">
+          C'est réservé !
+          <CircleDot className="w-6 h-6" style={{ color: "var(--color-primary)" }} aria-hidden="true" />
+        </span>
       </h1>
 
       <p className="text-center text-sm mb-6" style={{ color: "var(--color-text-muted)" }}>
@@ -61,8 +64,9 @@ export const PageConfirmationSansAvance = ({ reservation }: PageConfirmationSans
         <p className="text-[13px]" style={{ color: "var(--color-text-muted)" }}>
           {reservation.date} · {reservation.heure_debut} – {reservation.heure_fin}
         </p>
-        <p className="text-sm font-semibold pt-1" style={{ color: "var(--color-text-primary)" }}>
-          💵 À régler sur place : {total.toLocaleString("fr-SN")} FCFA
+        <p className="text-sm font-semibold pt-1 flex items-center gap-2" style={{ color: "var(--color-text-primary)" }}>
+          <Banknote className="w-4 h-4 shrink-0" aria-hidden="true" />
+          À régler sur place : {total.toLocaleString("fr-SN")} FCFA
         </p>
       </div>
 

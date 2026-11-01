@@ -70,6 +70,30 @@ function encaisserSoldeSurPlace(db, reservation, gerantId, methode = 'especes') 
     [reservation.id, solde, methode, `SOLDE-${reservation.id}`],
   );
 
+  // Aligner la table matchs si la ligne existe déjà (scan sans encaissement,
+  // puis /encaisser plus tard) — sinon les exports sous-déclarent la caisse.
+  db.run(
+    `UPDATE matchs
+        SET solde_paye = ?,
+            methode_solde = ?
+      WHERE reservation_id = ?`,
+    [solde, methode, reservation.id],
+  );
+
+  // Cash tenu par le gérant : crédite portefeuille_gerant (commission 0 — déjà
+  // prélevée sur l'avance). Jamais de ligne `dus` : le solde reste hors payout Wave.
+  const terrainId = Number(reservation.terrain_id || 0);
+  if (gerantId && terrainId) {
+    crediterPortefeuilleGerant(db, {
+      gerantId,
+      terrainId,
+      reservationId: reservation.id,
+      montantEncaisse: solde,
+      montantCommission: 0,
+      statutReversement: 'effectue',
+    });
+  }
+
   return solde;
 }
 

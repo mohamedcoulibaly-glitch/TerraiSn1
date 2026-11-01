@@ -1,4 +1,4 @@
-import { CalendarDays, CheckCircle, ChevronDown, MapPin, QrCode, Settings, Users, Wallet } from "lucide-react";
+import { CalendarDays, CheckCircle, ChevronDown, MapPin, QrCode, Settings, Users, Wallet, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { profileForUser } from "@/auth/roles";
@@ -129,7 +129,9 @@ function BoutonScannerUrgent({ count }: { count: number }) {
       aria-label={`Scanner — ${count} match imminent`}
     >
       <QrCode className="w-4 h-4" />
-      <span>⚡ {count}</span>
+      <span className="inline-flex items-center gap-0.5">
+        <Zap className="w-3.5 h-3.5" /> {count}
+      </span>
     </button>
   );
 }
@@ -342,10 +344,10 @@ export default function GerantLayout() {
                     </span>
                     {Number(terrain.imminent_count) > 0 ? (
                       <span
-                        className="text-xs px-1.5 py-0.5 rounded-full"
+                        className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full"
                         style={{ background: "var(--g-warning-bg)", color: "var(--g-warning)" }}
                       >
-                        ⚡ {terrain.imminent_count} imminent(s)
+                        <Zap className="w-3 h-3" /> {terrain.imminent_count} imminent(s)
                       </span>
                     ) : null}
                   </div>

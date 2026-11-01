@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight, type LucideIcon } from "lucide-react";
 import { gerantPrenom, scoreTone } from "@/espaces/backoffice/proprietaire/proprioUtils";
 
 type Props = {
@@ -19,9 +19,9 @@ export function SanteGerantCondensee({
   onClick,
 }: Props) {
   const tone = scoreTone(Number(score || 0));
-  const badge =
+  const badge: { label: string; Icon?: LucideIcon; bg: string; color: string } =
     tone === "vert"
-      ? { label: "Optimal ✓", bg: "var(--p-optimal-bg)", color: "var(--p-optimal)" }
+      ? { label: "Optimal", Icon: Check, bg: "var(--p-optimal-bg)", color: "var(--p-optimal)" }
       : tone === "orange"
         ? { label: "Attention", bg: "var(--p-attention-bg)", color: "var(--p-attention)" }
         : { label: "À vérifier", bg: "var(--p-verifier-bg)", color: "var(--p-verifier)" };
@@ -51,10 +51,11 @@ export function SanteGerantCondensee({
         </p>
       </div>
       <span
-        className="text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0"
+        className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0"
         style={{ background: badge.bg, color: badge.color }}
       >
         {badge.label}
+        {badge.Icon ? <badge.Icon className="w-3 h-3" /> : null}
       </span>
       <ChevronRight className="w-4 h-4 shrink-0" style={{ color: "var(--p-muted)" }} />
     </button>

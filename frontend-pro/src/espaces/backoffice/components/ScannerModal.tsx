@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Clock3, FlipHorizontal, Info, Keyboard, X, XCircle } from "lucide-react";
+import { Banknote, Check, CheckCircle2, Clock3, FlipHorizontal, Info, Keyboard, X, XCircle } from "lucide-react";
 import jsQR from "jsqr";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { gerantApi } from "@/lib/api";
 import { parseQrPayload } from "@/lib/qrPayload";
@@ -318,7 +319,7 @@ export default function ScannerModal({
         const reservation = payload.reservation;
         setResult({
           state: "success",
-          title: "Entrée validée ✅",
+          title: "Entrée validée",
           reservation,
         });
         // Optimistic update côté file d'attente — le parent ne doit PAS fermer le modal ici
@@ -338,7 +339,7 @@ export default function ScannerModal({
           const heure = formatScannableHour(error.scannable_at);
           setResult({
             state: "too_early",
-            title: "C'est un peu tôt 😄",
+            title: "C'est un peu tôt",
             text: heure
               ? `Ouverture du scan à ${heure}.`
               : error.message || "Ce match n'est pas encore dans la fenêtre de scan.",
@@ -628,7 +629,7 @@ export default function ScannerModal({
         reservation?: ReservationRecap;
       };
       triggerFlash("green");
-      setResult({ state: "success", title: "Entrée validée ✅", reservation: payload.reservation });
+      setResult({ state: "success", title: "Entrée validée", reservation: payload.reservation });
       if (payload.reservation) onSuccessRef.current?.(payload.reservation);
     } catch (err) {
       const error = err as Error & {
@@ -658,7 +659,7 @@ export default function ScannerModal({
         const heure = formatScannableHour(error.scannable_at);
         setResult({
           state: "too_early",
-          title: "C'est un peu tôt 😄",
+          title: "C'est un peu tôt",
           text: heure ? `Ouverture du scan à ${heure}.` : error.message,
           minutesRemaining: error.minutes_remaining,
           scannableAt: error.scannable_at,
@@ -700,8 +701,11 @@ export default function ScannerModal({
       const maj = { ...result.reservation, ...(payload.reservation || {}), montant_restant: 0 };
       setResult((prev) => ({ ...prev, reservation: maj }));
       onSuccessRef.current?.(maj);
-    } catch {
-      // Le solde reste dû — encaissable plus tard depuis la file
+      toast.success("Solde encaissé");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Encaissement impossible — le solde reste dû",
+      );
     }
     submittingRef.current = false;
     setSubmitting(false);
@@ -864,13 +868,14 @@ export default function ScannerModal({
                 {reste > 0 ? (
                   <div className="mt-3 space-y-2">
                     <p
-                      className="rounded-xl px-3 py-2.5 text-sm font-semibold text-center"
+                      className="rounded-xl px-3 py-2.5 text-sm font-semibold text-center inline-flex w-full items-center justify-center gap-1.5"
                       style={{
                         background: "color-mix(in srgb, var(--color-warning) 16%, white)",
                         color: "var(--color-warning)",
                       }}
                     >
-                      💵 Reste à encaisser : {formatMoney(reste)} FCFA
+                      <Banknote className="w-4 h-4" />
+                      Reste à encaisser : {formatMoney(reste)} FCFA
                     </p>
                     <div className="grid grid-cols-3 gap-2">
                       {(
@@ -896,8 +901,9 @@ export default function ScannerModal({
                     </p>
                   </div>
                 ) : (
-                  <p className="mt-3 text-sm font-medium text-center text-[var(--color-success)]">
-                    ✓ Totalement payé — rien à encaisser
+                  <p className="mt-3 text-sm font-medium text-center text-[var(--color-success)] inline-flex w-full items-center justify-center gap-1.5">
+                    <Check className="w-4 h-4" />
+                    Totalement payé — rien à encaisser
                   </p>
                 )}
               </div>

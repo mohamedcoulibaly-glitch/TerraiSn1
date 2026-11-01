@@ -1,5 +1,13 @@
 const { calculerFenetreCheckIn, estDansLaFenetreCheckIn } = require('./checkInFenetre');
 
+/**
+ * Machine Kanban opérationnelle (parallèle au statut métier).
+ *
+ * Scan QR / validation manuelle / check-in-by-code : le backend pose directement
+ * `operational_stage = 'match'` (entrée validée = match lancé). On ne repasse
+ * PAS par `checkin` dans ce parcours. Suite manuelle : match → checkout → closed.
+ * L'encaissement du reste est découplé (POST /encaisser ou flags à la clôture).
+ */
 const STAGES = ['reserved', 'checkin', 'match', 'checkout', 'closed'];
 
 const ALLOWED = {
@@ -65,7 +73,9 @@ function assertStageTransition(card, to, maintenant = Date.now()) {
   if (!ALLOWED[from].includes(to)) throw gateError('ILLEGAL_TRANSITION');
 
   if (to === 'checkin') {
-    if (card.statut !== 'confirme') throw gateError('NOT_CONFIRMED');
+    if (!['confirme', 'acceptee'].includes(String(card.statut || ''))) {
+      throw gateError('NOT_CONFIRMED');
+    }
     const creneau = {
       date: card.date,
       heure_debut: card.heure_debut,
@@ -78,13 +88,17 @@ function assertStageTransition(card, to, maintenant = Date.now()) {
   if (to === 'match' && !card.checked_in_at) throw gateError('CHECKIN_REQUIRED');
 
   if (to === 'checkout') {
-    const { heureDebutMs } = calculerFenetreCheckIn({
-      date: card.date,
-      heure_debut: card.heure_debut,
-      heure_fin: card.heure_fin,
-      fenetre_retard: card.fenetre_retard,
-    });
-    if (maintenant < heureDebutMs) throw gateError('MATCH_NOT_STARTED');
+    // Après scan (entrée validée), le match est déjà « lancé » opérationnellement.
+    const dejaEnMatch = Boolean(card.checked_in_at || card.qr_code_scanne_at || card.stage === 'match');
+    if (!dejaEnMatch) {
+      const { heureDebutMs } = calculerFenetreCheckIn({
+        date: card.date,
+        heure_debut: card.heure_debut,
+        heure_fin: card.heure_fin,
+        fenetre_retard: card.fenetre_retard,
+      });
+      if (maintenant < heureDebutMs) throw gateError('MATCH_NOT_STARTED');
+    }
   }
 
   if (to === 'closed') {

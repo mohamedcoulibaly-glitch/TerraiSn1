@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { proprietaireApi } from "@/lib/api";
 import { useOwnerRealtime } from "@/hooks/useOwnerRealtime";
+import { Smile } from "lucide-react";
 import ProprioEmptyState from "@/espaces/backoffice/components/ProprioEmptyState";
 import {
   activityFilterGroup,
@@ -212,7 +213,8 @@ export default function SanteProprietaire() {
   if (!terrains.length || !health) {
     return (
       <ProprioEmptyState
-        title="Pas encore assez de données 😊"
+        Icon={Smile}
+        title="Pas encore assez de données"
         subtitle="Le tableau de bord se remplit au fur et à mesure des réservations."
       />
     );
@@ -314,7 +316,7 @@ export default function SanteProprietaire() {
         <div className="mt-4 h-64">
           {history.length < 2 ? (
             <div className="h-full flex items-center justify-center text-sm text-center px-4" style={{ color: "var(--p-text-2)" }}>
-              Le graphique sera disponible après 2 mois d'activité 😊
+              Le graphique sera disponible après 2 mois d'activité
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">

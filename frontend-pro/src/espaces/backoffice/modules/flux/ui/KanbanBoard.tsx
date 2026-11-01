@@ -35,6 +35,19 @@ export default function KanbanBoard({ cards, onMove, onScan, onLink }: Props) {
     const target: OperationalStage =
       card.operational_stage === "checkout" && to === "checkout" ? "closed" : to;
 
+    // Check-in uniquement via scan/code — pas de DnD reserved → checkin.
+    if (target === "checkin" && fromCol === "reserved") {
+      toast.message("Scanne le QR ou le code pour valider l'arrivée");
+      onScan(card);
+      return;
+    }
+
+    // Clôture avec solde : pas d'encaissement silencieux au drop (comme le sheet mobile).
+    if (target === "closed" && Number(card.montant_restant || 0) > 0) {
+      toast.message("Ouvre la fiche pour encaisser le solde ou clôturer en impayé");
+      return;
+    }
+
     try {
       assertStageTransition(
         {
@@ -46,7 +59,7 @@ export default function KanbanBoard({ cards, onMove, onScan, onLink }: Props) {
           fenetre_retard: card.fenetre_retard,
           checked_in_at: card.checked_in_at || null,
           montant_restant: Number(card.montant_restant || 0),
-          waiverEncaissement: target === "closed" && Number(card.montant_restant || 0) > 0,
+          waiverEncaissement: false,
           crm: card.crm || { bloqueReservation: false },
         },
         target,
@@ -58,7 +71,7 @@ export default function KanbanBoard({ cards, onMove, onScan, onLink }: Props) {
 
     try {
       await onMove(card.id, target, {
-        encaisserRestant: target === "closed" && Number(card.montant_restant || 0) > 0,
+        encaisserRestant: false,
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Déplacement impossible");

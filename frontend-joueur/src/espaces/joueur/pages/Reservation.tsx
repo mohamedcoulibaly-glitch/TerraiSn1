@@ -106,10 +106,15 @@ const Payment = () => {
     return () => window.removeEventListener("pageshow", onPageShow);
   }, []);
 
+  // Même règle que FicheTerrain.getEndTime (minutes + demi-heures, wrap 24h).
   const endTime = slot
     ? (() => {
-        const h = parseInt(slot.split(":")[0]) + parseInt(duree);
-        return `${h.toString().padStart(2, "0")}:00`;
+        const [hh, mm = "00"] = String(slot).slice(0, 5).split(":");
+        const total =
+          parseInt(hh, 10) * 60 + parseInt(mm, 10) + Math.round(dureeHours * 60);
+        const h = Math.floor(total / 60) % 24;
+        const m = total % 60;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
       })()
     : "";
 
@@ -159,7 +164,7 @@ const Payment = () => {
       }
       sessionStorage.setItem(PENDING_PAYMENT_KEY, String(reservation.id));
       redirectingRef.current = true;
-      hapticSuccess();
+      // Pas de hapticSuccess ici : le paiement n'est confirmé qu'après IPN.
       window.location.assign(payUrl);
     } catch (err: unknown) {
       const error = err as Error & {
@@ -168,9 +173,8 @@ const Payment = () => {
         gerant_tel_href?: string;
       };
       if (error.offline) {
-        hapticSuccess();
         await registerBackgroundSync();
-        toast.success(error.message);
+        toast.message(error.message || "Hors ligne — réservation en file d'attente");
         navigate("/reservations");
         return;
       }

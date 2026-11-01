@@ -1,4 +1,4 @@
-﻿import { ArrowLeft, Lock, Shield, AlertTriangle, Eye, EyeOff } from "lucide-react";
+import { ArrowLeft, Lock, LockKeyhole, Shield, AlertTriangle, Eye, EyeOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
@@ -31,7 +31,7 @@ const ProfilSecurite = () => {
   if (!isAuthenticated || !user) {
     return (
       <div className="page-container flex flex-col items-center justify-center gap-4">
-        <p className="text-3xl">🔐</p>
+        <LockKeyhole className="w-8 h-8 text-muted-foreground" aria-hidden="true" />
         <p className="text-muted-foreground text-sm">Connectez-vous pour accéder à cette page</p>
         <Button variant="hero" onClick={() => navigate("/login")}>Se connecter</Button>
       </div>

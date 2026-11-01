@@ -1,16 +1,25 @@
 import {
+  AlarmClock,
   Banknote,
   Calendar,
   CalendarCog,
   CalendarDays,
+  Check,
+  CheckCircle2,
+  CircleDot,
   Clock,
   CloudRain,
+  Lock,
+  Moon,
   PlusCircle,
   QrCode,
   Repeat,
+  Smile,
   Trophy,
   User,
   Wrench,
+  Zap,
+  type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState, useCallback, Fragment } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -63,6 +72,8 @@ type TodayReservation = {
   politique_paiement?: string | null;
   terrain_id?: number | null;
   creneau_id?: number | null;
+  operational_stage?: string | null;
+  checkout_at?: string | null;
   /** Présent si card issue d'un blocage (Workflow 6) */
   blocage_id?: number;
   blocage_ids?: number[];
@@ -90,17 +101,17 @@ function formatHourRange(debut: string, fin: string) {
 }
 
 function formatEntreeValidee(value?: string | null) {
-  if (!value) return "✅ Entrée validée";
+  if (!value) return "Entrée validée";
   const raw = String(value).trim();
   const date = new Date(raw.includes("T") ? raw : raw.replace(" ", "T"));
-  if (Number.isNaN(date.getTime())) return "✅ Entrée validée";
+  if (Number.isNaN(date.getTime())) return "Entrée validée";
   const jour = date.toLocaleDateString("fr-FR", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   });
   const heure = date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-  return `✅ Entrée validée le ${jour} à ${heure}`;
+  return `Entrée validée le ${jour} à ${heure}`;
 }
 
 function toCreneau(resa: TodayReservation, dayDate: string) {
@@ -119,6 +130,8 @@ function toCreneau(resa: TodayReservation, dayDate: string) {
 function resolveLiveStatus(resa: TodayReservation, dayDate: string, nowMs: number): MatchStatus {
   if (resa.statut === "libre") return "libre";
   if (resa.statut === "en_attente" || resa.statut === "en_attente_paiement") return "en_attente";
+  // Clôture Kanban explicite → Terminé (même si la fenêtre horaire n'est pas finie)
+  if (resa.operational_stage === "closed" || resa.checkout_at) return "termine";
 
   const creneau = toCreneau(resa, dayDate);
 
@@ -154,17 +167,18 @@ function resolveLiveStatus(resa: TodayReservation, dayDate: string, nowMs: numbe
 
 const STATUS_UI: Record<
   MatchStatus,
-  { label: string; color: string; bg: string }
+  { label: string; Icon?: LucideIcon; color: string; bg: string }
 > = {
   libre: { label: "Libre", color: "var(--g-libre)", bg: "var(--g-libre-bg)" },
-  reserve: { label: "Réservé ✓", color: "var(--g-reserve)", bg: "var(--g-reserve-bg)" },
-  en_cours: { label: "En cours ⚽", color: "var(--g-en-cours)", bg: "var(--g-en-cours-bg)" },
+  reserve: { label: "Réservé", Icon: Check, color: "var(--g-reserve)", bg: "var(--g-reserve-bg)" },
+  en_cours: { label: "En cours", Icon: CircleDot, color: "var(--g-en-cours)", bg: "var(--g-en-cours-bg)" },
   en_retard: {
-    label: "En retard ⏰",
+    label: "En retard",
+    Icon: AlarmClock,
     color: "var(--g-warning)",
     bg: "var(--g-en-cours-bg)",
   },
-  termine: { label: "Terminé ✓", color: "var(--g-termine)", bg: "var(--g-termine-bg)" },
+  termine: { label: "Terminé", Icon: Check, color: "var(--g-termine)", bg: "var(--g-termine-bg)" },
   bloque: { label: "Indisponible", color: "var(--g-danger)", bg: "color-mix(in srgb, var(--g-danger) 14%, transparent)" },
   en_attente: {
     label: "En attente de paiement",
@@ -218,6 +232,14 @@ type QueueCardProps = {
   onExpress: (prefill: { date?: string; heure_debut?: string; heure_fin?: string }) => void;
   onUnblock: (id?: number | number[]) => void;
   onOpenDetail: (id: number) => void;
+  onCloturer: (
+    resa: TodayReservation,
+    opts: {
+      encaisserRestant?: boolean;
+      waiverEncaissement?: boolean;
+      methode?: "especes" | "wave" | "orange_money";
+    },
+  ) => Promise<void>;
   onRefresh?: () => void;
 };
 
@@ -240,8 +262,11 @@ function QueueCard({
   onExpress,
   onUnblock,
   onOpenDetail,
+  onCloturer,
   onRefresh,
 }: QueueCardProps) {
+  const [clotureMethodsOpen, setClotureMethodsOpen] = useState(false);
+  const [cloturing, setCloturing] = useState(false);
   const creneau = toCreneau(resa, dayDate);
   const fenetre = calculerFenetreCheckIn(creneau);
   const block = resolveQueueBlock(resa, dayDate, nowMs);
@@ -266,7 +291,7 @@ function QueueCard({
             : isImminente
               ? "var(--g-primary)"
               : ui.color;
-  const badge =
+  const badge: { label: string; Icon?: LucideIcon; color: string; bg: string } =
     kind === "abonnement"
       ? { label: "Abonnement", color: "var(--g-info)", bg: "color-mix(in srgb, var(--g-info) 14%, transparent)" }
       : kind === "tournoi"
@@ -278,6 +303,7 @@ function QueueCard({
                 status === "en_attente"
                   ? `En attente de paiement (${pendingCount} joueur${pendingCount > 1 ? "s" : ""})`
                   : ui.label,
+              Icon: status === "en_attente" ? undefined : ui.Icon,
               color: ui.color,
               bg: ui.bg,
             };
@@ -307,11 +333,18 @@ function QueueCard({
           className="text-[11px] font-bold mb-1.5"
           style={{ color: status === "en_retard" ? "var(--g-warning)" : "var(--g-primary)" }}
         >
-          {status === "en_retard"
-            ? `En retard — +${Math.max(1, Math.ceil((nowMs - fenetre.heureDebutMs) / 60000))} min ⏰`
-            : minutesToStart <= 0
-              ? "Maintenant ⚡"
-              : `Dans ${minutesToStart} minute${minutesToStart > 1 ? "s" : ""} ⚡`}
+          <span className="inline-flex items-center gap-1">
+            {status === "en_retard" ? (
+              <AlarmClock className="w-3.5 h-3.5" />
+            ) : (
+              <Zap className="w-3.5 h-3.5" />
+            )}
+            {status === "en_retard"
+              ? `En retard — +${Math.max(1, Math.ceil((nowMs - fenetre.heureDebutMs) / 60000))} min`
+              : minutesToStart <= 0
+                ? "Maintenant"
+                : `Dans ${minutesToStart} minute${minutesToStart > 1 ? "s" : ""}`}
+          </span>
         </p>
       ) : null}
 
@@ -365,17 +398,19 @@ function QueueCard({
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span
-            className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
+            className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full"
             style={{ background: badge.bg, color: badge.color }}
           >
             {badge.label}
+            {badge.Icon ? <badge.Icon className="w-3 h-3" /> : null}
           </span>
           {nuitPercu ? (
             <span
-              className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+              className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full"
               style={{ background: "rgba(79,70,229,0.12)", color: "#4338ca" }}
             >
-              ✦ {nuitPercu.labelComplet}
+              <Moon className="w-3 h-3" />
+              {nuitPercu.labelComplet}
             </span>
           ) : null}
         </div>
@@ -441,25 +476,28 @@ function QueueCard({
       {dejaScanne && (
         <div className="mt-2 space-y-1.5">
           <span
-            className="inline-flex text-[11px] font-semibold px-2.5 py-1 rounded-full"
+            className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full"
             style={{ background: "var(--g-libre-bg)", color: "var(--g-libre)" }}
           >
+            <CheckCircle2 className="w-3.5 h-3.5" />
             {formatEntreeValidee(resa.qr_code_scanne_at)}
           </span>
           {block === "en_cours" && reste > 0 ? (
             <span
-              className="inline-flex text-[11px] font-semibold px-2.5 py-1 rounded-full"
+              className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full"
               style={{ background: "var(--g-en-cours-bg)", color: "var(--g-warning)" }}
             >
-              💵 Encaisser {reste.toLocaleString("fr-FR")} FCFA sur place
+              <Banknote className="w-3.5 h-3.5" />
+              Encaisser {reste.toLocaleString("fr-FR")} FCFA sur place
             </span>
           ) : null}
           {block === "en_cours" && reste <= 0 ? (
             <span
-              className="inline-flex text-[11px] font-semibold px-2.5 py-1 rounded-full"
+              className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full"
               style={{ background: "var(--g-libre-bg)", color: "var(--g-libre)" }}
             >
-              ✓ Aucun paiement sur place
+              <Check className="w-3.5 h-3.5" />
+              Aucun paiement sur place
             </span>
           ) : null}
         </div>
@@ -468,10 +506,11 @@ function QueueCard({
       {!dejaScanne && isImminente && reste > 0 && (
         <div className="mt-2">
           <span
-            className="inline-flex text-[11px] font-semibold px-2.5 py-1 rounded-full"
+            className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full"
             style={{ background: "var(--g-en-cours-bg)", color: "var(--g-warning)" }}
           >
-            💵 Encaisser {reste.toLocaleString("fr-FR")} FCFA sur place
+            <Banknote className="w-3.5 h-3.5" />
+            Encaisser {reste.toLocaleString("fr-FR")} FCFA sur place
           </span>
         </div>
       )}
@@ -513,10 +552,11 @@ function QueueCard({
           <button
             type="button"
             onClick={() => onScan(resa)}
-            className="w-full h-11 rounded-xl text-sm font-semibold text-white animate-pulse"
+            className="w-full h-11 rounded-xl text-sm font-semibold text-white animate-pulse inline-flex items-center justify-center gap-2"
             style={{ background: "var(--g-primary)" }}
           >
-            📷 Valider l&apos;entrée — Scanner QR
+            <QrCode className="w-4 h-4" />
+            Valider l&apos;entrée — Scanner QR
           </button>
         )}
         {!dejaScanne && isImminente && !canScanNow && (
@@ -536,6 +576,114 @@ function QueueCard({
             }}
           >
             Voir le détail
+          </button>
+        )}
+        {block === "en_cours" && reste > 0 && !clotureMethodsOpen && (
+          <button
+            type="button"
+            disabled={cloturing}
+            onClick={() => setClotureMethodsOpen(true)}
+            className="w-full min-h-[44px] rounded-xl text-sm font-semibold text-white inline-flex items-center justify-center gap-2 disabled:opacity-60"
+            style={{ background: "var(--g-primary)" }}
+          >
+            <Banknote className="w-4 h-4" />
+            Encaisser {reste.toLocaleString("fr-FR")} FCFA et clôturer
+          </button>
+        )}
+        {block === "en_cours" && reste > 0 && clotureMethodsOpen && (
+          <div className="space-y-2">
+            <p className="text-[11px] text-center" style={{ color: "var(--g-muted)" }}>
+              Méthode d&apos;encaissement
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {(
+                [
+                  ["especes", "Espèces"],
+                  ["wave", "Wave"],
+                  ["orange_money", "OM"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  disabled={cloturing}
+                  onClick={() => {
+                    void (async () => {
+                      setCloturing(true);
+                      try {
+                        await onCloturer(resa, { encaisserRestant: true, methode: value });
+                        setClotureMethodsOpen(false);
+                      } finally {
+                        setCloturing(false);
+                      }
+                    })();
+                  }}
+                  className="min-h-[44px] rounded-xl text-xs font-semibold disabled:opacity-60"
+                  style={{ color: "var(--g-primary)", border: "1px solid var(--g-primary)" }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              disabled={cloturing}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    `Clôturer en impayé ? Le reste de ${reste.toLocaleString("fr-FR")} FCFA restera dû.`,
+                  )
+                ) {
+                  return;
+                }
+                void (async () => {
+                  setCloturing(true);
+                  try {
+                    await onCloturer(resa, { waiverEncaissement: true });
+                    setClotureMethodsOpen(false);
+                  } finally {
+                    setCloturing(false);
+                  }
+                })();
+              }}
+              className="w-full min-h-[40px] rounded-xl text-xs font-semibold disabled:opacity-60"
+              style={{ color: "var(--g-danger)", border: "1px solid var(--g-danger)" }}
+            >
+              Clôturer en impayé
+            </button>
+          </div>
+        )}
+        {block === "en_cours" && reste <= 0 && (
+          <button
+            type="button"
+            disabled={cloturing}
+            onClick={() => {
+              void (async () => {
+                setCloturing(true);
+                try {
+                  await onCloturer(resa, {});
+                } finally {
+                  setCloturing(false);
+                }
+              })();
+            }}
+            className="w-full min-h-[44px] rounded-xl text-sm font-semibold text-white disabled:opacity-60"
+            style={{ background: "var(--g-primary)" }}
+          >
+            Clôturer le match
+          </button>
+        )}
+        {block === "en_cours" && (
+          <button
+            type="button"
+            onClick={() => onOpenDetail(resa.id)}
+            className="w-full min-h-[44px] rounded-xl text-sm font-semibold mt-2"
+            style={{
+              color: "var(--g-muted)",
+              border: "1px solid var(--g-border)",
+            }}
+          >
+            Voir la fiche
           </button>
         )}
       </div>
@@ -760,6 +908,7 @@ type FileAttenteBlocksProps = {
   onExpress: (prefill: { date?: string; heure_debut?: string; heure_fin?: string }) => void;
   onUnblock: (id?: number | number[]) => void;
   onOpenDetail: (id: number) => void;
+  onCloturer: QueueCardProps["onCloturer"];
   onRefresh?: () => void;
 };
 
@@ -773,6 +922,7 @@ function FileAttenteBlocks({
   onExpress,
   onUnblock,
   onOpenDetail,
+  onCloturer,
   onRefresh,
 }: FileAttenteBlocksProps) {
   const [terminesOuverts, setTerminesOuverts] = useState(false);
@@ -781,7 +931,7 @@ function FileAttenteBlocks({
   if (isEmpty) {
     return (
       <div className="text-center py-10 px-4 rounded-2xl" style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}>
-        <p className="text-4xl mb-3">😊</p>
+        <Smile className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--g-muted)" }} aria-hidden />
         <p className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>
           {emptyTitle}
         </p>
@@ -827,6 +977,7 @@ function FileAttenteBlocks({
     onExpress,
     onUnblock,
     onOpenDetail,
+    onCloturer,
     onRefresh,
     prioriteHeure: prioriteResa?.heure_debut ? String(prioriteResa.heure_debut).slice(0, 5) : null,
     prioriteJoueur: prioriteResa?.joueur_nom || null,
@@ -862,10 +1013,12 @@ function FileAttenteBlocks({
                   {showSep ? (
                     <li className="list-none py-1">
                       <p
-                        className="text-center text-[11px] font-medium"
+                        className="inline-flex w-full items-center justify-center gap-1 text-[11px] font-medium"
                         style={{ color: "#6366f1" }}
                       >
-                        ── ✦ Après minuit ({nuitLabel?.toLowerCase() || "nuit prolongée"}) ──
+                        ──
+                        <Moon className="w-3 h-3" />
+                        Après minuit ({nuitLabel?.toLowerCase() || "nuit prolongée"}) ──
                       </p>
                     </li>
                   ) : null}
@@ -1308,7 +1461,9 @@ const ManagerDashboard = () => {
     patchTodayReservation(
       id,
       {
+        // File « En cours » via qr_code_scanne_at ; stage Kanban = match (scan unifié).
         statut: "match_joue",
+        operational_stage: "match",
         qr_code_scanne_at: reservation.qr_code_scanne_at || new Date().toISOString(),
         joueur_nom: reservation.joueur_nom,
         montant_restant:
@@ -1319,6 +1474,57 @@ const ManagerDashboard = () => {
       todayPayload?.date,
     );
   };
+
+  const handleCloturer = useCallback(
+    async (
+      resa: TodayReservation,
+      opts: {
+        encaisserRestant?: boolean;
+        waiverEncaissement?: boolean;
+        methode?: "especes" | "wave" | "orange_money";
+      },
+    ) => {
+      const id = Number(resa.id);
+      try {
+        await gerantApi.cloturerMatch(id, {
+          currentStage: resa.operational_stage || "match",
+          encaisserRestant: opts.encaisserRestant,
+          waiverEncaissement: opts.waiverEncaissement,
+          methode: opts.methode,
+        });
+        patchTodayReservation(
+          id,
+          {
+            operational_stage: "closed",
+            checkout_at: new Date().toISOString(),
+            montant_restant:
+              opts.encaisserRestant || Number(resa.montant_restant || 0) <= 0
+                ? 0
+                : Number(resa.montant_restant || 0),
+            statut: "match_joue",
+          },
+          todayPayload?.date,
+        );
+        toast.success(
+          opts.waiverEncaissement
+            ? "Match clôturé (impayé)"
+            : opts.encaisserRestant
+              ? "Reste encaissé — match clôturé"
+              : "Match clôturé",
+        );
+        refreshLive();
+      } catch (err) {
+        const code = (err as Error & { code?: string })?.code;
+        if (code === "BALANCE_OPEN") {
+          toast.error("Encaisser le reste (ou clôturer en impayé) avant de terminer.");
+        } else {
+          toast.error(err instanceof Error ? err.message : "Clôture impossible");
+        }
+        throw err;
+      }
+    },
+    [patchTodayReservation, todayPayload?.date, refreshLive],
+  );
 
   const handleUnblockCreneau = async (blocageId?: number | number[]) => {
     const ids = (Array.isArray(blocageId) ? blocageId : [blocageId]).filter(
@@ -1407,7 +1613,13 @@ const ManagerDashboard = () => {
           }
         >
           <QrCode className={`w-5 h-5 ${imminentes.length > 0 ? "animate-pulse" : ""}`} />
-          {imminentes.length > 0 ? `Scanner ⚡ (${imminentes.length})` : "Scanner"}
+          {imminentes.length > 0 ? (
+            <span className="inline-flex items-center gap-0.5">
+              Scanner <Zap className="w-3 h-3" /> ({imminentes.length})
+            </span>
+          ) : (
+            "Scanner"
+          )}
         </button>
         <button
           type="button"
@@ -1578,6 +1790,7 @@ const ManagerDashboard = () => {
               onExpress={openExpress}
               onUnblock={(id) => void handleUnblockCreneau(id)}
               onOpenDetail={(id) => navigate(`/backoffice/gerant/reservations/${id}`)}
+              onCloturer={handleCloturer}
               onRefresh={() => {
                 refreshLive();
               }}
@@ -1612,6 +1825,7 @@ const ManagerDashboard = () => {
                       onExpress={openExpress}
                       onUnblock={(id) => void handleUnblockCreneau(id)}
                       onOpenDetail={(id) => navigate(`/backoffice/gerant/reservations/${id}`)}
+                      onCloturer={handleCloturer}
                       onRefresh={() => {
                         refreshLive();
                       }}
@@ -1626,13 +1840,11 @@ const ManagerDashboard = () => {
             className="text-center py-12 px-4 rounded-2xl"
             style={{ background: "var(--g-surface)", boxShadow: "var(--g-shadow)" }}
           >
-            <p className="text-4xl mb-3" aria-hidden>
-              🔒
-            </p>
+            <Lock className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--g-muted)" }} aria-hidden />
             <p className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>
               {vueActive === "jour"
-                ? `Terrain fermé le ${formatJourHeader(dayDate)} 🔒`
-                : "Terrain fermé aujourd'hui 🔒"}
+                ? `Terrain fermé le ${formatJourHeader(dayDate)}`
+                : "Terrain fermé aujourd'hui"}
             </p>
             <p className="text-xs mt-2 max-w-sm mx-auto" style={{ color: "var(--g-muted)" }}>
               Tu as configuré ce jour comme non ouvrable dans les paramètres.
@@ -1661,6 +1873,7 @@ const ManagerDashboard = () => {
             onExpress={openExpress}
             onUnblock={(id) => void handleUnblockCreneau(id)}
             onOpenDetail={(id) => navigate(`/backoffice/gerant/reservations/${id}`)}
+            onCloturer={handleCloturer}
             onRefresh={() => {
               refreshLive();
             }}
@@ -1726,8 +1939,11 @@ const ManagerDashboard = () => {
         expectedCodeReservation={scanTarget?.code_reservation ?? null}
         onSuccess={(reservation) => {
           applyOptimisticScan(reservation);
-          setScannerOpen(false);
-          setScanTarget(null);
+          // Garder le modal ouvert tant qu'il reste à encaisser (CTA espèces/Wave/OM).
+          if (Number(reservation?.montant_restant ?? 0) <= 0) {
+            setScannerOpen(false);
+            setScanTarget(null);
+          }
         }}
         onManualValidation={() => {
           setScannerOpen(false);
@@ -1742,7 +1958,9 @@ const ManagerDashboard = () => {
         reservations={todayList}
         onSuccess={(reservation) => {
           if (reservation) applyOptimisticScan(reservation);
-          setManualOpen(false);
+          if (Number(reservation?.montant_restant ?? 0) <= 0) {
+            setManualOpen(false);
+          }
         }}
       />
     </div>

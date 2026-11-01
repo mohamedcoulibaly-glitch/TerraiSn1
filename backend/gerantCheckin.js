@@ -146,20 +146,23 @@ function mapReservationGerantRow(row) {
   };
 }
 
+/**
+ * Check-in (scan / code / manuel) : valide l'entrée sans clôturer le match.
+ * - statut reste `confirme` (match_joue à la clôture Kanban)
+ * - operational_stage → `checkin`
+ * - pas d'INSERT matchs ici (assurerLigneMatch à closed)
+ */
 async function marquerReservationJouee({ db, reservation, gerantId, methode, encaisser = true }) {
   const solde = Number(reservation.reste_a_payer ?? reservation.montant_restant ?? 0);
-  const avancePayee = Number(reservation.montant_avance ?? reservation.acompte ?? 0);
   transaction(db, () => {
-    // L'entrée est validée dans tous les cas ; le solde n'est soldé que si le
-    // gérant a explicitement confirmé l'encaissement (jamais en silence).
     db.run(`UPDATE reservations
-      SET statut = 'match_joue',
+      SET
           ${encaisser ? 'reste_a_payer = 0, montant_restant = 0,' : ''}
           qr_code_scanne_at = COALESCE(qr_code_scanne_at, CURRENT_TIMESTAMP),
           checked_in_at = COALESCE(checked_in_at, CURRENT_TIMESTAMP),
           operational_stage = CASE
-            WHEN operational_stage IN ('match', 'checkout', 'closed') THEN operational_stage
-            ELSE 'match'
+            WHEN operational_stage IN ('checkin', 'match', 'checkout', 'closed') THEN operational_stage
+            ELSE 'checkin'
           END
       WHERE id = ? AND statut = 'confirme'`, [reservation.id]);
     if (rowsModified(db) !== 1) {
@@ -167,15 +170,37 @@ async function marquerReservationJouee({ db, reservation, gerantId, methode, enc
       error.statusCode = 400;
       throw error;
     }
-    db.run(`INSERT INTO matchs (reservation_id, terrain_id, gerant_id, montant_total, acompte_paye, solde_paye, methode_solde)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`, [reservation.id, reservation.terrain_id, gerantId, reservation.prix_total || reservation.montant, avancePayee, encaisser ? solde : 0, methode]);
-    if (reservation.creneau_id) {
-      db.run(`UPDATE creneaux SET statut = 'joue' WHERE id = ?`, [reservation.creneau_id]);
-    }
     if (encaisser && solde > 0) {
       encaisserSoldeSurPlace(db, reservation, gerantId, methode);
     }
   });
+}
+
+/** Crée la ligne matchs si absente (clôture Kanban ou parcours sans scan). */
+function assurerLigneMatch(db, reservation, gerantId, methode = 'especes') {
+  if (!reservation?.id) return;
+  const existing = queryOne(db, 'SELECT id FROM matchs WHERE reservation_id = ?', [reservation.id]);
+  if (existing) return;
+  const avancePayee = Number(reservation.montant_avance ?? reservation.acompte ?? 0);
+  const total = Number(reservation.prix_total || reservation.montant || 0);
+  const restant = Number(reservation.reste_a_payer ?? reservation.montant_restant ?? 0);
+  const soldePaye = restant > 0 ? 0 : Math.max(0, total - avancePayee);
+  db.run(
+    `INSERT INTO matchs (reservation_id, terrain_id, gerant_id, montant_total, acompte_paye, solde_paye, methode_solde)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      reservation.id,
+      reservation.terrain_id,
+      gerantId,
+      total,
+      avancePayee,
+      soldePaye,
+      methode,
+    ],
+  );
+  if (reservation.creneau_id) {
+    db.run(`UPDATE creneaux SET statut = 'joue' WHERE id = ?`, [reservation.creneau_id]);
+  }
 }
 
 /**
@@ -191,7 +216,7 @@ function prioriteScanDuMoment(db, terrainId, maintenant = Date.now()) {
     FROM reservations r
     LEFT JOIN users u ON u.id = r.joueur_id
     LEFT JOIN creneaux c ON c.id = r.creneau_id
-    WHERE r.terrain_id = ? AND r.statut = 'confirme' AND r.qr_code_scanne_at IS NULL
+    WHERE r.terrain_id = ? AND r.statut IN ('confirme', 'acceptee') AND r.qr_code_scanne_at IS NULL
   `, [terrainId]);
   const ouvertes = rows
     .map((row) => ({
@@ -212,7 +237,12 @@ function prioriteScanDuMoment(db, terrainId, maintenant = Date.now()) {
 function annoterPrioriteScan(db, terrainId, mappedRows) {
   const priorite = prioriteScanDuMoment(db, terrainId);
   for (const row of mappedRows) {
-    if (!priorite || Number(row.id) === Number(priorite.id) || row.qr_code_scanne_at || row.statut !== 'confirme') {
+    if (
+      !priorite ||
+      Number(row.id) === Number(priorite.id) ||
+      row.qr_code_scanne_at ||
+      !['confirme', 'acceptee'].includes(String(row.statut))
+    ) {
       row.scannable_now = true;
       continue;
     }
@@ -262,12 +292,20 @@ async function traiterScanQrReservation(req, res, { manuelle = false, reservatio
         qr_code_scanne_at: reservation.qr_code_scanne_at,
       });
     }
-    if (reservation.statut !== 'confirme') {
+    if (!['confirme', 'acceptee'].includes(String(reservation.statut))) {
       return res.status(400).json({
         error: `Cette réservation n'est pas confirmée (statut : ${reservation.statut}). Seule une réservation confirmée peut être validée.`,
         code: 'QR_BAD_STATUS',
         statut: reservation.statut,
       });
+    }
+    // Normalise legacy `acceptee` → `confirme` avant check-in.
+    if (reservation.statut === 'acceptee') {
+      db.run(
+        "UPDATE reservations SET statut = 'confirme' WHERE id = ? AND statut = 'acceptee'",
+        [reservation.id],
+      );
+      reservation.statut = 'confirme';
     }
 
     // En validation manuelle, le gérant authentifié valide depuis la fiche :
@@ -380,7 +418,7 @@ async function traiterScanQrReservation(req, res, { manuelle = false, reservatio
     `, [reservation.id]);
 
     return res.json({
-      message: 'QR code scanné et match validé',
+      message: 'Entrée validée — check-in OK',
       reservation: {
         id: updated.id,
         joueur_nom: updated.joueur_nom,
@@ -390,6 +428,8 @@ async function traiterScanQrReservation(req, res, { manuelle = false, reservatio
         heure_fin: String(updated.heure_fin || '').slice(0, 5),
         code_reservation: updated.code_reservation,
         statut: updated.statut,
+        operational_stage: updated.operational_stage,
+        checked_in_at: updated.checked_in_at,
         qr_code_scanne_at: updated.qr_code_scanne_at,
         // montant_restant = état APRÈS validation (source de vérité pour l'UI)
         montant_restant: Number(updated.montant_restant ?? updated.reste_a_payer ?? 0),
@@ -558,6 +598,7 @@ function mountGerantCheckinRoutes(app) {
         heure_fin: mapped.heure_fin,
         fenetre_retard: mapped.fenetre_retard,
         checked_in_at: mapped.checked_in_at,
+        qr_code_scanne_at: mapped.qr_code_scanne_at,
         montant_restant: mapped.montant_restant,
         waiverEncaissement: waiverEncaissement || encaisserRestant,
         crm: mapped.crm,
@@ -575,6 +616,10 @@ function mountGerantCheckinRoutes(app) {
           encaisserSoldeSurPlace(db, row, req.user.id, methode);
         }
         db.run(`UPDATE reservations SET ${sets[stage]} WHERE id = ? AND terrain_id = ?`, [reservationId, terrainId]);
+        if (stage === 'closed') {
+          const fraishe = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+          assurerLigneMatch(db, fraishe || row, req.user.id, methode);
+        }
       });
 
       await logActivite({
@@ -633,7 +678,8 @@ function mountGerantCheckinRoutes(app) {
       } else if (statutFilter === 'joue') {
         where += " AND r.statut IN ('match_joue', 'joue')";
       } else if (statutFilter === 'annulee') {
-        where += " AND r.statut IN ('annulee', 'refusee', 'expiree')";
+        // Canonique: annule/expire ; legacy: annulee/expiree/refusee
+        where += " AND r.statut IN ('annule', 'annulee', 'expire', 'expiree', 'refusee')";
       }
 
       if (q) {

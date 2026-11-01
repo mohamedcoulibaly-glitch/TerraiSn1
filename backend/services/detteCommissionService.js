@@ -10,7 +10,7 @@ const {
   rowsModified,
 } = require('../reservationLockService');
 const { calculerFenetreCheckIn } = require('./checkInFenetre');
-const { serializeQrPayload } = require('./qrPayload');
+const { signQrPayload } = require('../domain/qrSignature');
 const { dateEcheanceDette } = require('./politiquePaiement');
 const { essaiActif } = require('./essaiService');
 
@@ -162,7 +162,8 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
     heure_fin: reservation.heure_fin,
     fenetre_retard: retardRow?.fenetre_retard,
   });
-  const qrPayload = serializeQrPayload({
+  // QR signé (HMAC) — même contrat que PayTech / sans-avance, sinon le scan caméra refuse.
+  const qrPayload = signQrPayload({
     reservation_id: reservationId,
     code,
     creneau_id: reservation.creneau_id,

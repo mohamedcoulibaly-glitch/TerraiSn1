@@ -1,5 +1,10 @@
 import { calculerFenetreCheckIn, estDansLaFenetreCheckIn } from "@/lib/checkInFenetre";
 
+/**
+ * Miroir de backend/services/kanbanRules.js.
+ * Scan QR / validation manuelle pose `match` directement (pas `checkin`).
+ * Suite : match → checkout → closed. Encaissement découplé ou via flags à la clôture.
+ */
 export const KANBAN_STAGES = ["reserved", "checkin", "match", "checkout", "closed"] as const;
 export type OperationalStage = (typeof KANBAN_STAGES)[number];
 
@@ -83,6 +88,7 @@ export type KanbanCardInput = {
   heure_fin: string;
   fenetre_retard?: number | null;
   checked_in_at: string | null;
+  qr_code_scanne_at?: string | null;
   montant_restant: number;
   waiverEncaissement?: boolean;
   crm: { bloqueReservation: boolean; reason?: string };
@@ -115,13 +121,19 @@ export function assertStageTransition(card: KanbanCardInput, to: string, mainten
   if (to === "match" && !card.checked_in_at) throw new KanbanGateError("CHECKIN_REQUIRED");
 
   if (to === "checkout") {
-    const { heureDebutMs } = calculerFenetreCheckIn({
-      date: card.date,
-      heure_debut: card.heure_debut,
-      heure_fin: card.heure_fin,
-      fenetre_retard: card.fenetre_retard,
-    });
-    if (maintenant < heureDebutMs) throw new KanbanGateError("MATCH_NOT_STARTED");
+    // Après scan, le match est déjà lancé opérationnellement.
+    const dejaEnMatch = Boolean(
+      card.checked_in_at || card.qr_code_scanne_at || card.stage === "match",
+    );
+    if (!dejaEnMatch) {
+      const { heureDebutMs } = calculerFenetreCheckIn({
+        date: card.date,
+        heure_debut: card.heure_debut,
+        heure_fin: card.heure_fin,
+        fenetre_retard: card.fenetre_retard,
+      });
+      if (maintenant < heureDebutMs) throw new KanbanGateError("MATCH_NOT_STARTED");
+    }
   }
 
   if (to === "closed") {

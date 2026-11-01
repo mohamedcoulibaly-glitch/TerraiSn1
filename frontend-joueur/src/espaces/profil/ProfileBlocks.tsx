@@ -1,5 +1,5 @@
 import { ChangeEvent, ReactNode, useRef, useState } from "react";
-import { Camera, LogOut, X } from "lucide-react";
+import { Camera, CircleDot, LogOut, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -166,7 +166,14 @@ export function ProfileShell({
             {displayName}
           </h1>
           <div className="mt-2 inline-flex items-center rounded-full bg-[var(--color-primary-glow)] px-3 py-1 text-[12px] font-semibold text-[var(--color-primary)]">
-            {roleLabel === "Joueur" ? "Joueur ⚽" : roleLabel}
+            {roleLabel === "Joueur" ? (
+              <span className="inline-flex items-center gap-1.5">
+                Joueur
+                <CircleDot className="w-3.5 h-3.5" aria-hidden="true" />
+              </span>
+            ) : (
+              roleLabel
+            )}
           </div>
           {subtitle && <p className="mt-2 text-sm text-[var(--color-text-muted)]">{subtitle}</p>}
         </section>

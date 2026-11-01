@@ -237,14 +237,16 @@ export default function FinancesPage() {
         <FinancesView
           data={{
             ...data,
-            // Affichage concordant : solde = net touché − avances (API).
-            // Le montant réellement retirable Wave reste géré par demanderRetrait().
+            // Une seule vérité pour le retrait Wave : portefeuille dus (− dette).
             solde_a_retirer: Number(
-              data.solde_a_retirer
-                ?? Math.max(
-                  0,
-                  Number(data.montant_touche || 0) - Number(data.total_avances || data.avances_recues || 0),
-                ),
+              portefeuille?.solde_net_apres_dette
+                ?? portefeuille?.solde_disponible
+                ?? data.solde_a_retirer
+                ?? data.solde_disponible
+                ?? 0,
+            ),
+            solde_disponible: Number(
+              portefeuille?.solde_disponible ?? data.solde_disponible ?? 0,
             ),
           }}
           peutRetirer={Boolean(portefeuille?.payout_mode === "retrait" && portefeuille?.bouton_retirer && !retraitPending)}

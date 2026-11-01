@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, TrendingDown } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { AlerteProprietaire as Alerte } from "@/hooks/useAlertesProprietaire";
 
@@ -14,18 +14,18 @@ export default function AlerteProprietaire({ alerte }: { alerte: Alerte }) {
         border: `1px solid ${danger ? "var(--p-alert-border)" : "var(--p-attention)"}`,
       }}
     >
-      <AlertTriangle
-        className="w-5 h-5 shrink-0"
-        style={{ color: danger ? "var(--p-verifier)" : "var(--p-attention)" }}
-      />
+      {danger ? (
+        <AlertTriangle className="w-5 h-5 shrink-0" style={{ color: "var(--p-verifier)" }} aria-hidden="true" />
+      ) : (
+        <TrendingDown className="w-5 h-5 shrink-0" style={{ color: "var(--p-attention)" }} aria-hidden="true" />
+      )}
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-semibold leading-snug" style={{ color: "var(--p-text)" }}>
-          {danger ? "⚠️ " : "📉 "}
           {alerte.terrain_nom} — {alerte.message}
         </p>
         {alerte.gerant_prenom && danger && (
           <p className="text-[11px] mt-0.5" style={{ color: "var(--p-muted)" }}>
-            Pense à en parler avec {alerte.gerant_prenom} 😊
+            Pense à en parler avec {alerte.gerant_prenom}
           </p>
         )}
       </div>

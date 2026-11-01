@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Calendar, CheckCircle2, Loader2, X, AlertTriangle, Moon } from "lucide-react";
+import { ArrowLeft, Calendar, Check, CheckCircle2, Loader2, X, AlertTriangle, Moon } from "lucide-react";
 import { WhatsAppIcon } from "@/components/WhatsAppIcon";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -18,6 +18,7 @@ import {
   grouperParPeriode,
   trierCreneaux,
 } from "@/utils/creneauLabel";
+import { POURCENTAGE_AVANCE_DEFAUT } from "@/lib/avance";
 
 type JoueurConnu = {
   id?: number | null;
@@ -197,7 +198,7 @@ export default function ReservationExpressModal({
   });
   const [politiquePaiement, setPolitiquePaiement] = useState<"avance" | "sans_avance">("avance");
   const [features, setFeatures] = useState<Record<string, boolean>>({});
-  const [pourcentageAvance, setPourcentageAvance] = useState(12.5);
+  const [pourcentageAvance, setPourcentageAvance] = useState(POURCENTAGE_AVANCE_DEFAUT);
   const [commissionPourcentage, setCommissionPourcentage] = useState(8);
   const sansAvance = politiquePaiement === "sans_avance";
   const canConfirmManual = featureEnabled(features, "confirmations_manuelles", true);
@@ -392,7 +393,9 @@ export default function ReservationExpressModal({
         );
         setFeatures((t?.features && typeof t.features === "object" ? t.features : {}) as Record<string, boolean>);
         const pctAvance = Number(t?.pourcentage_avance);
-        setPourcentageAvance(Number.isFinite(pctAvance) && pctAvance > 0 ? pctAvance : 12.5);
+        setPourcentageAvance(
+          Number.isFinite(pctAvance) && pctAvance > 0 ? pctAvance : POURCENTAGE_AVANCE_DEFAUT,
+        );
         const pctComm = Number(t?.commission_pourcentage);
         setCommissionPourcentage(Number.isFinite(pctComm) && pctComm > 0 ? pctComm : 8);
         const typesLoc = String(t?.types_location || "les_deux");
@@ -526,15 +529,15 @@ export default function ReservationExpressModal({
           if (res.disponible) {
             setVerifState("ok");
             setVerifMsg(
-              `✓ Créneau disponible · Durée : ${res.duree_label || formatDureeLabel(selectedDuration)}`,
+              `Créneau disponible · Durée : ${res.duree_label || formatDureeLabel(selectedDuration)}`,
             );
           } else {
             const c = res.conflits?.[0];
             setVerifState("conflit");
             setVerifMsg(
               c
-                ? `✗ Conflit avec ${c.joueur_nom || "une réservation"} de ${formatHourPill(c.heure_debut)} à ${formatHourPill(c.heure_fin)}`
-                : "✗ Créneau indisponible",
+                ? `Conflit avec ${c.joueur_nom || "une réservation"} de ${formatHourPill(c.heure_debut)} à ${formatHourPill(c.heure_fin)}`
+                : "Créneau indisponible",
             );
           }
         })
@@ -819,15 +822,15 @@ export default function ReservationExpressModal({
       clearDraft(expressDraftKey(terrainId));
 
       if (selectedNuitInfo) {
-        toast.message(`Créneau créé pour la ${selectedNuitInfo.labelComplet.toLowerCase()} ✦`, {
+        toast.message(`Créneau créé pour la ${selectedNuitInfo.labelComplet.toLowerCase()}`, {
           description: "Il apparaîtra dans la vue du jour perçu pour les joueurs.",
         });
       }
 
       const prenom = String(result?.joueur_nom || nom).split(" ")[0];
       if (result?.whatsapp_sent) {
-        setDoneMsg(`Lien envoyé à ${prenom} ✓`);
-        toast.success(`Lien envoyé à ${prenom} ✓`);
+        setDoneMsg(`Lien envoyé à ${prenom}`);
+        toast.success(`Lien envoyé à ${prenom}`);
       } else {
         setDoneMsg(`Réservation créée — lien à renvoyer`);
         toast.warning(
@@ -893,7 +896,7 @@ export default function ReservationExpressModal({
         if (!created?.reservation_id) throw new Error("Réservation non créée");
         onCreated?.();
         clearDraft(expressDraftKey(terrainId));
-        setDoneMsg("Réservation confirmée ✓ — paiement sur place");
+        setDoneMsg("Réservation confirmée — paiement sur place");
         toast.success("Réservation confirmée — total à encaisser sur place");
         window.setTimeout(() => {
           onClose();
@@ -917,8 +920,8 @@ export default function ReservationExpressModal({
       await gerantApi.confirmerManuellement(created.reservation_id, noteManuel.trim() || undefined);
       onCreated?.();
       clearDraft(expressDraftKey(terrainId));
-      setDoneMsg("Réservation confirmée ✓ — Commission en dette");
-      toast.success("Réservation confirmée ✓ — Commission en dette");
+      setDoneMsg("Réservation confirmée — Commission en dette");
+      toast.success("Réservation confirmée — Commission en dette");
       window.setTimeout(() => {
         onClose();
         navigate(`/backoffice/gerant/reservations/${created.reservation_id}`);
@@ -1166,7 +1169,7 @@ export default function ReservationExpressModal({
                                 }
                               >
                                 {isNuit ? <Moon className="w-3 h-3" /> : null}
-                                {isNuit ? `✦ ${nuitLabel}` : periode}
+                                {isNuit ? nuitLabel : periode}
                               </p>
                               <div className="flex flex-col gap-2">
                                 {slots.map((slot: any) => {
@@ -1204,7 +1207,7 @@ export default function ReservationExpressModal({
                                       }
                                     >
                                       {formatHourPill(heure)} - {formatHourPill(fin)}
-                                      {nuit ? " ✦" : ""}
+                                      {nuit ? <Moon className="ml-1 inline h-3 w-3" /> : null}
                                       <span
                                         className={cn(
                                           "ml-1 font-normal opacity-70",
@@ -1266,12 +1269,14 @@ export default function ReservationExpressModal({
                   {verifState !== "idle" ? (
                     <div
                       className={cn(
-                        "rounded-xl px-3 py-2 text-xs font-semibold",
+                        "flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold",
                         verifState === "ok" && "bg-emerald-50 text-emerald-700",
                         verifState === "conflit" && "bg-red-50 text-red-700",
                         verifState === "loading" && "bg-neutral-50 text-neutral-500",
                       )}
                     >
+                      {verifState === "ok" ? <Check className="h-4 w-4 shrink-0" /> : null}
+                      {verifState === "conflit" ? <X className="h-4 w-4 shrink-0" /> : null}
                       {verifState === "loading" ? "Vérification disponibilité…" : verifMsg}
                     </div>
                   ) : null}
@@ -1358,8 +1363,9 @@ export default function ReservationExpressModal({
                           <p className="text-sm font-semibold text-emerald-900">
                             {joueurConnu.display_nom}
                           </p>
-                          <span className="mt-0.5 inline-flex rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
-                            Compte TerrainSN ✓
+                          <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                            Compte TerrainSN
+                            <Check className="h-3 w-3" />
                           </span>
                         </div>
                       </div>

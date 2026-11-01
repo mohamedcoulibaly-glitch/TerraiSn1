@@ -2,7 +2,7 @@ import { calculerMontantAvance } from "@/lib/avance";
 import SkeletonFicheTerrain from "@/components/skeletons/SkeletonFicheTerrain";
 import SilentSyncDot from "@/components/SilentSyncDot";
 import CommoditesSection from "@/components/CommoditesSection";
-import { ArrowLeft, MapPin, Star, Clock, Heart, Info, X, ChevronDown, Navigation, Phone, Calendar } from "lucide-react";
+import { ArrowLeft, MapPin, Star, Clock, Heart, Info, X, ChevronDown, Navigation, Phone, Calendar, Check } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -1044,7 +1044,7 @@ const FieldDetails = () => {
                                 ? "Non disponible"
                                 : "Pris"
                               : selected
-                                ? "✓"
+                                ? <Check className="w-3 h-3 inline-block" aria-label="Sélectionné" />
                                 : null}
                           </span>
                         )}
@@ -1117,7 +1117,7 @@ const FieldDetails = () => {
             <li className="flex items-start gap-2">
               <Info className="w-4 h-4 text-[var(--primary)] shrink-0 mt-0.5" />
               <span>
-                {String(terrain.politique_paiement || "avance") === "sans_avance"
+                {["sans_avance", "sans_acompte"].includes(String(terrain.politique_paiement || "").trim())
                   ? "Pas d'avance : paiement sur place."
                   : `La réservation expire après ${Number(terrain.delai_verrou_paiement_min || 15)} min sans paiement.`}{" "}
                 {Number(terrain.delai_remboursement_heures) === 0

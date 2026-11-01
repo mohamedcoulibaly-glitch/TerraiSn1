@@ -136,7 +136,7 @@ export default function MotDePasseOublie({
     try {
       await authApi.changePassword(password);
       await authApi.logout();
-      toast.success("Mot de passe mis à jour ✓");
+      toast.success("Mot de passe mis à jour");
       onOpenChange(false);
       onSucces?.();
     } catch (e) {

@@ -268,7 +268,7 @@ export default function ProfilProprietaire() {
       {logoutOpen && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/45 px-4 py-6">
           <div className="w-full max-w-sm rounded-2xl p-5" style={{ background: "var(--p-surface)" }}>
-            <h2 className="text-lg font-bold" style={{ color: "var(--p-text)" }}>Tu veux vraiment partir ? 👋</h2>
+            <h2 className="text-lg font-bold" style={{ color: "var(--p-text)" }}>Tu veux vraiment partir ?</h2>
             <p className="mt-1 text-sm" style={{ color: "var(--p-text-2)" }}>Tu seras déconnecté de l'espace propriétaire.</p>
             <div className="mt-5 grid grid-cols-2 gap-3">
               <button

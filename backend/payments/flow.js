@@ -22,6 +22,7 @@ const { gerantDeepLink } = require('../lib/gerantDeepLink');
 const {
   libererCreneauxReservation,
   confirmerCreneauxReservation,
+  annulerReservationsConcurrentes,
   rowsModified,
 } = require('../reservationLockService');
 const { calculerMontantAvance, calculerCommissionPrelevee } = require('../pricingService');
@@ -86,6 +87,53 @@ function finaliserLignePaiement(db, {
   );
 }
 
+/**
+ * Remet en `reserve` des créneaux déjà libérés (ex. IPN après expire),
+ * seulement s'ils sont encore libres / en_attente_paiement.
+ */
+function reprendreCreneauxPourConfirmation(db, reservation) {
+  const { hourlySlots } = require('../reservationLockService');
+  const slots = hourlySlots(reservation.heure_debut, reservation.heure_fin);
+  let claimed = 0;
+  for (const slot of slots) {
+    db.run(
+      `UPDATE creneaux SET statut = 'reserve'
+        WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?
+          AND statut IN ('libre', 'en_attente_paiement')`,
+      [reservation.terrain_id, reservation.date, slot.heure_debut, slot.heure_fin],
+    );
+    claimed += rowsModified(db);
+  }
+  if (reservation.creneau_id) {
+    db.run(
+      `UPDATE creneaux SET statut = 'reserve'
+        WHERE id = ? AND statut IN ('libre', 'en_attente_paiement')`,
+      [reservation.creneau_id],
+    );
+    claimed += rowsModified(db);
+  }
+  return claimed;
+}
+
+function creneauEncoreDisponiblePourRevive(db, reservation) {
+  const conflit = queryOne(
+    db,
+    `SELECT id FROM reservations
+      WHERE terrain_id = ? AND date = ? AND id != ?
+        AND statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
+        AND heure_debut < ? AND heure_fin > ?
+      LIMIT 1`,
+    [
+      reservation.terrain_id,
+      reservation.date,
+      reservation.id,
+      reservation.heure_fin,
+      reservation.heure_debut,
+    ],
+  );
+  return !conflit;
+}
+
 async function traiterConfirmationPaytech(db, reservationId, refCommand, options = {}) {
   let action = 'ignore';
   let ledgerInfo = null;
@@ -100,13 +148,51 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
     const existingByRef = refCommand
       ? queryOne(db, "SELECT id FROM paiements WHERE reference_paytech = ? AND statut = 'paye' LIMIT 1", [refCommand])
       : null;
-    // Un dû orphelin ne doit PAS bloquer une confirmation manquante (IPN retardé).
-    if (currentReservation.statut === 'confirme' || existingPaidPayment || existingByRef) {
+
+    // Idempotence stricte : même référence déjà payée → no-op.
+    if (existingByRef) {
       action = 'already_confirmed';
       return;
     }
-    if (!peutConfirmer(currentReservation.statut)) {
-      action = 'ignore';
+
+    // Doublon : résa déjà confirmée (manuel / autre canal) OU déjà un payin en ligne
+    // avec une autre référence → rembourser CE payin, ne pas toucher la résa.
+    if (
+      existingPaidPayment ||
+      ['confirme', 'match_joue', 'joue', 'acceptee'].includes(String(currentReservation.statut))
+    ) {
+      action = 'refund_duplicate';
+      return;
+    }
+
+    // IPN après expiration du verrou : reprendre le créneau s'il est libre, sinon rembourser.
+    if (String(currentReservation.statut) === 'expire') {
+      if (!creneauEncoreDisponiblePourRevive(db, currentReservation)) {
+        action = 'refund_expired';
+        return;
+      }
+      const confirmeAtRevive = new Date().toISOString();
+      db.run(
+        `UPDATE reservations SET statut = 'en_attente_paiement', confirme_at = NULL
+         WHERE id = ? AND statut = 'expire'`,
+        [reservationId],
+      );
+      if (rowsModified(db) !== 1) {
+        action = 'refund_expired';
+        return;
+      }
+      const claimed = reprendreCreneauxPourConfirmation(db, currentReservation);
+      if (claimed < 1) {
+        db.run("UPDATE reservations SET statut = 'expire' WHERE id = ?", [reservationId]);
+        action = 'refund_expired';
+        return;
+      }
+      // Poursuit le flux normal de confirmation ci-dessous avec statut temporaire
+      // en_attente_paiement (créneaux déjà en reserve via reprendre*).
+      currentReservation.statut = 'en_attente_paiement';
+      currentReservation._reviveExpire = true;
+    } else if (!peutConfirmer(currentReservation.statut)) {
+      action = 'refund_unconfirmable';
       return;
     }
 
@@ -117,11 +203,13 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
       [confirmeAt, reservationId],
     );
     if (rowsModified(db) !== 1) {
-      action = 'already_confirmed';
+      action = 'refund_duplicate';
       return;
     }
 
-    const confirmedCount = confirmerCreneauxReservation(db, currentReservation);
+    const confirmedCount = currentReservation._reviveExpire
+      ? 1 // créneaux déjà repris en reserve
+      : confirmerCreneauxReservation(db, currentReservation);
     if (confirmedCount < 1) {
       libererCreneauxReservation(db, currentReservation, ['en_attente_paiement']);
       db.run("UPDATE reservations SET statut = 'en_attente', confirme_at = NULL WHERE id = ?", [reservationId]);
@@ -170,6 +258,7 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
     });
 
     const reservationConfirmee = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+    annulerReservationsConcurrentes(db, reservationConfirmee || currentReservation);
     ledgerInfo = appliquerApresPayin(db, { reservation: reservationConfirmee });
     action = 'confirm';
   });
@@ -303,12 +392,23 @@ async function confirmerPaiementEtNotifier(reservationId, refCommand, options = 
     logger.event('payin_ignore', { reservationId, reason: 'already_confirmed' });
   } else if (action === 'ignore') {
     logger.event('payin_ignore', { reservationId, reason: 'ignore' });
-  } else if (action === 'refund') {
+  } else if (
+    action === 'refund' ||
+    action === 'refund_duplicate' ||
+    action === 'refund_expired' ||
+    action === 'refund_unconfirmable'
+  ) {
     await paytechService.rembourser(refCommand);
     transaction(db, () => {
       const row = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-      db.run("UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement', 'confirme')", [reservationId]);
-      if (row) libererCreneauxReservation(db, row, ['en_attente_paiement', 'reserve']);
+      // refund (échec confirm) annule la résa ; duplicate/expired : ne pas casser une résa déjà valide.
+      if (action === 'refund') {
+        db.run(
+          "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement', 'confirme')",
+          [reservationId],
+        );
+        if (row) libererCreneauxReservation(db, row, ['en_attente_paiement', 'reserve']);
+      }
       const pending = queryOne(
         db,
         `SELECT id FROM paiements WHERE reservation_id = ? AND statut = 'en_attente' AND (reference_paytech = ? OR reference_externe = ?) LIMIT 1`,
@@ -317,22 +417,33 @@ async function confirmerPaiementEtNotifier(reservationId, refCommand, options = 
       if (pending) {
         db.run("UPDATE paiements SET statut = 'rembourse', reference_paytech = ? WHERE id = ?", [`${refCommand}-REFUND`, pending.id]);
       } else {
-        db.run(`INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
-          VALUES (?, ?, ?, 'rembourse', ?, ?)`, [reservationId, reservation.acompte, options.methode || methodePaiement(), refCommand, `${refCommand}-REFUND`]);
+        db.run(
+          `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
+          VALUES (?, ?, ?, 'rembourse', ?, ?)`,
+          [
+            reservationId,
+            reservation.acompte || reservation.montant_avance || 0,
+            options.methode || methodePaiement(),
+            refCommand,
+            `${refCommand}-REFUND`,
+          ],
+        );
       }
     });
+    logger.event('payin_refund', { reservationId, refCommand, reason: action });
     await notificationService.envoyerRemboursement(reservationId).catch((error) => {
       logger.error('payments/flow.js', 'Notification remboursement', error);
     });
-    // Temps réel gérant : créneau de nouveau libre après remboursement
-    try {
-      require('../services/sseManager').emettrePourTerrain(reservation.terrain_id, 'creneau_libere', {
-        reservation_id: reservationId,
-        creneau_id: reservation.creneau_id || null,
-        statut: 'libre',
-      });
-    } catch {
-      // best-effort
+    if (action === 'refund') {
+      try {
+        require('../services/sseManager').emettrePourTerrain(reservation.terrain_id, 'creneau_libere', {
+          reservation_id: reservationId,
+          creneau_id: reservation.creneau_id || null,
+          statut: 'libre',
+        });
+      } catch {
+        // best-effort
+      }
     }
   }
   return { action };

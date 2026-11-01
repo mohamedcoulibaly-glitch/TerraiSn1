@@ -47,7 +47,7 @@ function evaluerRemboursement({ terrain, reservation, confirmeAt = null, now = D
       remboursement_autorise: autorise ? 1 : 0,
       texte_joueur: texte,
       raison: 'pas_confirmee',
-      message: 'Pas de paiement confirmé à rembourser.',
+      message: 'Pas de paiement confirm� � rembourser.',
     };
   }
   if (!autorise || delaiHeures <= 0) {
@@ -72,8 +72,8 @@ function evaluerRemboursement({ terrain, reservation, confirmeAt = null, now = D
     limite_at: confirmedAt ? new Date(limite).toISOString() : null,
     raison: eligible ? 'dans_delai' : 'hors_delai',
     message: eligible
-      ? `Le joueur sera remboursé (annulation dans les ${delaiHeures} h après confirmation) et recevra une notification WhatsApp.`
-      : `Le délai de remboursement de ce terrain est dépassé (${delaiHeures} h après confirmation). L'annulation libère le créneau sans remboursement. Le joueur sera prévenu sur WhatsApp.`,
+      ? `Le joueur sera rembours� (annulation dans les ${delaiHeures} h apr�s confirmation) et recevra une notification WhatsApp.`
+      : `Le d�lai de remboursement de ce terrain est d�pass� (${delaiHeures} h apr�s confirmation). L'annulation lib�re le cr�neau sans remboursement. Le joueur sera pr�venu sur WhatsApp.`,
   };
 }
 
@@ -109,6 +109,34 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
   const ref = referencePaiementPaytech(reservation, payment);
   const shouldRefund = Boolean(politique.eligible && payment && ref);
 
+  // Remboursement prestataire AVANT liberation du creneau : si l'API echoue,
+  // on n'annule pas (evite creneau libre + joueur non rembourse).
+  let rembourse = false;
+  let remboursementManuel = false;
+  if (shouldRefund) {
+    try {
+      await paytechService.rembourser(ref, { methode: payment.methode });
+      rembourse = true;
+    } catch (error) {
+      if (error.code === 'PAYDUNYA_REFUND_MANUAL') {
+        remboursementManuel = true;
+        logger.warn(
+          'annulationService.js',
+          `Remboursement PayDunya manuel requis (ref. ${ref}) ? traiter dans le dashboard`,
+        );
+      } else {
+        logger.error('annulationService.js', 'Remboursement prestataire', error);
+        const err = new Error(
+          error.message ||
+            "Remboursement impossible pour le moment. La reservation n'a pas ete annulee.",
+        );
+        err.statusCode = error.statusCode || 502;
+        err.code = error.code || 'REFUND_FAILED';
+        throw err;
+      }
+    }
+  }
+
   transaction(db, () => {
     if (traitePar) {
       db.run(
@@ -122,7 +150,7 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
       );
     }
     if (rowsModified(db) !== 1) {
-      const error = new Error('Réservation ne peut pas être annulée');
+      const error = new Error('Reservation ne peut pas etre annulee');
       error.statusCode = 400;
       throw error;
     }
@@ -133,53 +161,25 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
     }
     if (shouldRefund) {
       marquerAnnuleRembourse(db, reservation.id, now);
+      const montantRefund = Number(
+        reservation.montant_avance || reservation.acompte || payment.montant || 0,
+      );
+      if (rembourse) {
+        db.run(
+          `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
+           VALUES (?, ?, ?, 'rembourse', ?, ?)`,
+          [reservation.id, montantRefund, payment.methode || 'paytech', ref, `${ref}-REFUND`],
+        );
+      } else if (remboursementManuel) {
+        db.run(
+          `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
+           VALUES (?, ?, ?, 'remboursement_manuel', ?, ?)`,
+          [reservation.id, montantRefund, payment.methode || 'paydunya', ref, `${ref}-REFUND-MANUAL`],
+        );
+      }
     }
   });
 
-  let rembourse = false;
-  let remboursementManuel = false;
-  if (shouldRefund) {
-    try {
-      await paytechService.rembourser(ref, { methode: payment.methode });
-      runSql(
-        db,
-        `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
-         VALUES (?, ?, ?, 'rembourse', ?, ?)`,
-        [
-          reservation.id,
-          Number(reservation.montant_avance || reservation.acompte || payment.montant || 0),
-          payment.methode || 'paytech',
-          ref,
-          `${ref}-REFUND`,
-        ],
-      );
-      rembourse = true;
-    } catch (error) {
-      if (error.code === 'PAYDUNYA_REFUND_MANUAL') {
-        remboursementManuel = true;
-        runSql(
-          db,
-          `INSERT INTO paiements (reservation_id, montant, methode, statut, reference_externe, reference_paytech)
-           VALUES (?, ?, ?, 'remboursement_manuel', ?, ?)`,
-          [
-            reservation.id,
-            Number(reservation.montant_avance || reservation.acompte || payment.montant || 0),
-            payment.methode || 'paydunya',
-            ref,
-            `${ref}-REFUND-MANUAL`,
-          ],
-        );
-        logger.warn(
-          'annulationService.js',
-          `Remboursement PayDunya manuel requis (réf. ${ref}) — traiter dans le dashboard`,
-        );
-      } else {
-        logger.error('annulationService.js', 'Remboursement prestataire', error);
-      }
-    }
-  }
-
-  // Temps réel gérant : le créneau redevient libre immédiatement (zéro décalage)
   try {
     require('./sseManager').emettrePourTerrain(reservation.terrain_id, 'reservation_annulee', {
       reservation_id: reservation.id,
@@ -194,7 +194,6 @@ async function executerAnnulation(db, reservation, { traitePar = null, now = Dat
     .envoyerAnnulation(reservation.id, { rembourse, politique, remboursementManuel })
     .catch((error) => logger.error('annulationService.js', 'Notification annulation', error));
 
-  // Toasts in-app / push : joueur (annulation + remboursement) et gérants si annulation côté joueur
   await require('../pushService')
     .notifierAnnulation(reservation.id, { rembourse, parGerant: Boolean(traitePar), remboursementManuel })
     .catch((error) => logger.error('annulationService.js', 'Push annulation', error));

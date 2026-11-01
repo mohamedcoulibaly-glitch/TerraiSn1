@@ -4,6 +4,7 @@ import {
   Clock3,
   LogOut,
   MessageCircle,
+  Moon,
   Sparkles,
   UserRound,
   Zap,
@@ -412,7 +413,7 @@ export default function ParametresGerant() {
         isOpen(h) ? { ...h, heure_debut: source.heure_debut, heure_fin: source.heure_fin } : h,
       ),
     );
-    toast.success("Horaires copiés sur toute la semaine ✓");
+    toast.success("Horaires copiés sur toute la semaine");
   };
 
   const saveHoraires = async () => {
@@ -517,7 +518,7 @@ export default function ParametresGerant() {
 
         <ConfirmationModal
           ouvert={logoutOpen}
-          titre="Tu pars déjà ? 👋"
+          titre="Tu pars déjà ?"
           texte="Tu seras déconnecté. Tes données sont sauvegardées."
           labelAnnuler="Rester"
           labelConfirmer="Me déconnecter"
@@ -668,7 +669,7 @@ export default function ParametresGerant() {
             }}
           >
             <Zap className="w-5 h-5" />
-            ⚡ Copier sur toute la semaine
+            Copier sur toute la semaine
             {selectedHoraire ? (
               <span className="font-normal opacity-80">({JOUR_LABELS[selectedHoraire.jour]})</span>
             ) : null}
@@ -747,8 +748,11 @@ export default function ParametresGerant() {
                             />
                           </div>
                           {estFermetureNuit(h.heure_fin) ? (
-                            <p style={{ color: "var(--g-primary)", fontSize: "12px" }}>
-                              🌙 Ce terrain ferme à {String(h.heure_fin).slice(0, 2)}h du matin (
+                            <p
+                              className="inline-flex items-center gap-1"
+                              style={{ color: "var(--g-primary)", fontSize: "12px" }}
+                            >
+                              <Moon className="w-4 h-4 shrink-0" /> Ce terrain ferme à {String(h.heure_fin).slice(0, 2)}h du matin (
                               {labelNuitDuJourASuivant(h.jour)})
                             </p>
                           ) : null}

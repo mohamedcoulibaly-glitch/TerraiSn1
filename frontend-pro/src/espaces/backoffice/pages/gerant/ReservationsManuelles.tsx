@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MessageCircle } from "lucide-react";
+import { Check, MessageCircle, type LucideIcon } from "lucide-react";
 import { gerantApi, reservationsApi } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
@@ -15,31 +15,50 @@ import PaymentLockGauge from "@/components/PaymentLockGauge";
 import SilentSyncDot from "@/components/SilentSyncDot";
 import { useGerantDashboard, useGerantLiveInvalidate } from "@/hooks/useGerantLiveData";
 
-const statusMeta: Record<string, { label: string; border: string; badge: string }> = {
+const statusMeta: Record<string, { label: string; Icon?: LucideIcon; border: string; badge: string }> = {
   en_attente: {
-    label: "En attente de paiement",
+    label: "Paiement en cours",
     border: "border-l-[var(--g-en-attente)]",
     badge: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
   },
   confirme: {
-    label: "Réservé ✓",
+    label: "Confirmée",
+    Icon: Check,
     border: "border-l-[var(--color-success)]",
     badge: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   acceptee: {
-    label: "Réservé ✓",
+    label: "Confirmée",
+    Icon: Check,
     border: "border-l-[var(--color-success)]",
     badge: "bg-[color-mix(in_srgb,var(--color-success)_14%,white)] text-[var(--color-success)]",
   },
   joue: {
-    label: "Terminé ✓",
+    label: "Jouée",
+    Icon: Check,
     border: "border-l-[var(--color-primary)]",
     badge: "bg-[var(--color-primary)] text-white",
   },
   match_joue: {
-    label: "Terminé ✓",
+    label: "Jouée",
+    Icon: Check,
     border: "border-l-[var(--color-primary)]",
     badge: "bg-[var(--color-primary)] text-white",
+  },
+  en_attente_paiement: {
+    label: "Paiement en cours",
+    border: "border-l-[var(--g-en-attente)]",
+    badge: "bg-[var(--g-en-attente-bg)] text-[var(--g-en-attente)]",
+  },
+  no_show: {
+    label: "Absence",
+    border: "border-l-[var(--color-warning)]",
+    badge: "bg-[color-mix(in_srgb,var(--color-warning)_14%,white)] text-[var(--color-warning)]",
+  },
+  expire: {
+    label: "Expirée",
+    border: "border-l-[var(--color-text-muted)]",
+    badge: "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
   },
   refusee: {
     label: "Refusée",
@@ -347,8 +366,9 @@ export default function ReservationsManuelles() {
                     />
                   </div>
                 </button>
-                <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${meta.badge}`}>
+                <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2.5 py-1 rounded-full ${meta.badge}`}>
                   {meta.label}
+                  {meta.Icon ? <meta.Icon className="w-3 h-3" /> : null}
                 </span>
               </div>
               {(r.statut === "en_attente" || r.statut === "en_attente_paiement") ? (
@@ -463,8 +483,9 @@ export default function ReservationsManuelles() {
                     {(r.montant || 0).toLocaleString()} CFA
                   </td>
                   <td>
-                    <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${meta.badge}`}>
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2.5 py-1 rounded-full ${meta.badge}`}>
                       {meta.label}
+                      {meta.Icon ? <meta.Icon className="w-3 h-3" /> : null}
                     </span>
                   </td>
                   <td className="space-y-2 min-w-[220px]">

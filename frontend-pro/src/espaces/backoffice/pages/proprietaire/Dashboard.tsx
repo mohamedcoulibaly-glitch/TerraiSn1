@@ -777,10 +777,10 @@ const OwnerDashboard = () => {
               const tone = scoreTone(score);
               const badge =
                 tone === "vert"
-                  ? { label: "Optimal ✓", bg: "var(--p-optimal-bg)", color: "var(--p-optimal)" }
+                  ? { label: "Optimal", Icon: CheckCircle2, bg: "var(--p-optimal-bg)", color: "var(--p-optimal)" }
                   : tone === "orange"
-                    ? { label: "Attention", bg: "var(--p-attention-bg)", color: "var(--p-attention)" }
-                    : { label: "À vérifier", bg: "var(--p-verifier-bg)", color: "var(--p-verifier)" };
+                    ? { label: "Attention", Icon: null, bg: "var(--p-attention-bg)", color: "var(--p-attention)" }
+                    : { label: "À vérifier", Icon: null, bg: "var(--p-verifier-bg)", color: "var(--p-verifier)" };
               return (
                 <button
                   key={terrain.id}
@@ -798,7 +798,8 @@ const OwnerDashboard = () => {
                   <p className="text-[12px] shrink-0 hidden sm:block" style={{ color: "var(--p-text-2)" }}>
                     {health.matchs_scannes}/{health.total_confirmes} matchs validés
                   </p>
-                  <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0" style={{ background: badge.bg, color: badge.color }}>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0" style={{ background: badge.bg, color: badge.color }}>
+                    {badge.Icon ? <badge.Icon className="w-3 h-3" aria-hidden="true" /> : null}
                     {badge.label}
                   </span>
                   <ChevronRight className="w-4 h-4 shrink-0" style={{ color: "var(--p-muted)" }} />
