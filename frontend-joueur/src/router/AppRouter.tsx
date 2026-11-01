@@ -42,9 +42,13 @@ export default function AppRouter() {
       <Route path="/profil" element={<Navigate to="/profil/joueur" replace />} />
       <Route path="/profil/joueur" element={<RequireJoueurAuth>{withSuspense(ProfilJoueur)}</RequireJoueurAuth>} />
 
-      {/* Simulation PayTech — hors layout joueur */}
-      <Route path="/paiement/mock" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
-      <Route path="/simulation/paiement" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
+      {/* Simulation PayTech — uniquement hors production build */}
+      {!import.meta.env.PROD && (
+        <>
+          <Route path="/paiement/mock" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
+          <Route path="/simulation/paiement" element={<RequireJoueurAuth>{withSuspense(MockPayment)}</RequireJoueurAuth>} />
+        </>
+      )}
 
       <Route
         element={

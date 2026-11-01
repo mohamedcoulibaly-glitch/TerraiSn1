@@ -8,6 +8,15 @@ import { toast } from 'sonner';
 const MockPayment = () => {
   const [params] = useSearchParams();
   const [processing, setProcessing] = useState(false);
+
+  // Double garde : routes déjà retirées en PROD build, mais on refuse aussi ici.
+  if (import.meta.env.PROD) {
+    return (
+      <div className="page-container flex items-center justify-center p-5 text-center text-sm text-[var(--color-text-muted)]">
+        Simulation de paiement indisponible en production.
+      </div>
+    );
+  }
   const kind = params.get('kind') || 'reservation';
   const reservationId = Number(params.get('id') || 0);
   const gerantId = Number(params.get('gerant_id') || 0);

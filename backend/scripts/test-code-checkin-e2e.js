@@ -147,11 +147,36 @@ async function main() {
     h.assertEqual('code renvoyé = code du joueur', r.body?.reservation?.code_reservation, code);
 
     resa = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
-    h.assertEqual('parcours terminé : statut match_joue', resa.statut, 'match_joue');
+    // Scan = check-in : statut reste confirme ; match_joue + ligne matchs à la clôture.
+    h.assertEqual('check-in : statut reste confirme', resa.statut, 'confirme');
+    h.assertEqual('check-in : stage checkin', resa.operational_stage, 'checkin');
     h.assert('check-in horodaté', Boolean(resa.checked_in_at));
     h.assert('scan horodaté', Boolean(resa.qr_code_scanne_at));
     h.assertEqual('code jamais modifié par le check-in', resa.code_reservation, code);
-    h.assert('match enregistré', Boolean(queryOne(db, 'SELECT id FROM matchs WHERE reservation_id = ?', [reservationId])));
+    h.assert(
+      'pas de ligne matchs avant clôture',
+      !queryOne(db, 'SELECT id FROM matchs WHERE reservation_id = ?', [reservationId]),
+    );
+
+    // Clôture Kanban → match_joue + INSERT matchs
+    r = await request(baseUrl, 'PATCH', `/api/gerant/reservations/${reservationId}/stage`, {
+      body: { stage: 'match' },
+      token,
+    });
+    h.assertEqual('advance match : HTTP 200', r.status, 200);
+    r = await request(baseUrl, 'PATCH', `/api/gerant/reservations/${reservationId}/stage`, {
+      body: { stage: 'checkout' },
+      token,
+    });
+    h.assertEqual('advance checkout : HTTP 200', r.status, 200);
+    r = await request(baseUrl, 'PATCH', `/api/gerant/reservations/${reservationId}/stage`, {
+      body: { stage: 'closed', encaisserRestant: true, methode: 'especes' },
+      token,
+    });
+    h.assertEqual('clôture : HTTP 200', r.status, 200);
+    resa = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+    h.assertEqual('après clôture : statut match_joue', resa.statut, 'match_joue');
+    h.assert('match enregistré à la clôture', Boolean(queryOne(db, 'SELECT id FROM matchs WHERE reservation_id = ?', [reservationId])));
 
     // --- 5. Usage unique : le même code ne ressert jamais ------------------------
     r = await request(baseUrl, 'POST', '/api/gerant/reservations/checkin-by-code', {

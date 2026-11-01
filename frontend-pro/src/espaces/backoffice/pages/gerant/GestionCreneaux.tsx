@@ -108,10 +108,11 @@ const ManagerCalendar = () => {
     weekDays.push(d);
   }
 
+  // Inclut la nuit prolongée (00h–05h) pour rester aligné avec le Dashboard.
   const timeSlots = (() => {
-    const slots = hoursRangeFromHoraires(horaires, { min: 6, max: 24 });
+    const slots = hoursRangeFromHoraires(horaires, { min: 0, max: 24 });
     if (slots.length) return slots;
-    return Array.from({ length: 18 }, (_, i) => formatHour(i + 6));
+    return Array.from({ length: 24 }, (_, i) => formatHour(i));
   })();
 
   const formatDate = (date: Date) => localYmd(date);
