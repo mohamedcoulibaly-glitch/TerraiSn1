@@ -762,6 +762,7 @@ export default function ReservationExpressModal({
   const canGoStep2 = Boolean(heureDebutEffective && heureFin && verifState !== "conflit");
   const canGoStep3 = Boolean(!telError && displayNom);
 
+  /** Gate WA uniquement pour l'envoi de lien — cash / sans avance passent sans WA. */
   const requireWhatsAppOrGate = () => {
     if (waDown || waConnected === false) {
       setWaGateOpen(true);
@@ -877,7 +878,7 @@ export default function ReservationExpressModal({
       toast.error("Les confirmations manuelles sont désactivées pour ce terrain");
       return;
     }
-    if (!requireWhatsAppOrGate()) return;
+    // Cash / sans avance : pas de gate WA (notif best-effort côté serveur).
     setBusy(true);
     try {
       if (sansAvance) {
@@ -897,17 +898,22 @@ export default function ReservationExpressModal({
         onCreated?.();
         clearDraft(expressDraftKey(terrainId));
         setDoneMsg("Réservation confirmée — paiement sur place");
-        toast.success("Réservation confirmée — total à encaisser sur place");
+        toast.success(
+          waDown || waConnected === false
+            ? "Confirmée — pense à connecter WhatsApp pour notifier le joueur"
+            : "Réservation confirmée — total à encaisser sur place",
+        );
         window.setTimeout(() => {
           onClose();
           navigate(`/backoffice/gerant/reservations/${created.reservation_id}`);
         }, 900);
         return;
       }
+      // Un seul appel atomique : create + confirm côté serveur.
       const created = (await reservationsApi.createGerant({
         terrain_id: terrainId,
         date: bookingDateTechnique,
-          heure_debut: heureDebutEffective,
+        heure_debut: heureDebutEffective,
         heure_fin: heureFin,
         joueur_nom: nom,
         joueur_prenom: joueurPrenom.trim() || undefined,
@@ -915,13 +921,20 @@ export default function ReservationExpressModal({
         format_terrain: formatTerrain,
         joueur_id: joueurId || undefined,
         mode: "manuel",
-      })) as { reservation_id?: number };
+        note: noteManuel.trim() || undefined,
+      })) as { reservation_id?: number; statut?: string; code_reservation?: string | null };
       if (!created?.reservation_id) throw new Error("Réservation non créée");
-      await gerantApi.confirmerManuellement(created.reservation_id, noteManuel.trim() || undefined);
+      if (created.statut && created.statut !== "confirme") {
+        throw new Error("Confirmation manuelle incomplète — réessaie");
+      }
       onCreated?.();
       clearDraft(expressDraftKey(terrainId));
       setDoneMsg("Réservation confirmée — Commission en dette");
-      toast.success("Réservation confirmée — Commission en dette");
+      toast.success(
+        waDown || waConnected === false
+          ? "Confirmée (commission en dette) — WhatsApp déconnecté, QR à renvoyer plus tard"
+          : "Réservation confirmée — Commission en dette",
+      );
       window.setTimeout(() => {
         onClose();
         navigate(`/backoffice/gerant/reservations/${created.reservation_id}`);
@@ -986,9 +999,13 @@ export default function ReservationExpressModal({
               {step === 2 && " — Joueur"}
               {step === 3 && " — Paiement"}
             </p>
-            {waConnected === false && step === 3 && !waGateOpen ? (
+            {waConnected === false && step === 3 && !waGateOpen && payChoice === "lien" ? (
               <p className="mt-1 text-[11px] font-medium text-amber-600">
-                WhatsApp non connecté — tu seras invité à l&apos;appairer avant validation.
+                WhatsApp non connecté — requis pour envoyer le lien de paiement.
+              </p>
+            ) : waConnected === false && step === 3 && !waGateOpen ? (
+              <p className="mt-1 text-[11px] font-medium text-amber-600">
+                WhatsApp non connecté — la confirmation cash reste possible, notif joueur plus tard.
               </p>
             ) : null}
           </div>
@@ -1034,7 +1051,7 @@ export default function ReservationExpressModal({
                   <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--g-muted)" }}>
                     {waDown
                       ? WHATSAPP_INFRA_MESSAGE
-                      : "Connecte ton WhatsApp pour finaliser la réservation et notifier le joueur."}
+                      : "Connecte ton WhatsApp pour envoyer le lien de paiement au joueur. Pour un paiement déjà reçu, choisis « déjà payé » à l’étape paiement — sans WhatsApp."}
                   </p>
                 </div>
               </div>
@@ -1047,6 +1064,19 @@ export default function ReservationExpressModal({
                 <WhatsAppIcon className="w-5 h-5" light />
                 Connecter WhatsApp
               </button>
+              {sansAvance || canConfirmManual ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWaGateOpen(false);
+                    setPayChoice("manuel");
+                  }}
+                  className="flex min-h-[44px] w-full items-center justify-center rounded-xl text-sm font-semibold"
+                  style={{ color: "var(--g-warning)", border: "1px solid var(--g-warning)" }}
+                >
+                  Passer en confirmation cash
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setWaGateOpen(false)}

@@ -2245,6 +2245,53 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     }
 
     if (creePar === 'gerant') {
+      // Mode manuel : confirmation atomique dans la même requête (évite créneau
+      // verrouillé sans confirm si un 2e appel client échoue).
+      if (mode === 'manuel' && ['en_attente', 'en_attente_paiement'].includes(String(statutInitial))) {
+        try {
+          transaction(db, () => {
+            detteCommissionService.confirmerManuellement(db, {
+              reservationId: reservation.id,
+              gerantId: req.user.id,
+              note: req.body?.note,
+            });
+          });
+          saveDb();
+          reservation = queryOne(
+            db,
+            `SELECT r.*, t.nom AS terrain_nom
+             FROM reservations r
+             JOIN terrains t ON t.id = r.terrain_id
+             WHERE r.id = ?`,
+            [reservation.id],
+          ) || reservation;
+          statutInitial = 'confirme';
+          await notificationService.envoyerConfirmation(reservation.id).catch((error) => {
+            logger.warn('index.js', `WhatsApp confirm. manuelle atomique #${reservation.id}`, error);
+          });
+          await pushService.envoyerConfirmationPush(reservation.id).catch((error) => {
+            logger.warn('index.js', `Push confirm. manuelle atomique #${reservation.id}`, error);
+          });
+          require('./services/sseManager').emettrePourTerrain(terrainId, 'reservation_confirmee', {
+            reservation_id: reservation.id,
+            creneau_id: reservation.creneau_id || null,
+            code: reservation.code_reservation || null,
+            statut: 'confirme',
+            source: 'confirmation_manuelle_atomique',
+            joueur_prenom: reservation.joueur_nom || null,
+            heure_debut: heureDebutNorm,
+            heure_fin: heureFinNorm,
+          });
+        } catch (confirmErr) {
+          transaction(db, () => {
+            libererCreneauxReservation(db, reservation, ['en_attente_paiement', 'en_attente']);
+            db.run("UPDATE reservations SET statut = 'annule' WHERE id = ?", [reservation.id]);
+          });
+          saveDb();
+          throw confirmErr;
+        }
+      }
+
       // Temps réel : les autres gérants du terrain voient la création manuelle
       require('./services/sseManager').emettrePourTerrain(terrainId, 'reservation_creee', {
         reservation_id: reservation.id,
@@ -2257,7 +2304,7 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
       await logActivite({
         gerant_id: req.user.id,
         terrain_id: terrainId,
-        action: mode === 'bloquer' ? 'reservation_bloquee' : 'reservation_creee',
+        action: mode === 'bloquer' ? 'reservation_bloquee' : mode === 'manuel' ? 'confirmation_manuelle' : 'reservation_creee',
         reservation_id: reservation.id,
         details: {
           date,

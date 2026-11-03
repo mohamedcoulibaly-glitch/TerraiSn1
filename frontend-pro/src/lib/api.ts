@@ -648,6 +648,8 @@ export const reservationsApi = {
     joueur_id?: number;
     mode?: 'paiement' | 'bloquer' | 'manuel';
     anonyme?: boolean;
+    /** Note gérant — utilisée si mode manuel (confirm atomique serveur). */
+    note?: string;
   }) {
     return await request('/reservations/gerant', { method: 'POST', body: JSON.stringify(data) });
   },
@@ -706,10 +708,6 @@ export const reservationsApi = {
   async parTerrain(terrainId: number | string) {
     return await request(`/reservations/terrain/${terrainId}`);
   },
-
-  async marquerJoue(id: number | string, methode: 'especes' | 'wave' | 'orange_money' = 'especes') {
-    return await request(`/gerant/reservations/${id}/scanner`, { method: 'PATCH', body: JSON.stringify({ methode }) });
-  },
 };
 
 // ============================================================
@@ -718,10 +716,6 @@ export const reservationsApi = {
 export const paiementsApi = {
   async create(data: { reservation_id: number; methode: string; telephone?: string }) {
     return await request('/paiements', { method: 'POST', body: JSON.stringify(data) });
-  },
-
-  async marquerJoue(id: number | string, methode: 'especes' | 'wave' | 'orange_money' = 'especes') {
-    return await request(`/gerant/reservations/${id}/scanner`, { method: 'PATCH', body: JSON.stringify({ methode }) });
   },
 
   async mockComplete(data: { reservation_id: number; ref_command: string; action: 'success' | 'cancel' }) {

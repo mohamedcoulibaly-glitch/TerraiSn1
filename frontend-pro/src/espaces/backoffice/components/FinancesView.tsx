@@ -207,7 +207,7 @@ export default function FinancesView({
         </button>
       )}
 
-      {data.mention_blocages ? (
+      {Number(data.encaisse_blocages) > 0 || data.mention_blocages ? (
         <div
           className="rounded-xl px-3 py-2.5 text-xs leading-relaxed"
           style={{
@@ -215,13 +215,19 @@ export default function FinancesView({
             color: "var(--g-text-2)",
           }}
         >
-          {data.mention_blocages}
           {Number(data.encaisse_blocages) > 0 ? (
-            <span className="block mt-1" style={{ color: "var(--g-muted)" }}>
-              Matchs {formatFcfa(data.encaisse_reservations)} · Abonnements{" "}
-              {formatFcfa(data.encaisse_abonnements)} · Tournois {formatFcfa(data.encaisse_tournois)}
-            </span>
-          ) : null}
+            <>
+              <span className="font-semibold" style={{ color: "var(--g-text)" }}>
+                Dont abonnements et tournois
+              </span>
+              <span className="block mt-1" style={{ color: "var(--g-muted)" }}>
+                Matchs {formatFcfa(data.encaisse_reservations)} · Abonnements{" "}
+                {formatFcfa(data.encaisse_abonnements)} · Tournois {formatFcfa(data.encaisse_tournois)}
+              </span>
+            </>
+          ) : (
+            data.mention_blocages
+          )}
         </div>
       ) : null}
 

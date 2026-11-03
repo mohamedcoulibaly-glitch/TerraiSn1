@@ -28,7 +28,11 @@ const {
 const { demanderRetrait } = require('../services/retraitService');
 const { normaliserNumeroSn } = require('../services/calculsPaiement');
 const detteService = require('../services/detteCommissionService');
-const { agregatsNetTerrains, deltaPctVsPrecedent } = require('../services/financeNetService');
+const {
+  agregatsNetTerrains,
+  deltaPctVsPrecedent,
+  agregatsEncaissementsBlocages,
+} = require('../services/financeNetService');
 
 const router = express.Router();
 
@@ -121,7 +125,11 @@ router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire')
         frais_payout_gerant: 0,
         valeur_totale_matchs: 0,
         commission_pct: 0,
-        mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
+        encaisse_reservations: 0,
+        encaisse_abonnements: 0,
+        encaisse_tournois: 0,
+        encaisse_blocages: 0,
+        mention_blocages: null,
       });
     }
 
@@ -238,12 +246,15 @@ router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire')
       ids,
     );
     const deltaPct = deltaPctVsPrecedent(db, ids, since, today, net.total_avances || totalEncaisse);
+    const blocages = agregatsEncaissementsBlocages(db, ids, since, until);
+    const encaisseReservations = Number(net.total_avances || 0) + Number(net.soldes_encaissees || 0);
+    const totalAvecBlocages = Number(totalEncaisse || 0) + Number(blocages.encaisse_blocages || 0);
 
     res.json({
       periode,
       from,
       to,
-      total_encaisse: totalEncaisse,
+      total_encaisse: totalAvecBlocages,
       avances_recues: totalEncaisse,
       matchs_joues: net.matchs_joues,
       a_venir: aVenir,
@@ -251,18 +262,19 @@ router.get('/proprietaire/finances', authMiddleware, requireRole('proprietaire')
       graphique,
       par_terrain: [...byTerrain.values()],
       series: terrainsScoped.map((t) => ({ key: String(t.id), id: t.id, nom: t.nom })),
-      variation: buildVariation(totalEncaisse, prevEncaisse, variationLabel),
+      variation: buildVariation(totalAvecBlocages, prevEncaisse, variationLabel),
       confirmations_manuelles,
-      mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
-      encaisse_abonnements: 0,
-      encaisse_tournois: 0,
-      encaisse_blocages: 0,
+      encaisse_reservations: encaisseReservations,
+      encaisse_abonnements: blocages.encaisse_abonnements,
+      encaisse_tournois: blocages.encaisse_tournois,
+      encaisse_blocages: blocages.encaisse_blocages,
+      mention_blocages: null,
       total_avances: net.total_avances || totalEncaisse,
       total_commission: net.total_commission,
       frais_payout_gerant: net.frais_payout_gerant,
       montant_net: net.montant_net,
       soldes_encaissees: net.soldes_encaissees,
-      montant_touche: net.montant_touche,
+      montant_touche: Number(net.montant_touche || 0) + Number(blocages.encaisse_blocages || 0),
       solde_a_retirer: net.solde_a_retirer,
       net_recu: net.net_recu,
       valeur_totale_matchs: net.valeur_totale_matchs,
@@ -398,8 +410,10 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
     const until = periode === 'aujourd_hui' ? today : null;
     const net = agregatsNetTerrains(db, [terrainId], from, until);
 
-    // Avances + soldes réellement encaissés (évite de sous-estimer vs KPI CA).
-    const totalEncaisse = Number(net.total_avances || 0) + Number(net.soldes_encaissees || 0);
+    const blocages = agregatsEncaissementsBlocages(db, [terrainId], from, until);
+    // Avances + soldes + abo/tournoi réellement encaissés.
+    const encaisseReservations = Number(net.total_avances || 0) + Number(net.soldes_encaissees || 0);
+    const totalEncaisse = encaisseReservations + Number(blocages.encaisse_blocages || 0);
     const aVenir = reservations.filter(
       (r) => ['confirme', 'acceptee', 'en_attente'].includes(String(r.statut)) && String(r.date) >= today,
     ).length;
@@ -448,10 +462,11 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
         a_venir: aVenir,
         nb_reservations: reservations.length,
       }],
-      mention_blocages: 'Les abonnements et tournois ne sont pas encore pris en compte dans ce total.',
-      encaisse_abonnements: 0,
-      encaisse_tournois: 0,
-      encaisse_blocages: 0,
+      encaisse_reservations: encaisseReservations,
+      encaisse_abonnements: blocages.encaisse_abonnements,
+      encaisse_tournois: blocages.encaisse_tournois,
+      encaisse_blocages: blocages.encaisse_blocages,
+      mention_blocages: null,
       // Solde Wave/OM réellement retirable (ledger dus) — source de vérité retrait.
       solde_disponible: soldeWave,
       solde_net_apres_dette: soldeNetApresDette,
@@ -461,7 +476,7 @@ router.get('/gerant/finances', authMiddleware, requireRole('gerant'), async (req
       total_commission: net.total_commission,
       frais_payout_gerant: net.frais_payout_gerant,
       montant_net: net.montant_net,
-      montant_touche: net.montant_touche,
+      montant_touche: Number(net.montant_touche || 0) + Number(blocages.encaisse_blocages || 0),
       net_recu: net.net_recu,
       valeur_totale_matchs: net.valeur_totale_matchs,
       dette_commission: detteOuverte,

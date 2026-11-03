@@ -20,7 +20,7 @@
  * @param {string} sinceYmd inclusive
  * @param {string|null} [untilYmd] inclusive — aujourd'hui = since===until
  */
-const { queryOne } = require('../database');
+const { queryOne, queryAll } = require('../database');
 
 function agregatsNetTerrains(db, terrainIds, sinceYmd, untilYmd = null) {
   const ids = (Array.isArray(terrainIds) ? terrainIds : [])
@@ -178,7 +178,51 @@ function deltaPctVsPrecedent(db, terrainIds, fromYmd, toYmd, currentTotal, metri
   return Math.round(((cur - prevTotal) / prevTotal) * 100);
 }
 
+/**
+ * Encaissements abonnements / tournois (table encaissements_blocages).
+ * @returns {{ encaisse_abonnements: number, encaisse_tournois: number, encaisse_blocages: number }}
+ */
+function agregatsEncaissementsBlocages(db, terrainIds, sinceYmd, untilYmd = null) {
+  const ids = (Array.isArray(terrainIds) ? terrainIds : [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length || !sinceYmd) {
+    return { encaisse_abonnements: 0, encaisse_tournois: 0, encaisse_blocages: 0 };
+  }
+  const placeholders = ids.map(() => '?').join(',');
+  const until = untilYmd || null;
+  const dateFilter = until
+    ? 'AND e.date_encaissement >= ? AND e.date_encaissement <= ?'
+    : 'AND e.date_encaissement >= ?';
+  const dateParams = until ? [sinceYmd, until] : [sinceYmd];
+  const rows = queryAll(
+    db,
+    `SELECT UPPER(COALESCE(g.type_blocage, '')) AS type_blocage,
+            COALESCE(SUM(e.montant), 0) AS total
+     FROM encaissements_blocages e
+     JOIN blocages_groupes g ON g.id = e.groupe_id
+     WHERE e.terrain_id IN (${placeholders})
+       ${dateFilter}
+     GROUP BY UPPER(COALESCE(g.type_blocage, ''))`,
+    [...ids, ...dateParams],
+  );
+  let abo = 0;
+  let tournoi = 0;
+  for (const row of rows || []) {
+    const type = String(row.type_blocage || '');
+    const total = Number(row.total || 0);
+    if (type === 'ABONNEMENT') abo += total;
+    else if (type === 'TOURNOI') tournoi += total;
+  }
+  return {
+    encaisse_abonnements: abo,
+    encaisse_tournois: tournoi,
+    encaisse_blocages: abo + tournoi,
+  };
+}
+
 module.exports = {
   agregatsNetTerrains,
   deltaPctVsPrecedent,
+  agregatsEncaissementsBlocages,
 };

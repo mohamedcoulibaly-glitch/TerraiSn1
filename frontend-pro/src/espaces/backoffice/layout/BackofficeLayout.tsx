@@ -5,7 +5,6 @@ import {
   Users,
   Banknote,
   Calendar,
-  HandCoins,
   BarChart3,
   Menu,
   X,
@@ -35,11 +34,8 @@ const NAV_BY_ROLE: Record<Exclude<AppRole, "joueur">, NavItem[]> = {
     { to: "/backoffice/admin/revenus", label: "Revenus", icon: Banknote },
     { to: "/backoffice/admin/abonnements", label: "Abonnements", icon: Calendar },
   ],
-  gerant: [
-    { to: "/backoffice/gerant", label: "Dashboard", icon: LayoutDashboard, end: true },
-    { to: "/backoffice/gerant/creneaux", label: "Creneaux", icon: Calendar },
-    { to: "/backoffice/gerant/reservations", label: "Réservation manuelle", icon: HandCoins },
-  ],
+  // Nav gérant portée par GerantLayout (tabs Accueil / Joueurs / Finances / Paramètres).
+  gerant: [],
   proprietaire: [
     { to: "/backoffice/proprietaire", label: "Dashboard", icon: LayoutDashboard, end: true },
     { to: "/backoffice/proprietaire/revenus", label: "Mes revenus", icon: BarChart3 },
