@@ -118,22 +118,16 @@ function reprendreCreneauxPourConfirmation(db, reservation) {
 }
 
 function creneauEncoreDisponiblePourRevive(db, reservation) {
-  const conflit = queryOne(
+  const { peutReserver, normalizeFormat } = require('../services/capaciteService');
+  return peutReserver(
+    normalizeFormat(reservation.format_terrain || 'entier'),
     db,
-    `SELECT id FROM reservations
-      WHERE terrain_id = ? AND date = ? AND id != ?
-        AND statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
-        AND heure_debut < ? AND heure_fin > ?
-      LIMIT 1`,
-    [
-      reservation.terrain_id,
-      reservation.date,
-      reservation.id,
-      reservation.heure_fin,
-      reservation.heure_debut,
-    ],
+    reservation.terrain_id,
+    reservation.date,
+    reservation.heure_debut,
+    reservation.heure_fin,
+    { excludeReservationId: reservation.id },
   );
-  return !conflit;
 }
 
 async function traiterConfirmationPaytech(db, reservationId, refCommand, options = {}) {
