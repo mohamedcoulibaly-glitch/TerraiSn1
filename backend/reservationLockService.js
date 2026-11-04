@@ -6,6 +6,13 @@ const {
   normalizeHourString,
   hourlySlots,
 } = require('./scheduleService');
+const {
+  peutReserver,
+  attribuerZone,
+  syncStatutCreneaux,
+  normalizeFormat,
+  etatCreneau,
+} = require('./services/capaciteService');
 
 const DEFAULT_DELAI_VERROU_PAIEMENT_MIN = 15;
 
@@ -60,13 +67,27 @@ function libererVerrousExpires(database, now = Date.now()) {
     if (rowsModified(database) !== 1) continue;
     libererCreneauxReservation(database, reservation, ['en_attente_paiement']);
     ids.push(reservation.id);
-    // Temps réel : le gérant (et la fiche joueur) voient le créneau se libérer
-    // dès l'expiration du verrou, sans attendre un refresh.
+    const etat = etatCreneau(
+      database,
+      reservation.terrain_id,
+      reservation.date,
+      reservation.heure_debut,
+      reservation.heure_fin,
+    );
     try {
-      require('./services/sseManager').emettrePourTerrain(reservation.terrain_id, 'creneau_libere', {
+      const eventType =
+        etat.etat === 'complet'
+          ? 'creneau_complet'
+          : etat.etat === 'partiel'
+            ? 'creneau_partiel'
+            : 'creneau_libere';
+      require('./services/sseManager').emettrePourTerrain(reservation.terrain_id, eventType, {
         reservation_id: reservation.id,
         creneau_id: reservation.creneau_id || null,
-        statut: 'libre',
+        statut: etat.etat,
+        etat: etat.etat,
+        zones_libres: etat.zones_libres,
+        zone: reservation.zone || null,
         raison: 'verrou_expire',
       });
     } catch {
@@ -76,76 +97,23 @@ function libererVerrousExpires(database, now = Date.now()) {
   return ids;
 }
 
-function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
+/**
+ * Vérifie la capacité (zones A/B) et assure l'existence des lignes creneaux.
+ * @param {string} [formatTerrain='entier'] - 'moitie' | 'entier' — consomme la capacité du type
+ * @returns {number} creneau_id principal (1ère heure)
+ */
+function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin, formatTerrain = 'entier') {
   libererVerrousExpires(database);
   const slots = hourlySlots(heureDebut, heureFin);
   if (!slots.length) throw conflictError('Créneau invalide');
 
-  const now = Date.now();
-  const chevauchementResa = queryAll(
-    database,
-    `SELECT id FROM reservations
-      WHERE terrain_id = ? AND date = ?
-        AND (
-          statut IN ('confirme', 'acceptee')
-          OR (
-            statut IN ('en_attente', 'en_attente_paiement')
-            AND verrou_expire_at IS NOT NULL
-            AND verrou_expire_at > ?
-          )
-        )
-        AND heure_debut < ? AND heure_fin > ?`,
-    [terrainId, date, now, heureFin, heureDebut],
-  );
-  if (chevauchementResa.length) throw conflictError();
-
-  // Libère les en_attente_paiement orphelins (retour navigateur / verrou expiré non nettoyé)
-  const orphans = queryAll(
-    database,
-    `SELECT id, heure_debut, heure_fin FROM creneaux
-      WHERE terrain_id = ? AND date = ?
-        AND statut = 'en_attente_paiement'
-        AND substr(heure_debut,1,5) < ? AND substr(heure_fin,1,5) > ?`,
-    [terrainId, date, heureFin, heureDebut],
-  );
-  for (const slotOrphelin of orphans) {
-    const active = queryOne(
-      database,
-      `SELECT id FROM reservations
-        WHERE terrain_id = ? AND date = ?
-          AND statut IN ('en_attente', 'en_attente_paiement')
-          AND verrou_expire_at IS NOT NULL
-          AND verrou_expire_at > ?
-          AND heure_debut < ? AND heure_fin > ?`,
-      [terrainId, date, now, slotOrphelin.heure_fin, slotOrphelin.heure_debut],
+  const format = normalizeFormat(formatTerrain);
+  if (!peutReserver(format, database, terrainId, date, heureDebut, heureFin)) {
+    throw conflictError(
+      format === 'moitie'
+        ? 'Aucune moitié disponible sur ce créneau'
+        : 'Créneau déjà réservé ou en attente de paiement',
     );
-    if (!active) {
-      database.run(
-        "UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut = 'en_attente_paiement'",
-        [slotOrphelin.id],
-      );
-    }
-  }
-
-  const chevauchementCreneau = queryAll(
-    database,
-    `SELECT id FROM creneaux
-      WHERE terrain_id = ? AND date = ?
-        AND statut != 'libre'
-        AND substr(heure_debut,1,5) < ? AND substr(heure_fin,1,5) > ?`,
-    [terrainId, date, heureFin, heureDebut],
-  );
-  if (chevauchementCreneau.length) throw conflictError();
-
-  const blocages = queryAll(
-    database,
-    `SELECT id FROM blocages_creneaux
-      WHERE terrain_id = ? AND date = ?
-        AND substr(heure_debut,1,5) < ? AND substr(heure_fin,1,5) > ?`,
-    [terrainId, date, heureFin, heureDebut],
-  );
-  if (blocages.length) {
-    throw conflictError('Créneau bloqué par le gérant');
   }
 
   let primaryId = null;
@@ -166,97 +134,59 @@ function lockCreneauxAtomique(database, terrainId, date, heureDebut, heureFin) {
         [terrainId, date, slot.heure_debut, slot.heure_fin],
       );
     }
-
-    database.run(
-      "UPDATE creneaux SET statut = 'en_attente_paiement' WHERE id = ? AND statut = 'libre'",
-      [creneau.id],
-    );
-    if (rowsModified(database) !== 1) throw conflictError();
     if (primaryId == null) primaryId = creneau.id;
   }
 
-  // Si une ancienne ligne multi-heures existe encore pour la plage exacte, la verrouiller aussi
+  // Ligne multi-heures legacy éventuelle
   const exact = queryOne(
     database,
     'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?',
     [terrainId, date, heureDebut, heureFin],
   );
-  if (exact && exact.statut === 'libre' && slots.length > 1) {
+  if (!exact && slots.length > 1) {
     database.run(
-      "UPDATE creneaux SET statut = 'en_attente_paiement' WHERE id = ? AND statut = 'libre'",
-      [exact.id],
+      'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
+      [terrainId, date, heureDebut, heureFin, 'libre'],
     );
   }
 
   return primaryId;
 }
 
-function libererCreneauxReservation(database, reservation, statuts = ['en_attente_paiement', 'reserve']) {
+/**
+ * Recalcule les statuts créneaux après libération (capacité zones).
+ * Le paramètre `statuts` est conservé pour compatibilité d'appel (ignoré).
+ */
+function libererCreneauxReservation(database, reservation, _statuts = ['en_attente_paiement', 'reserve']) {
   if (!reservation) return;
-  const statutList = statuts.map((s) => `'${s}'`).join(', ');
-  const slots = hourlySlots(reservation.heure_debut, reservation.heure_fin);
-
-  for (const slot of slots) {
-    database.run(
-      `UPDATE creneaux SET statut = 'libre'
-        WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?
-          AND statut IN (${statutList})`,
-      [reservation.terrain_id, reservation.date, slot.heure_debut, slot.heure_fin],
-    );
-  }
-
-  if (reservation.creneau_id) {
-    database.run(
-      `UPDATE creneaux SET statut = 'libre' WHERE id = ? AND statut IN (${statutList})`,
-      [reservation.creneau_id],
-    );
-  }
-
-  // Ancienne ligne multi-heures éventuelle
-  if (slots.length > 1) {
-    database.run(
-      `UPDATE creneaux SET statut = 'libre'
-        WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?
-          AND statut IN (${statutList})`,
-      [reservation.terrain_id, reservation.date, reservation.heure_debut, reservation.heure_fin],
-    );
-  }
-}
-
-function confirmerCreneauxReservation(database, reservation) {
-  const slots = hourlySlots(reservation.heure_debut, reservation.heure_fin);
-  let confirmed = 0;
-  for (const slot of slots) {
-    database.run(
-      `UPDATE creneaux SET statut = 'reserve'
-        WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?
-          AND statut = 'en_attente_paiement'`,
-      [reservation.terrain_id, reservation.date, slot.heure_debut, slot.heure_fin],
-    );
-    confirmed += rowsModified(database);
-  }
-  if (reservation.creneau_id) {
-    database.run(
-      "UPDATE creneaux SET statut = 'reserve' WHERE id = ? AND statut = 'en_attente_paiement'",
-      [reservation.creneau_id],
-    );
-    confirmed += rowsModified(database);
-  }
-  if (slots.length > 1) {
-    database.run(
-      `UPDATE creneaux SET statut = 'reserve'
-        WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ?
-          AND statut = 'en_attente_paiement'`,
-      [reservation.terrain_id, reservation.date, reservation.heure_debut, reservation.heure_fin],
-    );
-    confirmed += rowsModified(database);
-  }
-  return confirmed;
+  syncStatutCreneaux(
+    database,
+    reservation.terrain_id,
+    reservation.date,
+    reservation.heure_debut,
+    reservation.heure_fin,
+  );
 }
 
 /**
- * Annule les autres réservations en attente qui chevauchent le même créneau
- * lorsqu'une réservation est confirmée (manuel ou payin).
+ * Aligne les créneaux après confirmation (zone déjà écrite sur la réservation).
+ * @returns {number} >0 si sync OK
+ */
+function confirmerCreneauxReservation(database, reservation) {
+  if (!reservation?.terrain_id) return 0;
+  syncStatutCreneaux(
+    database,
+    reservation.terrain_id,
+    reservation.date,
+    reservation.heure_debut,
+    reservation.heure_fin,
+  );
+  return 1;
+}
+
+/**
+ * Annule les réservations en attente qui ne rentrent plus en capacité
+ * après confirmation d'une autre (demi concurrente sur zone encore libre = conservée).
  * @returns {number[]} ids des réservations annulées
  */
 /**
@@ -352,7 +282,8 @@ function annulerReservationsConcurrentes(database, reservation) {
   if (!reservation?.terrain_id || !reservation?.date) return [];
   const losers = queryAll(
     database,
-    `SELECT id, creneau_id, terrain_id, date, heure_debut, heure_fin FROM reservations
+    `SELECT id, creneau_id, terrain_id, date, heure_debut, heure_fin, format_terrain, zone
+     FROM reservations
      WHERE terrain_id = ? AND date = ? AND id != ?
        AND statut IN ('en_attente', 'en_attente_paiement')
        AND heure_debut < ? AND heure_fin > ?`,
@@ -366,6 +297,18 @@ function annulerReservationsConcurrentes(database, reservation) {
   );
   const loserIds = [];
   for (const loser of losers) {
+    const format = normalizeFormat(loser.format_terrain || 'entier');
+    const encorePossible = peutReserver(
+      format,
+      database,
+      loser.terrain_id,
+      loser.date,
+      loser.heure_debut,
+      loser.heure_fin,
+      { excludeReservationId: loser.id },
+    );
+    if (encorePossible) continue;
+
     database.run(
       "UPDATE reservations SET statut = 'annule' WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')",
       [loser.id],
@@ -379,6 +322,70 @@ function annulerReservationsConcurrentes(database, reservation) {
     loserIds.push(loser.id);
   }
   return loserIds;
+}
+
+/**
+ * Contrôle atomique capacité + attribution zone + sync créneaux.
+ * À appeler dans une transaction, réservation encore en attente (exclure self).
+ * @returns {{ ok: true, zone: string } | { ok: false, reason: string }}
+ */
+function confirmerAvecCapacite(database, reservation) {
+  if (!reservation?.id || !reservation?.terrain_id) {
+    return { ok: false, reason: 'reservation_invalide' };
+  }
+  const format = normalizeFormat(reservation.format_terrain || 'entier');
+  const opts = { excludeReservationId: reservation.id };
+  if (
+    !peutReserver(
+      format,
+      database,
+      reservation.terrain_id,
+      reservation.date,
+      reservation.heure_debut,
+      reservation.heure_fin,
+      opts,
+    )
+  ) {
+    return { ok: false, reason: 'capacite_insuffisante' };
+  }
+  const zone = attribuerZone(
+    format,
+    database,
+    reservation.terrain_id,
+    reservation.date,
+    reservation.heure_debut,
+    reservation.heure_fin,
+    opts,
+  );
+  if (!zone) return { ok: false, reason: 'capacite_insuffisante' };
+
+  database.run('UPDATE reservations SET zone = ? WHERE id = ?', [zone, reservation.id]);
+  const withZone = { ...reservation, zone, format_terrain: format };
+  confirmerCreneauxReservation(database, withZone);
+  annulerReservationsConcurrentes(database, withZone);
+  return { ok: true, zone };
+}
+
+/**
+ * Émet SSE capacité (partiel / complet / libéré) pour un intervalle.
+ */
+function emettreEtatCreneau(terrainId, etat, extra = {}) {
+  try {
+    const eventType =
+      etat.etat === 'complet'
+        ? 'creneau_complet'
+        : etat.etat === 'partiel'
+          ? 'creneau_partiel'
+          : 'creneau_libere';
+    require('./services/sseManager').emettrePourTerrain(terrainId, eventType, {
+      etat: etat.etat,
+      zones_libres: etat.zones_libres,
+      zones_occupees: etat.zones_occupees,
+      ...extra,
+    });
+  } catch {
+    // best-effort
+  }
 }
 
 module.exports = {
@@ -395,6 +402,8 @@ module.exports = {
   libererCreneauxReservation,
   peutConfirmer,
   confirmerCreneauxReservation,
+  confirmerAvecCapacite,
   annulerReservationsConcurrentes,
+  emettreEtatCreneau,
   conflictError,
 };

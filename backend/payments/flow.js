@@ -21,10 +21,12 @@ const { peutConfirmer } = require('../domain/reservationState');
 const { gerantDeepLink } = require('../lib/gerantDeepLink');
 const {
   libererCreneauxReservation,
-  confirmerCreneauxReservation,
+  confirmerAvecCapacite,
   annulerReservationsConcurrentes,
   rowsModified,
+  emettreEtatCreneau,
 } = require('../reservationLockService');
+const { etatCreneau } = require('../services/capaciteService');
 const { calculerMontantAvance, calculerCommissionPrelevee } = require('../pricingService');
 const { appliquerApresPayin, tenterAutoSiPayable } = require('../services/payoutEngine');
 const { chargerContrat } = require('../services/contratService');
@@ -141,7 +143,7 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
   const canal = normalizeCanal(options.canal);
 
   transaction(db, () => {
-    const currentReservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
+    let currentReservation = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservationId]);
     if (!currentReservation) return;
 
     const existingPaidPayment = queryOne(db, `SELECT id FROM paiements WHERE reservation_id = ? AND statut = 'paye' AND ${METHODES_EN_LIGNE_SQL} LIMIT 1`, [reservationId]);
@@ -196,26 +198,31 @@ async function traiterConfirmationPaytech(db, reservationId, refCommand, options
       return;
     }
 
+    // Capacité zones : recalcule peutReserver à cet instant (hors self), attribue A/B/AB.
+    const capacite = confirmerAvecCapacite(db, currentReservation);
+    if (!capacite.ok) {
+      libererCreneauxReservation(db, currentReservation, ['en_attente_paiement']);
+      db.run(
+        "UPDATE reservations SET statut = 'annule', confirme_at = NULL WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')",
+        [reservationId],
+      );
+      action = 'refund';
+      return;
+    }
+
     const confirmeAt = new Date().toISOString();
     db.run(
-      `UPDATE reservations SET statut = 'confirme', confirme_at = COALESCE(confirme_at, ?)
+      `UPDATE reservations SET statut = 'confirme', confirme_at = COALESCE(confirme_at, ?), zone = ?
        WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')`,
-      [confirmeAt, reservationId],
+      [confirmeAt, capacite.zone, reservationId],
     );
     if (rowsModified(db) !== 1) {
       action = 'refund_duplicate';
       return;
     }
-
-    const confirmedCount = currentReservation._reviveExpire
-      ? 1 // créneaux déjà repris en reserve
-      : confirmerCreneauxReservation(db, currentReservation);
-    if (confirmedCount < 1) {
-      libererCreneauxReservation(db, currentReservation, ['en_attente_paiement']);
-      db.run("UPDATE reservations SET statut = 'en_attente', confirme_at = NULL WHERE id = ?", [reservationId]);
-      action = 'refund';
-      return;
-    }
+    // confirmerAvecCapacite a déjà sync les créneaux (+ attribution zone).
+    // Revive expire : créneaux déjà repris, capacité OK ci-dessus.
+    currentReservation = { ...currentReservation, zone: capacite.zone };
 
     const contrat = chargerContrat(db, currentReservation.terrain_id);
     const montantAvance = Number(currentReservation.montant_avance || currentReservation.acompte || calculerMontantAvance(contrat, currentReservation.prix_total || currentReservation.montant));

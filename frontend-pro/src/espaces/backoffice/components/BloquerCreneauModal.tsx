@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Check, CloudRain, DoorClosed, MoreHorizontal, Repeat, Trophy, Wrench, X } from "lucide-react";
 import { toast } from "sonner";
-import { gerantApi } from "@/lib/api";
+import { gerantApi, reservationsApi } from "@/lib/api";
 import { localYmd } from "@/lib/localDate";
 import { cn } from "@/lib/utils";
 import { ConfirmationModal } from "@/espaces/backoffice/components/ConfirmationModal";
@@ -77,6 +77,28 @@ const MOTIFS = [
   { value: "fermeture", label: "Fermeture", Icon: DoorClosed },
   { value: "autre", label: "Autre", Icon: MoreHorizontal },
 ] as const;
+
+const ZONES_PORTEE = [
+  { value: "A", label: "Moitié A" },
+  { value: "B", label: "Moitié B" },
+  { value: "AB", label: "Terrain entier" },
+] as const;
+
+const TYPES_BLOCAGE = [
+  { value: "maintenance", label: "Maintenance", Icon: Wrench },
+  { value: "evenement", label: "Événement", Icon: MoreHorizontal },
+  { value: "abonnement", label: "Abonnement", Icon: Repeat },
+  { value: "tournoi", label: "Tournoi", Icon: Trophy },
+] as const;
+
+type ConflitReservation = {
+  id: number;
+  joueur_nom?: string | null;
+  heure_debut?: string;
+  heure_fin?: string;
+  zone?: string | null;
+  format_terrain?: string | null;
+};
 
 const MOTIF_LABEL: Record<string, string> = {
   pluie: "Pluie",
@@ -171,6 +193,17 @@ export default function BloquerCreneauModal({
   );
   const [joursTournoi, setJoursTournoi] = useState<Set<string>>(new Set(["samedi", "dimanche"]));
   const [montant, setMontant] = useState("");
+  const [zonePortee, setZonePortee] = useState<"A" | "B" | "AB">("AB");
+  const [typeBlocage, setTypeBlocage] = useState<(typeof TYPES_BLOCAGE)[number]["value"]>("maintenance");
+  const [conflits, setConflits] = useState<ConflitReservation[] | null>(null);
+  const [pendingBlocage, setPendingBlocage] = useState<{
+    date: string;
+    heure_debut: string;
+    heure_fin: string;
+    motif: string | null;
+    zone: string;
+    type: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -360,16 +393,42 @@ export default function BloquerCreneauModal({
           return;
         }
         const creneaux = freeSlots.filter((s) => selected.has(slotKey(s)));
-        const result = (await gerantApi.addBlocagesBatch({
-          date,
-          motif: motif || null,
-          creneaux,
-        })) as { count?: number; blocages?: Blocage[]; message?: string };
-        if (result?.blocages?.length) {
-          setLocalBlocages((prev) => [...result.blocages!, ...prev]);
+        // Un créneau à la fois pour remonter les conflits zone proprement
+        let ok = 0;
+        for (const slot of creneaux) {
+          try {
+            const created = (await gerantApi.addBlocage({
+              date,
+              heure_debut: slot.heure_debut,
+              heure_fin: slot.heure_fin,
+              motif: motif || typeBlocage,
+              zone: zonePortee,
+              type: typeBlocage,
+            })) as Blocage;
+            setLocalBlocages((prev) => [created, ...prev]);
+            ok += 1;
+          } catch (err: any) {
+            const reservations = err?.reservations || err?.data?.reservations;
+            if (err?.status === 409 || err?.code === "CRENEAU_CONFLIT" || Array.isArray(reservations)) {
+              setPendingBlocage({
+                date,
+                heure_debut: slot.heure_debut,
+                heure_fin: slot.heure_fin,
+                motif: motif || typeBlocage,
+                zone: zonePortee,
+                type: typeBlocage,
+              });
+              setConflits(Array.isArray(reservations) ? reservations : []);
+              toast.message("Conflit avec des réservations confirmées");
+              break;
+            }
+            throw err;
+          }
         }
-        setSelected(new Set());
-        toast.success(result?.message || `${result?.count || creneaux.length} créneau(x) bloqué(s) ✓`);
+        if (ok > 0) {
+          setSelected(new Set());
+          toast.success(`${ok} créneau(x) bloqué(s) ✓`);
+        }
       }
       await refreshAfterChange();
       clearDraft(blocageDraftKey(terrainId));
@@ -378,6 +437,46 @@ export default function BloquerCreneauModal({
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleConflitDeplacer = async (resaId: number) => {
+    try {
+      await gerantApi.patchReservationZone(resaId);
+      toast.success("Réservation déplacée sur l’autre moitié");
+      if (pendingBlocage) {
+        const created = (await gerantApi.addBlocage(pendingBlocage)) as Blocage;
+        setLocalBlocages((prev) => [created, ...prev]);
+        toast.success("Blocage enregistré");
+      }
+      setConflits(null);
+      setPendingBlocage(null);
+      await refreshAfterChange();
+    } catch (err: any) {
+      toast.error(err?.message || "Déplacement impossible");
+    }
+  };
+
+  const handleConflitAnnulerResa = async (resaId: number) => {
+    try {
+      await reservationsApi.annulerGerant(resaId);
+      toast.success("Réservation annulée (remboursement si éligible)");
+      if (pendingBlocage) {
+        const created = (await gerantApi.addBlocage(pendingBlocage)) as Blocage;
+        setLocalBlocages((prev) => [created, ...prev]);
+        toast.success("Blocage enregistré");
+      }
+      setConflits(null);
+      setPendingBlocage(null);
+      await refreshAfterChange();
+    } catch (err: any) {
+      toast.error(err?.message || "Annulation impossible");
+    }
+  };
+
+  const handleConflitRenoncer = () => {
+    setConflits(null);
+    setPendingBlocage(null);
+    toast.message("Blocage annulé");
   };
 
   const handleUnblock = async (id: number) => {
@@ -515,6 +614,56 @@ export default function BloquerCreneauModal({
                     selected={selected}
                     onToggle={toggleSlot}
                   />
+                  <div>
+                    <p className="text-xs font-semibold mb-2" style={{ color: "var(--g-text-2)" }}>
+                      Portée
+                    </p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {ZONES_PORTEE.map((z) => {
+                        const actif = zonePortee === z.value;
+                        return (
+                          <button
+                            key={z.value}
+                            type="button"
+                            onClick={() => setZonePortee(z.value)}
+                            className="min-h-[44px] rounded-xl text-xs font-semibold px-2"
+                            style={{
+                              background: actif ? "var(--g-primary)" : "var(--g-surface-2)",
+                              color: actif ? "#fff" : "var(--g-text)",
+                              border: actif ? "none" : "1px solid var(--g-border)",
+                            }}
+                          >
+                            {z.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold mb-2" style={{ color: "var(--g-text-2)" }}>
+                      Type
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {TYPES_BLOCAGE.map((t) => {
+                        const actif = typeBlocage === t.value;
+                        return (
+                          <button
+                            key={t.value}
+                            type="button"
+                            onClick={() => setTypeBlocage(t.value)}
+                            className="min-h-[44px] rounded-xl text-xs font-semibold px-2 inline-flex items-center justify-center gap-1.5"
+                            style={{
+                              background: actif ? "var(--g-danger)" : "var(--g-surface-2)",
+                              color: actif ? "#fff" : "var(--g-muted)",
+                            }}
+                          >
+                            <t.Icon className="w-3.5 h-3.5" />
+                            {t.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                   <div>
                     <p className="text-xs font-semibold mb-2" style={{ color: "var(--g-text-2)" }}>
                       Motif (optionnel)
@@ -770,6 +919,96 @@ export default function BloquerCreneauModal({
           void handleBlock();
         }}
       />
+
+      {conflits ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center"
+          style={{ background: "rgba(15,23,42,0.45)" }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Conflit de blocage"
+        >
+          <div
+            className="w-full max-w-lg rounded-t-2xl p-4 pb-8 space-y-3"
+            style={{ background: "var(--g-surface)", border: "1px solid var(--g-border)" }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-base font-semibold" style={{ color: "var(--g-text)" }}>
+                Réservations en conflit
+              </h3>
+              <button
+                type="button"
+                onClick={handleConflitRenoncer}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl"
+                aria-label="Fermer"
+              >
+                <X className="w-5 h-5" style={{ color: "var(--g-muted)" }} />
+              </button>
+            </div>
+            <p className="text-xs" style={{ color: "var(--g-muted)" }}>
+              Choisis une action pour chaque réservation touchée, ou renonce au blocage.
+            </p>
+            <ul className="space-y-3 max-h-[50vh] overflow-y-auto">
+              {(conflits.length ? conflits : [{ id: 0, joueur_nom: "Réservation confirmée" }]).map((r) => (
+                <li
+                  key={r.id || "x"}
+                  className="rounded-xl p-3 space-y-2"
+                  style={{ background: "var(--g-surface-2)", border: "1px solid var(--g-border)" }}
+                >
+                  <p className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>
+                    {r.joueur_nom || `Réservation #${r.id}`}
+                    {r.zone ? ` · Terrain ${r.zone}` : ""}
+                  </p>
+                  {r.heure_debut ? (
+                    <p className="text-xs" style={{ color: "var(--g-muted)" }}>
+                      {String(r.heure_debut).slice(0, 5)} – {String(r.heure_fin || "").slice(0, 5)}
+                    </p>
+                  ) : null}
+                  {r.id ? (
+                    <div className="grid gap-2">
+                      {pendingBlocage?.zone === "A" || r.zone === "A" ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleConflitDeplacer(r.id)}
+                          className="min-h-[44px] rounded-xl text-sm font-semibold"
+                          style={{ background: "var(--g-primary)", color: "#fff" }}
+                        >
+                          Déplacer en B
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleConflitDeplacer(r.id)}
+                          className="min-h-[44px] rounded-xl text-sm font-semibold"
+                          style={{ background: "var(--g-primary)", color: "#fff" }}
+                        >
+                          Déplacer en A
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void handleConflitAnnulerResa(r.id)}
+                        className="min-h-[44px] rounded-xl text-sm font-semibold"
+                        style={{ background: "var(--g-danger)", color: "#fff" }}
+                      >
+                        Annuler et rembourser
+                      </button>
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={handleConflitRenoncer}
+              className="w-full min-h-[44px] rounded-xl text-sm font-semibold"
+              style={{ border: "1px solid var(--g-border)", color: "var(--g-text)" }}
+            >
+              Annuler le blocage
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

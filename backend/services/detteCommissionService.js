@@ -5,8 +5,7 @@ const {
 } = require('../pricingService');
 const { crediterPortefeuilleGerant } = require('./portefeuilleService');
 const {
-  confirmerCreneauxReservation,
-  annulerReservationsConcurrentes,
+  confirmerAvecCapacite,
   rowsModified,
 } = require('../reservationLockService');
 const { calculerFenetreCheckIn } = require('./checkInFenetre');
@@ -171,9 +170,17 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
     expire_at: Math.floor(fenetre.finFenetre / 1000),
   });
 
+  const capacite = confirmerAvecCapacite(db, { ...reservation, id: reservationId });
+  if (!capacite.ok) {
+    const error = new Error('Créneau indisponible — confirmation manuelle impossible.');
+    error.statusCode = 409;
+    throw error;
+  }
+
   db.run(
     `UPDATE reservations SET
        statut = 'confirme',
+       zone = ?,
        code_reservation = ?,
        qr_code_payload = ?,
        mode_paiement = 'manuel',
@@ -183,7 +190,7 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
        note_gerant = ?,
        operational_stage = 'reserved'
      WHERE id = ? AND statut IN ('en_attente', 'en_attente_paiement')`,
-    [code, qrPayload, gerantId, noteGerant, reservationId],
+    [capacite.zone, code, qrPayload, gerantId, noteGerant, reservationId],
   );
   if (rowsModified(db) !== 1) {
     const error = new Error('Réservation introuvable ou déjà traitée.');
@@ -191,15 +198,7 @@ function confirmerManuellement(db, { reservationId, gerantId, note }) {
     throw error;
   }
 
-  const confirmedCount = confirmerCreneauxReservation(db, reservation);
-  if (confirmedCount < 1) {
-    db.run("UPDATE reservations SET statut = 'en_attente', mode_paiement = 'en_ligne' WHERE id = ?", [reservationId]);
-    const error = new Error('Créneau indisponible — confirmation manuelle impossible.');
-    error.statusCode = 409;
-    throw error;
-  }
-
-  const loserIds = annulerReservationsConcurrentes(db, { ...reservation, id: reservationId });
+  const loserIds = []; // déjà traités dans confirmerAvecCapacite
 
   let detteId = null;
   if (commission > 0) {

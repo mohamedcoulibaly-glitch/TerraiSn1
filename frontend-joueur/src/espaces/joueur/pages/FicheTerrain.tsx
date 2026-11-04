@@ -544,7 +544,10 @@ const FieldDetails = () => {
       : `${totalLabel} FCFA au total : tu paies l'avance de ${avanceLabel} FCFA maintenant, le reste (${resteLabel} FCFA) tu l'amènes le jour du match.`;
     return {
       creneau: `${dayLabel} · ${formatHourLabel(selectedSlot)} → ${formatHourLabel(slotEnd)} · ${dureeTxt}`,
-      format: formatMeta?.label || fieldFormat,
+      format:
+        formatMeta?.map_grille === "demi" || fieldFormat === "moitie"
+          ? "Demi-terrain"
+          : formatMeta?.label || fieldFormat,
       paiementNote,
       avanceLabel,
     };
@@ -893,6 +896,8 @@ const FieldDetails = () => {
                   formats={formatsOpts}
                   valeur={fieldFormat}
                   onChange={setFieldFormat}
+                  demiDisponible={previewSlot?.demi_disponible !== false}
+                  entierDisponible={previewSlot?.entier_disponible !== false}
                   prixPour={(fmt) =>
                     fmt.map_grille === "demi"
                       ? Number(previewSlot?.prix_moitie ?? fmt.prix_heure)
@@ -961,7 +966,13 @@ const FieldDetails = () => {
                   {creneaux.map((slot) => {
                     const heure = slot.heure || slot.heure_debut;
                     const selected = selectedSlot === heure;
-                    const available = Boolean(slot.disponible);
+                    const etat = String(slot.etat || slot.statut || "");
+                    const partiel = etat === "partiel" || (slot.demi_disponible && slot.entier_disponible === false);
+                    const available =
+                      Boolean(slot.disponible) &&
+                      (fieldFormat === "entier"
+                        ? slot.entier_disponible !== false
+                        : slot.demi_disponible !== false);
                     const verrou = Boolean(slot.verrou_paiement) || slot.statut === "verrou";
                     const expireAt = Number(slot.verrou_expire_at || 0);
                     const minutesLeft = expireAt > Date.now() ? Math.max(1, Math.ceil((expireAt - Date.now()) / 60000)) : null;
@@ -974,19 +985,21 @@ const FieldDetails = () => {
                     );
                     const title =
                       slot.raison_indisponibilite ||
-                      (available
-                        ? `${formatHourLabel(heure)} – ${formatHourLabel(fin)}`
-                        : verrou
-                          ? "Réservé temporairement — paiement en cours"
-                          : "Indisponible");
+                      (partiel
+                        ? "Dernière moitié disponible"
+                        : available
+                          ? `${formatHourLabel(heure)} – ${formatHourLabel(fin)}`
+                          : verrou
+                            ? "Réservé temporairement — paiement en cours"
+                            : "Indisponible");
                     return (
                       <button
                         key={`${heure}-${fin}`}
                         type="button"
                         disabled={!available}
                         onClick={() => {
+                          if (!available) return;
                           hapticSelection();
-                          // Changement de créneau : pas d'état résiduel du précédent.
                           if (selectedSlot && selectedSlot !== heure) {
                             setDraft((d) => ({ ...d, selectedSlot: heure }));
                           } else {
@@ -1002,13 +1015,15 @@ const FieldDetails = () => {
                         className={`min-h-[52px] rounded-xl text-sm font-semibold transition-[transform,opacity] duration-200 border will-change-transform ${
                           long ? "col-span-2" : ""
                         } ${
-                          verrou
-                            ? "bg-amber-50 text-amber-800 border-amber-300 cursor-not-allowed"
-                            : !available
-                            ? "bg-gray-100 dark:bg-[var(--surface-3)] text-gray-400 line-through cursor-not-allowed border-transparent"
+                          verrou && !partiel
+                            ? "bg-[color-mix(in_srgb,var(--color-warning)_18%,white)] text-[var(--color-warning)] border-[var(--color-warning)] cursor-not-allowed"
+                            : !available && !partiel
+                            ? "bg-[var(--surface-3)] text-[var(--color-text-muted)] line-through cursor-not-allowed border-transparent"
                             : selected
                               ? "bg-[var(--primary)] text-white border-[var(--primary)] shadow-md scale-[1.03]"
-                              : "bg-[var(--primary-glow,rgba(30,64,175,0.08))] text-[var(--primary)] border-[var(--primary)]"
+                              : partiel
+                                ? "bg-[color-mix(in_srgb,var(--primary)_12%,white)] text-[var(--primary)] border-[var(--primary)] border-dashed"
+                                : "bg-[var(--primary-glow,rgba(30,64,175,0.08))] text-[var(--primary)] border-[var(--primary)]"
                         }`}
                       >
                         <span className="block">{labelCreneau.heures}</span>
@@ -1020,7 +1035,15 @@ const FieldDetails = () => {
                             {labelCreneau.label}
                           </span>
                         ) : null}
-                        {long ? (
+                        {partiel && available ? (
+                          <span
+                            className={`block text-[10px] font-bold mt-0.5 ${
+                              selected ? "text-white/90" : "opacity-80"
+                            }`}
+                          >
+                            Dernière moitié disponible
+                          </span>
+                        ) : long ? (
                           <span
                             className={`block text-[10px] font-bold mt-0.5 ${
                               selected ? "text-white/90" : "opacity-70"
@@ -1039,10 +1062,7 @@ const FieldDetails = () => {
                                 ? `Paiement · ${minutesLeft} min`
                                 : "Paiement en cours"
                               : !available
-                              ? slot.raison_indisponibilite?.includes("chevauche") ||
-                                slot.raison_indisponibilite?.includes("match")
-                                ? "Non disponible"
-                                : "Pris"
+                              ? "Pris"
                               : selected
                                 ? <Check className="w-3 h-3 inline-block" aria-label="Sélectionné" />
                                 : null}
@@ -1053,7 +1073,7 @@ const FieldDetails = () => {
                   })}
                 </div>
                 <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
-                  Bleu = libre · Ambre = paiement en cours · Gris = pris
+                  Libre · Partiel (dernière moitié) · Paiement en cours · Complet
                 </p>
                 {hasSlot && stickyRecap && canBrowseSlots ? (
                   <div id="cta-reserver-inline" className="scroll-mt-24">

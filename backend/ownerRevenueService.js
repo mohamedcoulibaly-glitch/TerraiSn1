@@ -259,6 +259,7 @@ function computeOccupancyRate(db, queryAll, { terrainIds, from, to, reservations
     byTerrain.get(tid).push(h);
   }
 
+  // Capacité : 2 zones × heures ouvertes
   let available = 0;
   for (const tid of ids) {
     const rows = byTerrain.get(tid) || [];
@@ -266,18 +267,19 @@ function computeOccupancyRate(db, queryAll, { terrainIds, from, to, reservations
       const jour = jourDepuisDate(date);
       const horaire = rows.find((r) => String(r.jour || '').toLowerCase() === jour && Number(r.est_ouvert) !== 0);
       if (horaire) {
-        available += buildSlotsForOpenDay(date, horaire).length;
+        available += buildSlotsForOpenDay(date, horaire).length * 2;
       } else if (!rows.length) {
-        available += 12;
+        available += 12 * 2;
       }
     }
   }
 
   if (available <= 0) return 0;
 
-  const booked = (reservations || [])
-    .filter((r) => isRevenueStatus(r.statut))
-    .reduce((sum, r) => sum + reservationHours(r), 0);
+  const { capaciteOccupeeHeures } = require('./services/capaciteService');
+  const booked = capaciteOccupeeHeures(
+    (reservations || []).filter((r) => isRevenueStatus(r.statut)),
+  );
 
   return Math.min(100, Math.round((booked / available) * 100));
 }

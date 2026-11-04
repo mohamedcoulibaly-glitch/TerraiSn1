@@ -173,6 +173,8 @@ function initDb(database) {
   addColumnIfMissing(database, 'blocages_creneaux', 'date_fin', 'DATE');
   addColumnIfMissing(database, 'blocages_creneaux', 'jours', 'TEXT');
   addColumnIfMissing(database, 'blocages_creneaux', 'inclure_dans_ca', 'INTEGER DEFAULT 0');
+  // Capacité demi-terrains : zone A / B / AB (défaut terrain entier)
+  addColumnIfMissing(database, 'blocages_creneaux', 'zone', "TEXT DEFAULT 'AB'");
   database.run('CREATE INDEX IF NOT EXISTS idx_blocages_groupe ON blocages_creneaux(groupe_id)');
 
   database.run(`CREATE TABLE IF NOT EXISTS blocages_groupes (
@@ -276,6 +278,7 @@ function initDb(database) {
   addColumnIfMissing(database, 'reservations', 'lien_paiement', 'TEXT');
   addColumnIfMissing(database, 'reservations', 'reference_paytech', 'TEXT');
   addColumnIfMissing(database, 'reservations', 'format_terrain', "TEXT DEFAULT 'entier'");
+  addColumnIfMissing(database, 'reservations', 'zone', "TEXT DEFAULT 'AB'");
   addColumnIfMissing(database, 'reservations', 'prix_total', 'DECIMAL(10, 2)');
   addColumnIfMissing(database, 'reservations', 'acompte', 'DECIMAL(10, 2) DEFAULT 5000');
   addColumnIfMissing(database, 'reservations', 'reste_a_payer', 'DECIMAL(10, 2) DEFAULT 0');
@@ -1275,6 +1278,28 @@ function initContratPaiementSchema(database) {
     WHERE e.terrain_id IS NOT NULL`);
   } catch (err) {
     console.warn('[schema] backfill gerants_terrains:', err.message);
+  }
+
+  // Capacité zones : backfill idempotent
+  // Demi confirmées sans zone → A (ancien modèle 1 créneau = 1 résa)
+  // Pending : zone reste NULL jusqu'à confirmation (attribuerZone)
+  try {
+    database.run(
+      `UPDATE reservations SET zone = 'A'
+        WHERE LOWER(COALESCE(format_terrain, '')) IN ('moitie', 'demi', 'demi_terrain')
+          AND statut IN ('confirme', 'acceptee', 'match_joue', 'joue')
+          AND (zone IS NULL OR zone = '' OR zone = 'AB')`,
+    );
+    database.run(
+      `UPDATE reservations SET zone = 'AB'
+        WHERE LOWER(COALESCE(format_terrain, 'entier')) NOT IN ('moitie', 'demi', 'demi_terrain')
+          AND (zone IS NULL OR zone = '')`,
+    );
+    database.run(
+      `UPDATE blocages_creneaux SET zone = 'AB' WHERE zone IS NULL OR zone = ''`,
+    );
+  } catch (err) {
+    console.warn('[schema] backfill zone A/B:', err.message);
   }
 }
 

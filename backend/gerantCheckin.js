@@ -126,6 +126,7 @@ function mapReservationGerantRow(row) {
     terrain_ville: row.terrain_ville || null,
     creneau_id: row.creneau_id || null,
     format_terrain: row.format_terrain || 'entier',
+    zone: row.zone || (String(row.format_terrain || '') === 'moitie' ? null : 'AB'),
     mode_paiement: row.mode_paiement || null,
     canal_paiement: row.canal_paiement || null,
     note_gerant: row.note_gerant || null,

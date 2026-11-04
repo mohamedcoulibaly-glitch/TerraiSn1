@@ -50,6 +50,8 @@ type GerantReservation = {
   qr_code_payload?: string | null;
   terrain_nom?: string | null;
   type_reservation?: string;
+  format_terrain?: string | null;
+  zone?: string | null;
   fenetre_retard?: number | null;
   fenetre_debut?: string | null;
   fenetre_fin?: string | null;
@@ -170,6 +172,7 @@ export default function DetailReservation() {
   const [confirmCloture, setConfirmCloture] = useState<"close" | "encaisser" | "waiver" | null>(null);
   const [methode, setMethode] = useState<"especes" | "wave" | "orange_money">("especes");
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
+  const [swappingZone, setSwappingZone] = useState(false);
   const { down: waDown } = useWhatsappInfra(true);
 
   const load = useCallback(async () => {
@@ -398,6 +401,25 @@ export default function DetailReservation() {
     }
   };
 
+  const canSwapZone =
+    String(reservation.format_terrain || "") === "moitie" &&
+    (reservation.zone === "A" || reservation.zone === "B") &&
+    ["confirme", "acceptee", "en_attente", "en_attente_paiement"].includes(reservation.statut);
+
+  const handleSwapZone = async () => {
+    if (!reservation) return;
+    setSwappingZone(true);
+    try {
+      await gerantApi.patchReservationZone(reservation.id);
+      toast.success("Terrain permuté (A ↔ B)");
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Permutation impossible");
+    } finally {
+      setSwappingZone(false);
+    }
+  };
+
   const openCancelConfirm = async () => {
     setConfirmCancel(true);
     if (!reservation) return;
@@ -486,6 +508,23 @@ export default function DetailReservation() {
         <p className="text-sm text-[var(--color-text-secondary)]">
           {String(reservation.heure_debut).slice(0, 5)} – {String(reservation.heure_fin).slice(0, 5)}
         </p>
+        {reservation.format_terrain === "moitie" ? (
+          <p className="text-sm font-medium text-[var(--color-text-primary)]">
+            Demi-terrain{reservation.zone === "A" || reservation.zone === "B" ? ` · Terrain ${reservation.zone}` : ""}
+          </p>
+        ) : (
+          <p className="text-sm text-[var(--color-text-secondary)]">Terrain entier</p>
+        )}
+        {canSwapZone ? (
+          <button
+            type="button"
+            disabled={swappingZone}
+            onClick={handleSwapZone}
+            className="w-full min-h-[44px] rounded-[var(--radius-md)] border border-[var(--color-border)] text-sm font-semibold text-[var(--color-primary)] disabled:opacity-60"
+          >
+            {swappingZone ? "Permutation…" : "Changer de terrain (A ↔ B)"}
+          </button>
+        ) : null}
       </section>
 
       <section className="bg-white rounded-[var(--radius-md)] border border-[var(--color-border)] p-4 space-y-3">

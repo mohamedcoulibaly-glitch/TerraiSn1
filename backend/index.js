@@ -90,11 +90,24 @@ const {
   libererVerrousExpires,
   cloturerJourExpires,
   confirmerCreneauxReservation,
+  confirmerAvecCapacite,
+  emettreEtatCreneau,
   rowsModified,
   normalizeHourString,
   hourlySlots,
   normaliserDelaiVerrouPaiementMin,
 } = require('./reservationLockService');
+const {
+  peutReserver,
+  attribuerZone,
+  etatCreneau,
+  payloadEtatCreneau,
+  reservationsConfirmeesEnConflit,
+  normalizeZone,
+  normalizeFormat,
+  syncStatutCreneaux,
+  capaciteOccupeeHeures,
+} = require('./services/capaciteService');
 const {
   calculerPrixReservation,
   prixHoraireEffectif,
@@ -1495,47 +1508,52 @@ app.get('/api/terrains/:id/full-details', async (req, res) => {
       ferme = true;
       motif = 'Fermé ce jour';
     } else {
-      // Disponibilité : hors résas actives / blocages (même esprit que /creneaux)
+      // Disponibilité par capacité zones A/B
       const nowMs = Date.now();
-      const reserved = queryAll(
+      const pendingLocks = queryAll(
         db,
         `SELECT heure_debut, heure_fin, statut, verrou_expire_at FROM reservations
          WHERE terrain_id = ? AND date = ?
-           AND (
-             statut IN ('confirme', 'acceptee', 'joue', 'match_joue')
-             OR (
-               statut IN ('en_attente', 'en_attente_paiement')
-               AND verrou_expire_at IS NOT NULL
-               AND verrou_expire_at > ?
-             )
-           )`,
+           AND statut IN ('en_attente', 'en_attente_paiement')
+           AND verrou_expire_at IS NOT NULL
+           AND verrou_expire_at > ?`,
         [tid, dateStr, nowMs],
-      );
-      const blocages = queryAll(
-        db,
-        `SELECT heure_debut, heure_fin FROM blocages_creneaux WHERE terrain_id = ? AND date = ?`,
-        [tid, dateStr],
       );
       const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
       creneaux = planned.map((slot) => {
-        const hit = reserved.find((r) => overlaps(slot.heure_debut, slot.heure_fin, r.heure_debut, r.heure_fin));
-        const blocked = blocages.some((b) => overlaps(slot.heure_debut, slot.heure_fin, b.heure_debut, b.heure_fin));
-        const verrou = Boolean(
-          hit && (hit.statut === 'en_attente' || hit.statut === 'en_attente_paiement'),
+        const capa = payloadEtatCreneau(db, tid, dateStr, slot.heure_debut, slot.heure_fin, {
+          now: nowMs,
+        });
+        const hit = pendingLocks.find((r) =>
+          overlaps(slot.heure_debut, slot.heure_fin, r.heure_debut, r.heure_fin),
         );
-        const taken = Boolean(hit) || blocked;
+        const verrou = Boolean(hit) && capa.etat !== 'libre';
         return {
           ...slot,
           heure: slot.heure_debut,
-          disponible: !taken,
-          statut: blocked ? 'bloque' : verrou ? 'verrou' : taken ? 'reserve' : 'libre',
-          verrou_paiement: verrou,
+          disponible: capa.disponible,
+          etat: capa.etat,
+          zones_libres: capa.zones_libres,
+          demi_disponible: capa.demi_disponible,
+          entier_disponible: capa.entier_disponible,
+          statut:
+            capa.etat === 'complet'
+              ? verrou
+                ? 'verrou'
+                : 'reserve'
+              : capa.etat === 'partiel'
+                ? 'partiel'
+                : 'libre',
+          verrou_paiement: verrou && capa.etat === 'complet',
           verrou_expire_at: verrou ? hit.verrou_expire_at : null,
-          raison_indisponibilite: verrou
-            ? 'Réservé temporairement — paiement en cours'
-            : taken
-              ? 'Ce créneau est pris'
-              : null,
+          raison_indisponibilite:
+            capa.etat === 'complet'
+              ? verrou
+                ? 'Réservé temporairement — paiement en cours'
+                : 'Ce créneau est pris'
+              : capa.etat === 'partiel'
+                ? 'Dernière moitié disponible'
+                : null,
           label: slot.label || slot.heure_debut,
         };
       });
@@ -1630,42 +1648,16 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
       });
     }
 
-    // Occupations : par date réelle du slot (minuit = jour calendaire suivant)
-    const datesNeeded = [...new Set(planned.map((s) => s.date))];
-    const reservationsExistantes = queryAll(
-      db,
-      `SELECT date, heure_debut, heure_fin FROM reservations
-        WHERE terrain_id = ? AND date IN (${datesNeeded.map(() => '?').join(',')})
-          AND statut IN ('confirme', 'acceptee', 'en_attente')`,
-      [terrain.id, ...datesNeeded],
-    );
-    const blocages = queryAll(
-      db,
-      `SELECT date, heure_debut, heure_fin FROM blocages_creneaux
-        WHERE terrain_id = ? AND date IN (${datesNeeded.map(() => '?').join(',')})`,
-      [terrain.id, ...datesNeeded],
-    );
-
+    // Capacité par zones A/B (capaciteService) — plus de booléen binaire seul
     const creneaux = [];
     for (const slotPlan of planned) {
       const slot = slotPlan.heure_debut;
       const slotEnd = slotPlan.heure_fin;
       const slotDate = slotPlan.date;
 
-      const isReserved = reservationsExistantes.some(
-        (r) =>
-          String(r.date).slice(0, 10) === String(slotDate).slice(0, 10) &&
-          slot >= String(r.heure_debut).slice(0, 5) &&
-          slot < String(r.heure_fin).slice(0, 5),
-      );
-      const isBlocked = blocages.some(
-        (b) =>
-          String(b.date).slice(0, 10) === String(slotDate).slice(0, 10) &&
-          slot >= String(b.heure_debut).slice(0, 5) &&
-          slot < String(b.heure_fin).slice(0, 5),
-      );
+      const capa = payloadEtatCreneau(db, terrain.id, slotDate, slot, slotEnd);
 
-      // Déduplique les lignes creneaux (anciens doublons libre+bloque)
+      // Déduplique les lignes creneaux (anciens doublons)
       const twins = queryAll(
         db,
         'SELECT id, statut FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ? ORDER BY id ASC',
@@ -1681,27 +1673,28 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
         });
         creneau = queryOne(db, 'SELECT * FROM creneaux WHERE id = ?', [keepId]);
       }
+
+      const effectiveStatut =
+        capa.etat === 'complet' ? 'reserve' : capa.etat === 'partiel' ? 'libre' : 'libre';
       if (!creneau) {
         runSql(
           db,
           'INSERT INTO creneaux (terrain_id, date, heure_debut, heure_fin, statut) VALUES (?, ?, ?, ?, ?)',
-          [terrain.id, slotDate, slot, slotEnd, isReserved ? 'reserve' : isBlocked ? 'bloque' : 'libre'],
+          [terrain.id, slotDate, slot, slotEnd, effectiveStatut],
         );
         creneau = queryOne(
           db,
           'SELECT * FROM creneaux WHERE terrain_id = ? AND date = ? AND heure_debut = ? AND heure_fin = ? ORDER BY id DESC',
           [terrain.id, slotDate, slot, slotEnd],
         );
+      } else if (creneau.statut !== 'joue' && creneau.statut !== 'bloque' && creneau.statut !== effectiveStatut) {
+        // Ne pas écraser bloque/joue ; sync léger sinon
+        if (capa.etat === 'complet' || capa.etat === 'libre') {
+          runSql(db, 'UPDATE creneaux SET statut = ? WHERE id = ?', [effectiveStatut, creneau.id]);
+          creneau = { ...creneau, statut: effectiveStatut };
+        }
       }
 
-      // Resync statut avec occupations réelles (évite faux « libre »)
-      const effectiveStatut = isBlocked ? 'bloque' : isReserved ? 'reserve' : 'libre';
-      if (creneau && creneau.statut !== effectiveStatut) {
-        runSql(db, 'UPDATE creneaux SET statut = ? WHERE id = ?', [effectiveStatut, creneau.id]);
-        creneau = { ...creneau, statut: effectiveStatut };
-      }
-
-      const disponible = !isReserved && !isBlocked;
       const prixEntier = prixHoraireEffectif(
         db,
         terrain,
@@ -1728,9 +1721,14 @@ app.get('/api/terrains/:id/creneaux', async (req, res) => {
         label: slotPlan.label || labelHeureSenegal(slotDate, slot),
         label_court: slotPlan.label_court || courtLabelHeureSenegal(slotDate, slot),
         est_minuit_culturel: Boolean(slotPlan.est_minuit_culturel),
-        statut: effectiveStatut,
-        disponible,
-        bloque: isBlocked,
+        statut: capa.etat === 'complet' ? 'reserve' : capa.etat === 'partiel' ? 'partiel' : 'libre',
+        etat: capa.etat,
+        zones_libres: capa.zones_libres,
+        zones_occupees: capa.zones_occupees,
+        demi_disponible: capa.demi_disponible,
+        entier_disponible: capa.entier_disponible,
+        disponible: capa.disponible,
+        bloque: capa.etat === 'complet' && capa.zones_occupees.length === 2 && !capa.demi_disponible,
         prix_entier: prixEntier,
         prix_moitie: prixMoitie,
       });
@@ -2047,12 +2045,21 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
       resolvedJoueurId = created?.id || null;
     }
 
-    // Transaction ACID : verrou IMMEDIATE + UPDATE conditionnel sur chaque heure (anti double-booking)
+    // Transaction ACID : capacité zones + INSERT (verrou 15 min consomme le type demandé)
     const reservationId = transaction(db, () => {
-      const creneauId = lockCreneauxAtomique(db, terrainId, date, heureDebutNorm, heureFinNorm);
+      const creneauId = lockCreneauxAtomique(
+        db,
+        terrainId,
+        date,
+        heureDebutNorm,
+        heureFinNorm,
+        format_terrain,
+      );
+      // Zone : attribuée seulement à la confirmation (NULL tant que pending)
+      const zoneInitiale = null;
       db.run(`INSERT INTO reservations
-        (terrain_id, creneau_id, joueur_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain, statut, expire_at, verrou_expire_at, cree_par, mode_paiement, operational_stage)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (terrain_id, creneau_id, joueur_id, joueur_nom, joueur_telephone, date, heure_debut, heure_fin, montant, prix_total, acompte, reste_a_payer, montant_avance, montant_restant, format_terrain, zone, statut, expire_at, verrou_expire_at, cree_par, mode_paiement, operational_stage)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           terrainId,
           creneauId,
@@ -2069,6 +2076,7 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
           montantAvance,
           montantRestant,
           format_terrain,
+          zoneInitiale,
           statutInitial,
           verrouExpireAt ? new Date(verrouExpireAt).toISOString() : null,
           verrouExpireAt,
@@ -2077,16 +2085,30 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
           stageInitial,
         ]);
       const newId = queryOne(db, 'SELECT last_insert_rowid() AS id').id;
-      // Confirmation immédiate (bloquer / sans_avance) : libérer le statut créneau
+      // Confirmation immédiate (bloquer / sans_avance) : capacité + attribution zone
       if (statutInitial === 'confirme') {
-        confirmerCreneauxReservation(db, {
+        const capa = confirmerAvecCapacite(db, {
           id: newId,
           terrain_id: terrainId,
           date,
           heure_debut: heureDebutNorm,
           heure_fin: heureFinNorm,
           creneau_id: creneauId,
+          format_terrain,
         });
+        if (!capa.ok) {
+          const err = new Error('Créneau indisponible');
+          err.statusCode = 409;
+          err.code = 'CRENEAU_CONFLIT';
+          throw err;
+        }
+        db.run(
+          `UPDATE reservations SET statut = 'confirme', zone = ?, confirme_at = COALESCE(confirme_at, ?)
+           WHERE id = ?`,
+          [capa.zone, new Date().toISOString(), newId],
+        );
+      } else {
+        syncStatutCreneaux(db, terrainId, date, heureDebutNorm, heureFinNorm);
       }
       return newId;
     });
@@ -3007,6 +3029,68 @@ app.delete('/api/reservations/:id(\\d+)/verrou', optionalAuth, async (req, res) 
   }
 });
 
+/** Permute zone A ↔ B si la cible est libre (demi-terrain uniquement). */
+app.patch('/api/gerant/reservations/:id/zone', authMiddleware, requireRole('gerant'), async (req, res) => {
+  try {
+    const db = await getDb();
+    const reservation = queryOne(
+      db,
+      'SELECT * FROM reservations WHERE id = ? AND terrain_id = ?',
+      [Number(req.params.id), req.user.terrain_id],
+    );
+    if (!reservation) return res.status(404).json({ error: 'Réservation non trouvée' });
+    const format = normalizeFormat(reservation.format_terrain);
+    if (format !== 'moitie') {
+      return res.status(400).json({ error: 'Seules les réservations demi-terrain peuvent changer de zone' });
+    }
+    const current = normalizeZone(reservation.zone, format);
+    if (current !== 'A' && current !== 'B') {
+      return res.status(400).json({ error: 'Zone actuelle invalide' });
+    }
+    const cible = current === 'A' ? 'B' : 'A';
+    const occupees = require('./services/capaciteService').zonesOccupees(
+      db,
+      reservation.terrain_id,
+      reservation.date,
+      reservation.heure_debut,
+      reservation.heure_fin,
+      { excludeReservationId: reservation.id },
+    );
+    if (occupees.has(cible)) {
+      return res.status(409).json({
+        error: `La zone ${cible} est déjà occupée`,
+        code: 'ZONE_OCCUPEE',
+        zone_cible: cible,
+      });
+    }
+    runSql(db, 'UPDATE reservations SET zone = ? WHERE id = ?', [cible, reservation.id]);
+    syncStatutCreneaux(
+      db,
+      reservation.terrain_id,
+      reservation.date,
+      reservation.heure_debut,
+      reservation.heure_fin,
+    );
+    const etat = etatCreneau(
+      db,
+      reservation.terrain_id,
+      reservation.date,
+      reservation.heure_debut,
+      reservation.heure_fin,
+    );
+    emettreEtatCreneau(reservation.terrain_id, etat, {
+      reservation_id: reservation.id,
+      zone: cible,
+      raison: 'permutation_zone',
+    });
+    const updated = queryOne(db, 'SELECT * FROM reservations WHERE id = ?', [reservation.id]);
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Erreur serveur' });
+  }
+});
+
 app.patch('/api/gerant/reservations/:id/annuler', authMiddleware, requireRole('gerant'), async (req, res) => {
   try {
     const db = await getDb();
@@ -3140,7 +3224,8 @@ app.get('/api/proprietaire/stats', authMiddleware, requireRole('proprietaire'), 
       queryAll(
         db,
         `SELECT r.id, r.date, r.heure_debut, r.heure_fin, r.joueur_nom, r.statut,
-                r.montant_avance, r.acompte, r.terrain_id, t.nom AS terrain_nom
+                r.montant_avance, r.acompte, r.terrain_id, r.format_terrain, r.zone,
+                t.nom AS terrain_nom
          FROM reservations r
          JOIN terrains t ON t.id = r.terrain_id
          WHERE r.terrain_id IN (${placeholders})
@@ -3700,7 +3785,7 @@ app.put('/api/terrains/:id/horaires', authMiddleware, requireRole('proprietaire'
 app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (req, res) => {
   try {
     const db = await getDb();
-    const { date, heure_debut, heure_fin, motif } = req.body;
+    const { date, heure_debut, heure_fin, motif, zone: zoneRaw, type: typeRaw, type_blocage } = req.body;
     if (!date || !heure_debut || !heure_fin) {
       return res.status(400).json({ error: 'date, heure_debut et heure_fin requis' });
     }
@@ -3711,47 +3796,64 @@ app.post('/api/gerant/blocages', authMiddleware, requireRole('gerant'), async (r
     }
 
     const terrainId = req.user.terrain_id;
-    const chevauchementResa = queryAll(
+    const zone = normalizeZone(zoneRaw) || 'AB';
+    const typeInput = String(typeRaw || type_blocage || 'maintenance').trim().toLowerCase();
+    const typeNorm = typeInput.normalize('NFD').replace(/\p{M}/gu, '');
+    const TYPE_MAP = {
+      maintenance: 'MAINTENANCE',
+      evenement: 'EVENEMENT',
+      abonnement: 'ABONNEMENT',
+      tournoi: 'TOURNOI',
+      manuel: 'MANUEL',
+    };
+    const typeBlocage = TYPE_MAP[typeNorm] || 'MAINTENANCE';
+
+    const conflits = reservationsConfirmeesEnConflit(
       db,
-      `SELECT id, joueur_nom, heure_debut, heure_fin FROM reservations
-        WHERE terrain_id = ? AND date = ?
-          AND statut IN ('en_attente', 'en_attente_paiement', 'confirme', 'acceptee')
-          AND heure_debut < ? AND heure_fin > ?`,
-      [terrainId, date, finNorm, debutNorm],
+      terrainId,
+      date,
+      debutNorm,
+      finNorm,
+      zone,
     );
-    if (chevauchementResa.length) {
+    if (conflits.length) {
       return res.status(409).json({
-        error: 'Impossible de bloquer : une réservation existe déjà sur ce créneau',
+        error: 'Des réservations confirmées occupent cette zone',
         code: 'CRENEAU_CONFLIT',
+        reservations: conflits,
+        zone,
       });
     }
 
+    // Blocages existants sur les mêmes zones
     const chevauchementBlocage = queryAll(
       db,
-      `SELECT id FROM blocages_creneaux
+      `SELECT id, zone FROM blocages_creneaux
         WHERE terrain_id = ? AND date = ?
           AND heure_debut < ? AND heure_fin > ?`,
       [terrainId, date, finNorm, debutNorm],
-    );
+    ).filter((b) => {
+      const bz = normalizeZone(b.zone) || 'AB';
+      if (zone === 'AB' || bz === 'AB') return true;
+      return bz === zone;
+    });
     if (chevauchementBlocage.length) {
       return res.status(409).json({
-        error: 'Ce créneau est déjà bloqué',
+        error: 'Ce créneau est déjà bloqué sur cette zone',
         code: 'CRENEAU_CONFLIT',
       });
     }
 
-    const result = runSql(db, 'INSERT INTO blocages_creneaux (terrain_id, employe_id, date, heure_debut, heure_fin, motif) VALUES (?, ?, ?, ?, ?, ?)',
-      [terrainId, req.user.id, date, debutNorm, finNorm, motif || null]);
-    // Aligne la table creneaux pour l'app joueur / file gérant (overnight inclus via slots).
-    for (const slot of hourlySlots(debutNorm, finNorm)) {
-      runSql(
-        db,
-        `UPDATE creneaux SET statut = 'bloque'
-          WHERE terrain_id = ? AND date = ?
-            AND heure_debut = ? AND heure_fin = ?`,
-        [terrainId, date, slot.heure_debut, slot.heure_fin],
-      );
-    }
+    const result = runSql(
+      db,
+      `INSERT INTO blocages_creneaux
+        (terrain_id, employe_id, date, heure_debut, heure_fin, motif, type_blocage, zone)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [terrainId, req.user.id, date, debutNorm, finNorm, motif || null, typeBlocage, zone],
+    );
+    syncStatutCreneaux(db, terrainId, date, debutNorm, finNorm);
+    const etat = etatCreneau(db, terrainId, date, debutNorm, finNorm);
+    emettreEtatCreneau(terrainId, etat, { zone, raison: 'blocage' });
     const blocage = queryOne(db, 'SELECT * FROM blocages_creneaux WHERE id = ?', [result.lastInsertRowid]);
     res.status(201).json(blocage);
   } catch (err) {

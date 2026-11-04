@@ -18,6 +18,7 @@ const {
   courtLabelHeureSenegal,
 } = require('../scheduleService');
 const { prixHoraireEffectif } = require('../pricingService');
+const { payloadEtatCreneau } = require('./capaciteService');
 
 const STATUTS_OCCUPES_CRENEAU = ['reserve', 'en_attente_paiement', 'bloque', 'tournoi', 'abonnement'];
 const STATUTS_RESA_ACTIVES = ['confirme', 'acceptee', 'match_joue', 'joue', 'en_attente', 'en_attente_paiement'];
@@ -346,6 +347,7 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
 
     const prixEntier = prixHoraireEffectif(database, terrain, slotDate, debut, 'entier', slotPlan.jour_tarif || null);
     const prixMoitie = prixHoraireEffectif(database, terrain, slotDate, debut, 'moitie', slotPlan.jour_tarif || null);
+    const capa = payloadEtatCreneau(database, terrainId, slotDate, debut, fin);
 
     creneaux.push({
       date: slotDate,
@@ -360,21 +362,37 @@ function getDisponibilitesPourJoueur(database, terrainId, date, options = {}) {
       label_court: slotPlan.label_court || courtLabelHeureSenegal(slotDate, debut),
       est_minuit_culturel: Boolean(slotPlan.est_minuit_culturel),
       date_affichage: slotPlan.date_affichage || slotDate,
-      statut: enConflit ? (raison === 'bloque' ? 'bloque' : raison === 'verrou' ? 'verrou' : 'reserve') : 'libre',
-      disponible: !enConflit,
-      bloque: raison === 'bloque',
-      verrou_paiement: raison === 'verrou',
-      verrou_expire_at: raison === 'verrou' ? premier.verrou_expire_at || null : null,
-      raison_indisponibilite: enConflit
-        ? raison === 'chevauchement'
-          ? `Un match de ${formatDuree(dureeMinutesOf(premier.heure_debut, premier.heure_fin))} commence à ${premier.heure_debut.replace(':', 'h')}`
-          : raison === 'bloque'
-            ? 'Créneau bloqué'
+      etat: capa.etat,
+      zones_libres: capa.zones_libres,
+      demi_disponible: capa.demi_disponible,
+      entier_disponible: capa.entier_disponible,
+      statut:
+        capa.etat === 'complet'
+          ? raison === 'bloque'
+            ? 'bloque'
             : raison === 'verrou'
-              ? 'Réservé temporairement — paiement en cours'
-              : 'Ce créneau est pris'
-        : null,
-      conflit_avec: enConflit
+              ? 'verrou'
+              : 'reserve'
+          : capa.etat === 'partiel'
+            ? 'partiel'
+            : 'libre',
+      disponible: capa.disponible,
+      bloque: raison === 'bloque' && capa.etat === 'complet',
+      verrou_paiement: raison === 'verrou' && capa.etat === 'complet',
+      verrou_expire_at: raison === 'verrou' ? premier?.verrou_expire_at || null : null,
+      raison_indisponibilite:
+        capa.etat === 'partiel'
+          ? 'Dernière moitié disponible'
+          : capa.etat === 'complet'
+            ? raison === 'chevauchement'
+              ? `Un match de ${formatDuree(dureeMinutesOf(premier.heure_debut, premier.heure_fin))} commence à ${premier.heure_debut.replace(':', 'h')}`
+              : raison === 'bloque'
+                ? 'Créneau bloqué'
+                : raison === 'verrou'
+                  ? 'Réservé temporairement — paiement en cours'
+                  : 'Ce créneau est pris'
+            : null,
+      conflit_avec: enConflit && capa.etat === 'complet'
         ? {
             heure_debut: premier.heure_debut,
             heure_fin: premier.heure_fin,

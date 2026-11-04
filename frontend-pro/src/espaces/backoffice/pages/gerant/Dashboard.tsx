@@ -74,6 +74,9 @@ type TodayReservation = {
   creneau_id?: number | null;
   operational_stage?: string | null;
   checkout_at?: string | null;
+  format_terrain?: string | null;
+  zone?: string | null;
+  etat_creneau?: string | null;
   /** Présent si card issue d'un blocage (Workflow 6) */
   blocage_id?: number;
   blocage_ids?: number[];
@@ -82,6 +85,8 @@ type TodayReservation = {
   type_blocage?: string | null;
   libelle?: string | null;
   pending_count?: number;
+  /** Demi groupés sous la même heure */
+  sibling_zone?: string | null;
 };
 
 type MatchStatus = "libre" | "reserve" | "en_cours" | "en_retard" | "termine" | "bloque" | "en_attente";
@@ -464,6 +469,19 @@ function QueueCard({
             <p className="text-sm font-semibold" style={{ color: "var(--g-text)" }}>
               {resa.joueur_nom || "Joueur"}
             </p>
+            {(resa.zone === "A" || resa.zone === "B" || resa.sibling_zone) && (
+              <span
+                className="inline-flex mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full min-h-[22px] items-center"
+                style={{ background: "var(--g-libre-bg)", color: "var(--g-libre)" }}
+              >
+                Terrain {resa.zone || resa.sibling_zone}
+              </span>
+            )}
+            {resa.etat_creneau === "partiel" || resa.motif === "1 moitié libre" ? (
+              <p className="text-[11px] mt-1 font-medium" style={{ color: "var(--g-en-attente)" }}>
+                1 moitié libre
+              </p>
+            ) : null}
             {resa.joueur_telephone && (
               <p className="text-xs" style={{ color: "var(--g-muted)" }}>
                 {resa.joueur_telephone}
@@ -866,6 +884,37 @@ function buildQueueBlocks({
     libelle: b.libelle,
     date: b.date || dayDate,
   }));
+  // Demis confirmés sur le même créneau → deux cartes (Terrain A / Terrain B)
+  const demiGroups = new Map<string, TodayReservation[]>();
+  const occupyingRest: TodayReservation[] = [];
+  for (const r of occupying) {
+    const isDemi =
+      String(r.format_terrain || "") === "moitie" ||
+      String(r.zone || "") === "A" ||
+      String(r.zone || "") === "B";
+    if (isDemi && resolveLiveStatus(r, dayDate, nowMs) !== "termine") {
+      const key = `${String(r.heure_debut).slice(0, 5)}-${String(r.heure_fin).slice(0, 5)}`;
+      const g = demiGroups.get(key) || [];
+      g.push(r);
+      demiGroups.set(key, g);
+    } else {
+      occupyingRest.push(r);
+    }
+  }
+  const demiCards: TodayReservation[] = [];
+  for (const group of demiGroups.values()) {
+    const zonesTaken = new Set(group.map((r) => String(r.zone || "").toUpperCase()).filter(Boolean));
+    const partielHint = zonesTaken.size === 1 ? "1 moitié libre" : null;
+    for (const r of group) {
+      demiCards.push({
+        ...r,
+        sibling_zone: r.zone || null,
+        etat_creneau: partielHint ? "partiel" : group.length >= 2 ? "complet" : r.etat_creneau,
+        motif: partielHint || r.motif,
+      });
+    }
+  }
+
   const pendingBySlot = new Map<string, TodayReservation[]>();
   for (const r of pending) {
     const key = `${String(r.heure_debut).slice(0, 5)}-${String(r.heure_fin).slice(0, 5)}`;
@@ -873,13 +922,32 @@ function buildQueueBlocks({
     group.push(r);
     pendingBySlot.set(key, group);
   }
-  const pendingCards: TodayReservation[] = [...pendingBySlot.values()].map((group) => ({
-    ...group[0],
-    pending_count: group.length,
-    joueur_nom: group.length === 1 ? group[0].joueur_nom : `${group.length} joueurs`,
-  }));
+  const pendingCards: TodayReservation[] = [...pendingBySlot.values()].flatMap((group) => {
+    const demis = group.filter(
+      (r) => String(r.format_terrain || "") === "moitie" || r.zone === "A" || r.zone === "B",
+    );
+    if (demis.length >= 1 && demis.length === group.length) {
+      return demis.map((r) => ({ ...r, sibling_zone: r.zone || null, pending_count: 1 }));
+    }
+    return [
+      {
+        ...group[0],
+        pending_count: group.length,
+        joueur_nom: group.length === 1 ? group[0].joueur_nom : `${group.length} joueurs`,
+      },
+    ];
+  });
 
-  const all = [...occupying, ...pendingCards, ...libresAsCards, ...bloqueAsCards];
+  // Créneaux partiels (1 demi libre) : badge sur carte libre si demi présent
+  const libresEnrichis = libresAsCards.map((s) => {
+    const key = `${String(s.heure_debut).slice(0, 5)}-${String(s.heure_fin).slice(0, 5)}`;
+    if (demiGroups.has(key) && (demiGroups.get(key) || []).length === 1) {
+      return { ...s, etat_creneau: "partiel", motif: "1 moitié libre" };
+    }
+    return s;
+  });
+
+  const all = [...occupyingRest, ...demiCards, ...pendingCards, ...libresEnrichis, ...bloqueAsCards];
   const byBlock = emptyQueueBlocks();
   for (const resa of all) {
     const block = resolveQueueBlock(resa, dayDate, nowMs);
@@ -1293,6 +1361,12 @@ const ManagerDashboard = () => {
       refreshLive();
     },
     onCreneauLibere: () => {
+      refreshLive();
+    },
+    onCreneauPartiel: () => {
+      refreshLive();
+    },
+    onCreneauComplet: () => {
       refreshLive();
     },
     onMatchValide: () => {

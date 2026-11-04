@@ -20,6 +20,8 @@ export type GerantStreamEvent = {
 export type GerantStreamCallbacks = {
   onReservationConfirmee?: (data: GerantStreamEvent) => void;
   onCreneauLibere?: (data: GerantStreamEvent) => void;
+  onCreneauPartiel?: (data: GerantStreamEvent) => void;
+  onCreneauComplet?: (data: GerantStreamEvent) => void;
   onReservationCreee?: (data: GerantStreamEvent) => void;
   onCreneauVerrouille?: (data: GerantStreamEvent) => void;
   onMatchValide?: (data: GerantStreamEvent) => void;
@@ -57,6 +59,8 @@ export function useGerantStream(enabled: boolean, callbacks: GerantStreamCallbac
 
     bind("reservation_confirmee", (d) => callbacksRef.current.onReservationConfirmee?.(d));
     bind("creneau_libere", (d) => callbacksRef.current.onCreneauLibere?.(d));
+    bind("creneau_partiel", (d) => callbacksRef.current.onCreneauPartiel?.(d));
+    bind("creneau_complet", (d) => callbacksRef.current.onCreneauComplet?.(d));
     bind("reservation_creee", (d) => callbacksRef.current.onReservationCreee?.(d));
     bind("creneau_verrouille", (d) => callbacksRef.current.onCreneauVerrouille?.(d));
     bind("match_valide", (d) => callbacksRef.current.onMatchValide?.(d));

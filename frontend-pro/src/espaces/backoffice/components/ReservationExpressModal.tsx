@@ -44,6 +44,9 @@ type Slot = {
   date?: string;
   disponible?: boolean;
   statut?: string;
+  etat?: string;
+  demi_disponible?: boolean;
+  entier_disponible?: boolean;
   est_nuit_prolongee?: boolean;
 };
 
@@ -242,7 +245,12 @@ export default function ReservationExpressModal({
     () =>
       trierCreneaux(
         creneaux
-          .filter((s) => s.disponible !== false && s.statut !== "bloque")
+          .filter(
+            (s) =>
+              s.disponible !== false &&
+              s.statut !== "bloque" &&
+              s.etat !== "complet",
+          )
           .map((s) => ({ ...s, heure_debut: formatHourLabel(s.heure) })),
       ).map(({ heure_debut, ...rest }) => ({ ...rest, heure: heure_debut })),
     [creneaux],
@@ -480,6 +488,9 @@ export default function ReservationExpressModal({
           date: String(s.date || selectedDate).slice(0, 10),
           disponible: s.disponible,
           statut: s.statut,
+          etat: s.etat,
+          demi_disponible: s.demi_disponible,
+          entier_disponible: s.entier_disponible,
           est_nuit_prolongee: Boolean(s.est_nuit_prolongee) || estNuitProlongee(s.heure || s.heure_debut),
         }));
         // Express : ne pas proposer un départ déjà passé (date technique du slot)
@@ -1487,23 +1498,50 @@ export default function ReservationExpressModal({
                         <div className="grid grid-cols-2 gap-2">
                           {formatsOpts.map((fmt) => {
                             const active = formatTerrain === fmt.cle;
+                            const slot = creneaux.find(
+                              (s) => String(s.heure_debut || s.heure).slice(0, 5) === String(selectedSlot || "").slice(0, 5),
+                            ) as
+                              | {
+                                  demi_disponible?: boolean;
+                                  entier_disponible?: boolean;
+                                  etat?: string;
+                                }
+                              | undefined;
+                            const isDemi = fmt.cle === "moitie" || fmt.map_grille === "demi";
+                            const isEntier = fmt.cle === "entier" || fmt.map_grille === "entier";
+                            const disabled =
+                              (isEntier && slot?.entier_disponible === false) ||
+                              (isDemi && slot?.demi_disponible === false);
+                            const hint =
+                              isEntier && disabled
+                                ? "Une moitié est déjà réservée"
+                                : isDemi && disabled
+                                  ? "Créneau complet"
+                                  : null;
                             return (
                               <button
                                 key={fmt.cle}
                                 type="button"
-                                onClick={() => setFormatTerrain(fmt.cle)}
+                                disabled={disabled}
+                                onClick={() => {
+                                  if (!disabled) setFormatTerrain(fmt.cle);
+                                }}
                                 className={cn(
                                   "min-h-[64px] rounded-xl border p-3 text-left",
-                                  active
-                                    ? "border-[var(--g-primary)] bg-[var(--g-primary)] text-white"
-                                    : "border-gray-200 bg-white",
+                                  disabled
+                                    ? "border-[var(--g-border)] bg-[var(--g-surface-2)] opacity-60 cursor-not-allowed"
+                                    : active
+                                      ? "border-[var(--g-primary)] bg-[var(--g-primary)] text-white"
+                                      : "border-gray-200 bg-white",
                                 )}
                               >
                                 <span className="block text-sm font-semibold">{fmt.label}</span>
                                 <span className="text-[11px] opacity-80">
-                                  {active && devis
-                                    ? `Total créneau : ${formatFcfa(devis.montant)}`
-                                    : "Prix selon créneau / grille"}
+                                  {hint
+                                    ? hint
+                                    : active && devis
+                                      ? `Total créneau : ${formatFcfa(devis.montant)}`
+                                      : "Prix selon créneau / grille"}
                                 </span>
                               </button>
                             );

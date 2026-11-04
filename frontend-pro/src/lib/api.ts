@@ -315,6 +315,8 @@ async function request(endpoint: string, options: RequestInit = {}, retried = fa
       priorite_joueur?: string;
     };
     if (typeof data.code === 'string') err.code = data.code;
+    if (Array.isArray(data.reservations)) (err as Error & { reservations?: unknown }).reservations = data.reservations;
+    if (typeof data.zone === 'string') (err as Error & { zone?: string }).zone = data.zone;
     if (typeof data.telephone === 'string') err.telephone = data.telephone;
     if (typeof data.scannable_at === 'string') err.scannable_at = data.scannable_at;
     if (typeof data.minutes_remaining === 'number') err.minutes_remaining = data.minutes_remaining;
@@ -1066,6 +1068,11 @@ export const gerantApi = {
       waiverEncaissement: opts?.waiverEncaissement,
       methode: opts?.methode,
     });
+  },
+
+  /** Permute zone A ↔ B si la cible est libre. */
+  async patchReservationZone(id: number | string) {
+    return await request(`/gerant/reservations/${id}/zone`, { method: 'PATCH' });
   },
 
   async joueurs(params?: { q?: string; filter?: string }) {

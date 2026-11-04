@@ -10,14 +10,32 @@ type SelecteurProps = {
   valeur: string;
   onChange: (cle: string) => void;
   prixPour: (fmt: FormatOption) => number;
+  /** Disponibilité du créneau sélectionné (capacité zones). */
+  demiDisponible?: boolean;
+  entierDisponible?: boolean;
 };
+
+function isDemi(fmt: FormatOption) {
+  return fmt.map_grille === "demi" || fmt.cle === "moitie" || /demi/i.test(fmt.label);
+}
+
+function isEntier(fmt: FormatOption) {
+  return fmt.map_grille === "entier" || fmt.cle === "entier" || /entier/i.test(fmt.label);
+}
 
 /**
  * Sélecteur de type de location — affiché UNIQUEMENT quand le terrain
  * propose les deux formats (`types_location === 'les_deux'`).
  * Composant dédié, sans code partagé avec les labels ci-dessous.
  */
-export const SelecteurTypeLocation = ({ formats, valeur, onChange, prixPour }: SelecteurProps) => {
+export const SelecteurTypeLocation = ({
+  formats,
+  valeur,
+  onChange,
+  prixPour,
+  demiDisponible = true,
+  entierDisponible = true,
+}: SelecteurProps) => {
   return (
     <div>
       <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
@@ -27,19 +45,34 @@ export const SelecteurTypeLocation = ({ formats, valeur, onChange, prixPour }: S
         {formats.map((fmt) => {
           const price = prixPour(fmt);
           const actif = valeur === fmt.cle;
+          const disabled =
+            (isEntier(fmt) && !entierDisponible) || (isDemi(fmt) && !demiDisponible);
+          const hint =
+            isEntier(fmt) && !entierDisponible
+              ? "Une moitié est déjà réservée"
+              : isDemi(fmt) && !demiDisponible
+                ? "Créneau complet"
+                : null;
           return (
             <button
               key={fmt.cle}
               type="button"
-              onClick={() => onChange(fmt.cle)}
+              disabled={disabled}
+              onClick={() => {
+                if (!disabled) onChange(fmt.cle);
+              }}
+              aria-disabled={disabled}
               className={`rounded-xl p-3 text-left min-h-[64px] border transition-colors ${
-                actif
-                  ? "bg-[var(--primary)] text-white border-[var(--primary)]"
-                  : "bg-white dark:bg-[var(--surface)] border-gray-200 dark:border-[var(--border)]"
+                disabled
+                  ? "bg-[var(--surface-3,var(--surface))] text-[var(--color-text-muted)] border-[var(--border)] opacity-60 cursor-not-allowed"
+                  : actif
+                    ? "bg-[var(--primary)] text-white border-[var(--primary)]"
+                    : "bg-white dark:bg-[var(--surface)] border-gray-200 dark:border-[var(--border)]"
               }`}
             >
               <span className="block text-sm font-semibold">{fmt.label}</span>
               <span className="text-[11px] opacity-80">{price.toLocaleString("fr-SN")} FCFA/h</span>
+              {hint ? <span className="mt-1 block text-[10px] opacity-90">{hint}</span> : null}
             </button>
           );
         })}
