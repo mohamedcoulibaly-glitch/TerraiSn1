@@ -36,6 +36,7 @@ npm run test:e2e
 | Unit kanban / check-in | `test-kanban-rules.js`, `test-checkin-rules.js` | Stages opérationnels |
 | Parcours A→Z | `test-parcours-complet.js`, **`test-parcours-tous-roles.js`** | Joueur, gérant, proprio, SA + cross-rôle |
 | Intégration API | `test-integration-api-parcours.js`, **`test-integration-api-tous-roles.js`** | HTTP + authz 401/403 |
+| Intégration API **vraie** Express | **`test-integration-parcours-critiques-complet.js`** | OTP, résa, PayTech simulé, QR, check-in, kanban, retrait, SA caisse — `npm run test:integration-full` |
 | Front roles / routes | `frontend/src/auth/roles.test.ts`, **`router/routesParRole.test.ts`** | Homes, profils, ROUTE_MAP |
 | Front parcours / nav | **`parcoursTousRoles.test.ts`**, **`navigationGuards.test.ts`** | Parcours métier + garde-fous |
 | E2E UI | `e2e/parcours-critiques.spec.ts`, **`e2e/parcours-tous-roles.spec.ts`** | Boutons / onglets / « Voir l'app » |

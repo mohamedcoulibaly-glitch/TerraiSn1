@@ -23,6 +23,7 @@
     "test:mohamed": "npm run test:mohamed --prefix backend",
     "test:parcours": "npm run test:parcours --prefix backend",
     "test:integration": "npm run test:integration --prefix backend",
+    "test:integration-full": "npm run test:integration-full --prefix backend",
     "test:e2e": "npx playwright test",
     "test:e2e:ui": "npx playwright test --ui",
     "test:all": "npm test && npm run test:e2e",

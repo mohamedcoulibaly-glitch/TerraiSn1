@@ -1999,7 +1999,8 @@ async function creerReservationAvecPaiement(req, res, creePar, terrainIdForce = 
     const lockDurationMs = delaiVerrouMin * 60 * 1000;
     const decision = decisionCreation({ sansAvance, mode });
     const verrouExpireAt = decision.poserVerrou ? Date.now() + lockDurationMs : null;
-    const statutInitial = decision.statut;
+    // `let` : confirmation manuelle atomique gérant peut passer en_attente → confirme
+    let statutInitial = decision.statut;
     const modePaiementInitial = sansAvance
       ? 'sans_avance'
       : (mode === 'bloquer' || mode === 'manuel' ? 'manuel' : 'en_ligne');
@@ -4971,7 +4972,13 @@ async function ensureSeedData(db) {
   }
 }
 
-async function start() {
+async function start(options = {}) {
+  const integration = String(process.env.INTEGRATION_TEST || '').trim() === '1'
+    || options.integration === true;
+  const skipListen = integration
+    || options.listen === false
+    || String(process.env.SKIP_LISTEN || '').trim() === '1';
+
   const db = await getDb(); // Initialize DB + migrations
   try {
     const runtimeIntegrations = require('./services/runtimeIntegrations');
@@ -5001,13 +5008,15 @@ async function start() {
         `PayTech URLs alignées sur APP_DOMAIN (${aligned.appHost}) : ${(aligned.changed || []).join(', ')}`,
       );
     }
-    const wa = require('./whatsappClient');
-    if (typeof wa.reloadConfig === 'function') wa.reloadConfig();
-    // Multi-clients OpenWA : platform (OTP/admin) + restauration sessions gérants
-    whatsappManager.initialiserSuperadmin();
-    whatsappManager.restaurerSessionsGerants().catch((err) => {
-      logger.warn('index.js', `WhatsApp restauration gérants: ${err.message}`);
-    });
+    if (!integration) {
+      const wa = require('./whatsappClient');
+      if (typeof wa.reloadConfig === 'function') wa.reloadConfig();
+      // Multi-clients OpenWA : platform (OTP/admin) + restauration sessions gérants
+      whatsappManager.initialiserSuperadmin();
+      whatsappManager.restaurerSessionsGerants().catch((err) => {
+        logger.warn('index.js', `WhatsApp restauration gérants: ${err.message}`);
+      });
+    }
     if (applied > 0 || seeded > 0) {
       logger.info(
         'index.js',
@@ -5017,8 +5026,11 @@ async function start() {
   } catch (error) {
     logger.warn('index.js', `Integrations hydrate: ${error.message}`);
   }
-  const skipSeed = String(process.env.SKIP_SEED || '').toLowerCase() === 'true' || process.env.SKIP_SEED === '1';
-  const forceSeed = String(process.env.FORCE_SEED || '').toLowerCase() === 'true' || process.env.FORCE_SEED === '1';
+  const skipSeed = integration
+    || String(process.env.SKIP_SEED || '').toLowerCase() === 'true'
+    || process.env.SKIP_SEED === '1';
+  const forceSeed = !integration
+    && (String(process.env.FORCE_SEED || '').toLowerCase() === 'true' || process.env.FORCE_SEED === '1');
   if (forceSeed) {
     logger.info('index.js', 'FORCE_SEED=true — rechargement complet des donnees de demo');
     const { seed } = require('./seed');
@@ -5027,56 +5039,58 @@ async function start() {
     await ensureSeedData(db);
   }
 
-  // Toujours upsert Arena Mohamed (avance 100 FCFA, payout retrait) — même avec SKIP_SEED=true en prod.
-  // Les résas démo ne sont créées que si le terrain n'existait pas encore.
-  try {
-    const { ensureMohamedAccounts, TERRAIN_NOM, AVANCE_FCFA, PAYOUT_MODE } = require('./scripts/ensure-mohamed-accounts');
-    const arenaExistante = queryOne(db, 'SELECT id FROM terrains WHERE nom = ? LIMIT 1', [TERRAIN_NOM]);
-    const result = await ensureMohamedAccounts({
-      db,
-      silent: true,
-      seedReservations: !arenaExistante,
+  if (!integration) {
+    // Toujours upsert Arena Mohamed (avance 100 FCFA, payout retrait) — même avec SKIP_SEED=true en prod.
+    // Les résas démo ne sont créées que si le terrain n'existait pas encore.
+    try {
+      const { ensureMohamedAccounts, TERRAIN_NOM, AVANCE_FCFA, PAYOUT_MODE } = require('./scripts/ensure-mohamed-accounts');
+      const arenaExistante = queryOne(db, 'SELECT id FROM terrains WHERE nom = ? LIMIT 1', [TERRAIN_NOM]);
+      const result = await ensureMohamedAccounts({
+        db,
+        silent: true,
+        seedReservations: !arenaExistante,
+      });
+      logger.info(
+        'index.js',
+        `Mohamed assuré : terrain #${result.terrainId}, avance=${AVANCE_FCFA} FCFA, payout=${PAYOUT_MODE}` +
+          (arenaExistante ? ' (contrat mis à jour)' : ' (création + résas démo)'),
+      );
+    } catch (error) {
+      logger.warn('index.js', `ensure Mohamed: ${error.message}`);
+    }
+    // Seed persistant joueur Babacar Sene (75 014 71 38) : recréé à chaque boot,
+    // même avec SKIP_SEED=true, pour survivre à la DB éphémère Render free.
+    try {
+      const { ensureBabacarJoueur } = require('./scripts/ensure-babacar-joueur');
+      await ensureBabacarJoueur({ db, silent: true });
+    } catch (error) {
+      logger.warn('index.js', `Seed joueur Babacar: ${error.message}`);
+    }
+    // Démo multi-terrains (3 terrains + CA/matchs joués) : idempotent à chaque boot,
+    // même SKIP_SEED=true — reconstitue la démo après wipe Render free.
+    try {
+      const { ensureMultiGerantDemo, GERANT_EMAIL } = require('./scripts/seed-gerant-multi-terrains');
+      const multi = await ensureMultiGerantDemo({ db, silent: true });
+      logger.info(
+        'index.js',
+        `Multi-terrains assuré : gérant ${GERANT_EMAIL} (#${multi.gerantId}), `
+          + `${multi.terrainIds.length} terrains, site #${multi.siteId}, `
+          + `${multi.jouesTotal} matchs joués / CA ${Number(multi.caTotal || 0).toLocaleString('fr-FR')} FCFA`,
+      );
+    } catch (error) {
+      logger.warn('index.js', `Seed multi-terrains: ${error.message}`);
+    }
+    programmerResumeHebdomadaire();
+    programmerSurveillanceConfiance();
+    programmerRappelsReservations();
+    await appliquerSuspensionsAbonnements().catch((error) => {
+      logger.error('index.js', 'Suspension abonnements au demarrage', error);
     });
-    logger.info(
-      'index.js',
-      `Mohamed assuré : terrain #${result.terrainId}, avance=${AVANCE_FCFA} FCFA, payout=${PAYOUT_MODE}` +
-        (arenaExistante ? ' (contrat mis à jour)' : ' (création + résas démo)'),
-    );
-  } catch (error) {
-    logger.warn('index.js', `ensure Mohamed: ${error.message}`);
+    require('./services/rappelsEcheances').executerRappelsEcheances().catch((error) => {
+      logger.error('index.js', 'Rappels echeances au demarrage', error);
+    });
   }
-  // Seed persistant joueur Babacar Sene (75 014 71 38) : recréé à chaque boot,
-  // même avec SKIP_SEED=true, pour survivre à la DB éphémère Render free.
-  try {
-    const { ensureBabacarJoueur } = require('./scripts/ensure-babacar-joueur');
-    await ensureBabacarJoueur({ db, silent: true });
-  } catch (error) {
-    logger.warn('index.js', `Seed joueur Babacar: ${error.message}`);
-  }
-  // Démo multi-terrains (3 terrains + CA/matchs joués) : idempotent à chaque boot,
-  // même SKIP_SEED=true — reconstitue la démo après wipe Render free.
-  try {
-    const { ensureMultiGerantDemo, GERANT_EMAIL } = require('./scripts/seed-gerant-multi-terrains');
-    const multi = await ensureMultiGerantDemo({ db, silent: true });
-    logger.info(
-      'index.js',
-      `Multi-terrains assuré : gérant ${GERANT_EMAIL} (#${multi.gerantId}), `
-        + `${multi.terrainIds.length} terrains, site #${multi.siteId}, `
-        + `${multi.jouesTotal} matchs joués / CA ${Number(multi.caTotal || 0).toLocaleString('fr-FR')} FCFA`,
-    );
-  } catch (error) {
-    logger.warn('index.js', `Seed multi-terrains: ${error.message}`);
-  }
-  programmerResumeHebdomadaire();
-  programmerSurveillanceConfiance();
-  programmerRappelsReservations();
-  await appliquerSuspensionsAbonnements().catch((error) => {
-    logger.error('index.js', 'Suspension abonnements au demarrage', error);
-  });
-  require('./services/rappelsEcheances').executerRappelsEcheances().catch((error) => {
-    logger.error('index.js', 'Rappels echeances au demarrage', error);
-  });
-  if (cron) {
+  if (!integration && cron) {
     cron.schedule('15 0 * * *', async () => {
       await appliquerSuspensionsAbonnements().catch((error) => {
         logger.error('index.js', 'Suspension abonnements planifiee', error);
@@ -5128,6 +5142,7 @@ async function start() {
       }
     });
   }
+  if (!integration) {
   setInterval(async () => {
     try {
       const dbInterval = await getDb();
@@ -5237,57 +5252,69 @@ async function start() {
     void replayWhatsappQueue();
     setInterval(() => void replayWhatsappQueue(), RETRY_MS);
   }
+  } // fin !integration (timers / WhatsApp retry)
 
-  app.listen(PORT, () => {
-    logger.info('index.js', `TerrainSN API demarree sur le port ${PORT}`);
-    if (process.env.APP_DOMAIN) {
-      logger.info('index.js', `APP_DOMAIN=${process.env.APP_DOMAIN}`);
-    }
-    const pushInfo = pushService.describe();
-    logger.info(
-      'index.js',
-      `Web Push configured=${pushInfo.configured} source=${pushInfo.source || 'n/a'}`,
-    );
-    const paymentService = require('./services/payment');
-    const paymentInfo = paymentService.describe();
-    if (paymentInfo.simulationLocale && process.env.NODE_ENV === 'production') {
-      logger.warn(
-        'index.js',
-        '[PAYMENT] Mode simulation actif (dettes/dev). Les réservations joueur passent toujours par le vrai checkout PayTech/PayDunya.',
-      );
-    } else {
+  if (!skipListen) {
+    app.listen(PORT, () => {
+      logger.info('index.js', `TerrainSN API demarree sur le port ${PORT}`);
+      if (process.env.APP_DOMAIN) {
+        logger.info('index.js', `APP_DOMAIN=${process.env.APP_DOMAIN}`);
+      }
+      const pushInfo = pushService.describe();
       logger.info(
         'index.js',
-        `Paiement actif=${paymentInfo.activeGateway} cible=${paymentInfo.targetProvider}`
-          + ` readyForProd=${paymentInfo.readyForProd}`,
+        `Web Push configured=${pushInfo.configured} source=${pushInfo.source || 'n/a'}`,
       );
-    }
-    if (String(process.env.PAYTECH_PAYOUT_ENABLED || '').toLowerCase() !== 'true'
-      && process.env.NODE_ENV === 'production') {
-      logger.warn(
-        'index.js',
-        'PAYTECH_PAYOUT_ENABLED=false — retraits gérants automatiques désactivés (volontaire jusqu’à autorisation PayTech).',
-      );
-    }
-    if (!String(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV || '').trim()
-      && process.env.NODE_ENV === 'production') {
-      logger.warn('index.js', 'WHATSAPP_DEV_NUMBER manquant — alertes retraits équipe muettes.');
-    }
-    const { resoudreIpnUrl } = require('./lib/publicIpnUrl');
-    resoudreIpnUrl()
-      .then((ipn) => logger.info('index.js', `IPN paiement (${activeGateway()}) : ${ipn}`))
-      .catch((err) => {
-        if (!paymentInfo.simulationLocale) {
-          logger.warn('index.js', `IPN paiement non résolu : ${err.message}`);
-        }
-      });
-  }).on('error', (error) => {
-    if (error.code === 'EADDRINUSE') {
-      logger.error('index.js', `Port ${PORT} deja utilise. Arretez l'autre process ou changez PORT.`);
-      process.exit(1);
-    }
-    throw error;
-  });
+      const paymentService = require('./services/payment');
+      const paymentInfo = paymentService.describe();
+      if (paymentInfo.simulationLocale && process.env.NODE_ENV === 'production') {
+        logger.warn(
+          'index.js',
+          '[PAYMENT] Mode simulation actif (dettes/dev). Les réservations joueur passent toujours par le vrai checkout PayTech/PayDunya.',
+        );
+      } else {
+        logger.info(
+          'index.js',
+          `Paiement actif=${paymentInfo.activeGateway} cible=${paymentInfo.targetProvider}`
+            + ` readyForProd=${paymentInfo.readyForProd}`,
+        );
+      }
+      if (String(process.env.PAYTECH_PAYOUT_ENABLED || '').toLowerCase() !== 'true'
+        && process.env.NODE_ENV === 'production') {
+        logger.warn(
+          'index.js',
+          'PAYTECH_PAYOUT_ENABLED=false — retraits gérants automatiques désactivés (volontaire jusqu’à autorisation PayTech).',
+        );
+      }
+      if (!String(process.env.WHATSAPP_DEV_NUMBER || process.env.WHATSAPP_EQUIPE_DEV || '').trim()
+        && process.env.NODE_ENV === 'production') {
+        logger.warn('index.js', 'WHATSAPP_DEV_NUMBER manquant — alertes retraits équipe muettes.');
+      }
+      const { resoudreIpnUrl } = require('./lib/publicIpnUrl');
+      resoudreIpnUrl()
+        .then((ipn) => logger.info('index.js', `IPN paiement (${activeGateway()}) : ${ipn}`))
+        .catch((err) => {
+          if (!paymentInfo.simulationLocale) {
+            logger.warn('index.js', `IPN paiement non résolu : ${err.message}`);
+          }
+        });
+    }).on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        logger.error('index.js', `Port ${PORT} deja utilise. Arretez l'autre process ou changez PORT.`);
+        process.exit(1);
+      }
+      throw error;
+    });
+  }
+
+  return { app, db, integration, skipListen };
 }
 
-start();
+module.exports = { app, start };
+
+if (require.main === module) {
+  start().catch((error) => {
+    logger.error('index.js', 'Demarrage API impossible', error);
+    process.exit(1);
+  });
+}

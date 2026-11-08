@@ -81,6 +81,8 @@ function seedMohamedCompte(db, opts = {}) {
         numeros_identiques_whatsapp: 1,
         canal_reversement: 'wave',
         gerant_id: gerantId,
+        wave_numero: MOHAMED.telephoneLocal9 || '771234567',
+        om_numero: MOHAMED.telephoneLocal9 || '771234567',
         wave_statut: 'verifie',
         om_statut: 'verifie',
         paiement_production: paiementProduction,
